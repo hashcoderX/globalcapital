@@ -1,0 +1,4 @@
+employee_code,date,in_time,out_time,status,notes
+EMP0001,2025-12-15,09:00,17:00,present,On time
+EMP0001,2025-12-14,09:15,17:00,late,Traffic delay
+EMP0001,2025-12-13,,absent,Sick leave

@@ -1,0 +1,33 @@
+# Laravel
+/vendor/
+/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+.env.local
+.env.production
+.env.staging
+storage/app/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/logs/*
+bootstrap/cache/*
+.phpunit.result.cache
+
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# General
+.DS_Store
+*.log
+*.tmp
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
