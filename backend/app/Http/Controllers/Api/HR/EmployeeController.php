@@ -12,6 +12,16 @@ use Illuminate\Support\Facades\Hash;
 
 class EmployeeController extends Controller
 {
+    private function canManageEmployees(Request $request, string $permission): bool
+    {
+        $user = $request->user();
+        if (!$user) {
+            return false;
+        }
+
+        return $user->isSystemAdmin() || $user->hasPermission($permission);
+    }
+
     /**
      * Display a listing of the resource.
      */
@@ -40,8 +50,8 @@ class EmployeeController extends Controller
      */
     public function store(StoreEmployeeRequest $request): JsonResponse
     {
-        if (!$request->user()->hasPermission('create_employees')) {
-            return response()->json(['message' => 'Forbidden'], 403);
+        if (!$this->canManageEmployees($request, 'create_employees')) {
+            return response()->json(['message' => 'You do not have permission to create employees.'], 403);
         }
         $validated = $request->validated();
 
@@ -103,8 +113,8 @@ class EmployeeController extends Controller
      */
     public function update(Request $request, Employee $employee): JsonResponse
     {
-        if (!$request->user()->hasPermission('edit_employees')) {
-            return response()->json(['message' => 'Forbidden'], 403);
+        if (!$this->canManageEmployees($request, 'edit_employees')) {
+            return response()->json(['message' => 'You do not have permission to edit employees.'], 403);
         }
 
         $validated = $request->validate([
@@ -161,8 +171,14 @@ class EmployeeController extends Controller
      */
     public function destroy(Employee $employee): JsonResponse
     {
-        if (!request()->user()->hasPermission('delete_employees')) {
-            return response()->json(['message' => 'Forbidden'], 403);
+        $request = request();
+        if (!$this->canManageEmployees($request, 'delete_employees')) {
+            return response()->json(['message' => 'You do not have permission to delete employees.'], 403);
+        }
+
+        // Prevent foreign key failures by removing linked login account first.
+        if ($employee->user) {
+            $employee->user->delete();
         }
 
         $employee->delete();

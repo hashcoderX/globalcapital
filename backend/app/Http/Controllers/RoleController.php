@@ -94,9 +94,11 @@ class RoleController extends Controller
         }
 
         $user = \App\Models\User::find($request->user_id);
-        $user->roles()->attach($request->role_id, [
-            'assigned_by' => auth()->id(),
-            'assigned_at' => now()
+        $user->roles()->syncWithoutDetaching([
+            $request->role_id => [
+                'assigned_by' => auth()->id(),
+                'assigned_at' => now(),
+            ],
         ]);
 
         return response()->json(['message' => 'Role assigned to user successfully']);

@@ -17,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
             'permission' => \App\Http\Middleware\CheckPermission::class,
+            'system.online' => \App\Http\Middleware\EnsureSystemOnlineForNonAdmins::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

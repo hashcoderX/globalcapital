@@ -8,6 +8,8 @@ export default function Home() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [modalMessage, setModalMessage] = useState('');
+  const [showModal, setShowModal] = useState(false);
   const router = useRouter();
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -24,8 +26,13 @@ export default function Home() {
         localStorage.setItem('auth_user', JSON.stringify(response.data.user));
       }
       router.push('/dashboard');
-    } catch (error) {
-      alert('Login failed. Please check your credentials.');
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.message ||
+        error?.response?.data?.errors?.email?.[0] ||
+        'Login failed. Please check your credentials.';
+      setModalMessage(String(message));
+      setShowModal(true);
     } finally {
       setLoading(false);
     }
@@ -118,6 +125,24 @@ export default function Home() {
           </form>
         </div>
       </div>
+
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-rose-200 bg-white p-6 shadow-[0_28px_70px_-30px_rgba(190,24,93,0.55)]">
+            <h3 className="text-xl font-extrabold text-rose-700">Login Error</h3>
+            <p className="mt-3 text-sm text-slate-700">{modalMessage}</p>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowModal(false)}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 text-white text-sm font-semibold"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

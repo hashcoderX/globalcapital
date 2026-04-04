@@ -86,4 +86,13 @@ class User extends Authenticatable
             $query->where('name', $permission);
         })->exists();
     }
+
+    public function isSystemAdmin(): bool
+    {
+        if ($this->email === 'superadmin@softcodelk.com') {
+            return true;
+        }
+
+        return $this->roles()->where('name', 'like', '%Admin%')->exists();
+    }
 }

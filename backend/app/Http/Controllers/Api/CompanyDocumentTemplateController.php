@@ -38,7 +38,7 @@ class CompanyDocumentTemplateController extends Controller
     public function store(Request $request, Company $company): JsonResponse
     {
         $validated = $request->validate([
-            'template_type' => ['required', 'in:loan_agreement,reminder_letter,arrears_letter'],
+            'template_type' => ['required', 'in:loan_agreement,reminder_letter,arrears_letter,mortgage_agreement,mortgage_reminder,mortgage_legal_letter'],
             'template' => ['required', 'file', 'mimes:doc,docx', 'max:20480'],
         ]);
 

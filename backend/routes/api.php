@@ -60,8 +60,13 @@ Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
 
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
+    Route::get('system/status', [CompanyController::class, 'getSystemStatus']);
+    Route::post('system/status', [CompanyController::class, 'updateSystemStatus']);
+    Route::post('system/reset', [CompanyController::class, 'resetSystem']);
     Route::apiResource('companies', CompanyController::class);
+    Route::get('companies/{company}/backup', [CompanyController::class, 'backup']);
+    Route::get('companies/{company}/database-backup', [CompanyController::class, 'databaseBackup']);
     Route::get('companies/{company}/document-templates', [CompanyDocumentTemplateController::class, 'index']);
     Route::post('companies/{company}/document-templates', [CompanyDocumentTemplateController::class, 'store']);
     Route::get('companies/{company}/document-templates/{template}/view', [CompanyDocumentTemplateController::class, 'view']);
@@ -168,6 +173,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('permission:edit_permissions')->group(function () {
         Route::put('permissions/{permission}', [PermissionController::class, 'update']);
     });
+    Route::post('permissions/sync-routes', [PermissionController::class, 'syncFromRoutes']);
     Route::middleware('permission:delete_permissions')->group(function () {
         Route::delete('permissions/{permission}', [PermissionController::class, 'destroy']);
     });

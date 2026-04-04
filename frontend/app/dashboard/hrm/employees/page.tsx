@@ -108,6 +108,7 @@ interface EmployeeLeaveBalance {
 }
 
 export default function Employees() {
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
   const [token, setToken] = useState('');
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -446,13 +447,17 @@ export default function Employees() {
 
   const handleDelete = async (id: number) => {
     try {
-      await axios.delete(`http://localhost:8000/api/hr/employees/${id}`, {
+      await axios.delete(`${API_URL}/api/hr/employees/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       fetchEmployees();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting employee:', error);
-      showNotice('Error', 'Failed to delete employee. Please try again.', 'error');
+      if (error?.response?.status === 403) {
+        showNotice('Permission Denied', error?.response?.data?.message || 'You do not have permission to delete employees.', 'error');
+      } else {
+        showNotice('Error', error?.response?.data?.message || 'Failed to delete employee. Please try again.', 'error');
+      }
     }
   };
 

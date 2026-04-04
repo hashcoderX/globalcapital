@@ -5,11 +5,23 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    private function isSystemOnline(): bool
+    {
+        if (!Schema::hasTable('system_settings')) {
+            return true;
+        }
+
+        $value = DB::table('system_settings')->where('key', 'system_online')->value('value');
+        return (string) ($value ?? '1') === '1';
+    }
+
     private function loadAuthUser(User $user): User
     {
         return $user->load([
@@ -55,6 +67,14 @@ class AuthController extends Controller
         }
 
         $user = User::query()->findOrFail((int)Auth::id());
+
+        if (!$this->isSystemOnline() && !$user->isSystemAdmin()) {
+            Auth::logout();
+            throw ValidationException::withMessages([
+                'email' => ['System is currently offline. Only admins can log in at this time.'],
+            ]);
+        }
+
         $token = $user->createToken('API Token')->plainTextToken;
 
         return response()->json([
