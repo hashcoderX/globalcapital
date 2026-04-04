@@ -13,10 +13,13 @@ return new class extends Migration
     {
         if (Schema::hasColumn('candidate_documents', 'branch_id')) {
             Schema::table('candidate_documents', function (Blueprint $table) {
-                // Check if foreign key exists before dropping
-                $foreignKeys = \DB::select("SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_NAME = 'candidate_documents' AND COLUMN_NAME = 'branch_id' AND REFERENCED_TABLE_NAME IS NOT NULL");
-                if (count($foreignKeys) > 0) {
-                    $table->dropForeign(['branch_id']);
+                // SQLite does not support INFORMATION_SCHEMA lookup.
+                if (Schema::getConnection()->getDriverName() !== 'sqlite') {
+                    try {
+                        $table->dropForeign(['branch_id']);
+                    } catch (\Throwable $e) {
+                        // Ignore when foreign key does not exist.
+                    }
                 }
                 $table->dropColumn('branch_id');
             });

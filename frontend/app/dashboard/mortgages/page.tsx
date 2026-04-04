@@ -3,596 +3,233 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
-import ModuleHeader from './_components/ModuleHeader';
-import StatCard from './_components/StatCard';
-import SectionCard from './_components/SectionCard';
-import Badge from './_components/Badge';
-import ActionButton from './_components/ActionButton';
-import Modal from './_components/Modal';
-import { Briefcase, Clock, AlertTriangle, Eye, Banknote, Receipt } from 'lucide-react';
 
-interface Mortgage {
+type MortgageStatusRow = {
   id: number;
-  customer_id: number;
-  mortgage_type: 'land' | 'house' | 'vehicle' | 'gold' | 'other';
-  requested_amount: number | string;
-  approved_amount?: number | string | null;
-  interest_rate: number | string;
-  interest_type: 'fixed' | 'reducing';
-  tenure_months: number | string;
-  installment_amount?: number | string | null;
-  penalty_rate: number | string;
-  processing_fee: number | string;
-  status: 'draft' | 'submitted' | 'approved' | 'active' | 'arrears' | 'settled' | 'released';
-  created_at: string;
-  customer?: {
-    first_name?: string;
-    last_name?: string;
-    phone?: string;
-    nic_passport?: string;
-  };
-  asset?: {
-    asset_type?: string;
-    deed_number?: string | null;
-    vehicle_reg_no?: string | null;
-    description?: string | null;
-  } | null;
-}
+  status?: string | null;
+};
 
-function formatAmount(v: number | string | null | undefined) {
-  const n = typeof v === 'number' ? v : v != null ? parseFloat(String(v)) : NaN;
-  if (!Number.isFinite(n)) return '-';
-  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+type DashboardStats = {
+  total: number;
+  submitted: number;
+  approved: number;
+  active: number;
+  arrears: number;
+  settled: number;
+};
 
-function toNumber(v: number | string | null | undefined): number {
-  if (typeof v === 'number') return v;
-  if (v == null) return NaN;
-  const n = parseFloat(String(v));
-  return Number.isFinite(n) ? n : NaN;
-}
-
-function computeMonthlyFigures(m: Mortgage) {
-  const principal = toNumber(m.approved_amount ?? m.requested_amount);
-  const annualRate = toNumber(m.interest_rate) / 100;
-  const months = Math.round(toNumber(m.tenure_months));
-  if (!Number.isFinite(principal) || !Number.isFinite(annualRate) || !Number.isFinite(months) || months <= 0) {
-    return { monthlyInstallment: NaN, monthlyInterest: NaN, totalInterest: NaN };
-  }
-
-  const r = annualRate / 12; // monthly rate
-
-  if (m.interest_type === 'reducing') {
-    // EMI for reducing balance
-    const pow = Math.pow(1 + r, months);
-    const emi = principal * r * pow / (pow - 1);
-    const firstMonthInterest = principal * r;
-    const totalPayment = emi * months;
-    const totalInterest = totalPayment - principal;
-    return {
-      monthlyInstallment: emi,
-      monthlyInterest: firstMonthInterest,
-      totalInterest,
-    };
-  } else {
-    // Fixed/flat interest: interest on full principal each month
-    const monthlyInterest = principal * r;
-    const totalInterest = principal * annualRate * (months / 12);
-    const monthlyInstallment = (principal + totalInterest) / months;
-    return { monthlyInstallment, monthlyInterest, totalInterest };
-  }
-}
-
-export default function Mortgages() {
-  const [token, setToken] = useState('');
-  const [mortgages, setMortgages] = useState<Mortgage[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [branchFilter, setBranchFilter] = useState('');
-  const [searchNic, setSearchNic] = useState('');
-  const [searchId, setSearchId] = useState('');
-  const [searchMobile, setSearchMobile] = useState('');
-  const [searchVehicle, setSearchVehicle] = useState('');
-  const [searchDeed, setSearchDeed] = useState('');
+export default function MortgagesDashboard() {
   const router = useRouter();
-
-  // Quick Calculator
-  const [calcPrincipal, setCalcPrincipal] = useState<string>('');
-  const [calcRate, setCalcRate] = useState<string>('');
-  const [calcTenure, setCalcTenure] = useState<string>('');
-  const [calcType, setCalcType] = useState<'fixed' | 'reducing'>('reducing');
-  const calcResult = useMemo(() => {
-    const mock: Mortgage = {
-      id: 0,
-      customer_id: 0,
-      mortgage_type: 'other',
-      requested_amount: calcPrincipal,
-      approved_amount: null,
-      interest_rate: calcRate,
-      interest_type: calcType,
-      tenure_months: calcTenure,
-      installment_amount: null,
-      penalty_rate: 0,
-      processing_fee: 0,
-      status: 'draft',
-      created_at: '',
-    };
-    return computeMonthlyFigures(mock);
-  }, [calcPrincipal, calcRate, calcTenure, calcType]);
-
-  const stats = useMemo(() => {
-    const active = mortgages.filter(m => m.status === 'active').length;
-    const submitted = mortgages.filter(m => m.status === 'submitted' || m.status === 'approved').length;
-    const arrears = mortgages.filter(m => m.status === 'arrears').length;
-    return { active, submitted, arrears };
-  }, [mortgages]);
+  const [token, setToken] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<DashboardStats>({
+    total: 0,
+    submitted: 0,
+    approved: 0,
+    active: 0,
+    arrears: 0,
+    settled: 0,
+  });
 
   useEffect(() => {
-    const t = localStorage.getItem('token');
-    if (!t) {
+    const storedToken = localStorage.getItem('token');
+    if (!storedToken) {
       router.push('/');
-    } else {
-      // Temporary: set new token
-      localStorage.setItem('token', '15|HCGJ1ncFdi1cLsjSpKAh34hKTv1nperxPylubiOu00aad7bf');
-      setToken('15|HCGJ1ncFdi1cLsjSpKAh34hKTv1nperxPylubiOu00aad7bf');
-      fetchMortgages('15|HCGJ1ncFdi1cLsjSpKAh34hKTv1nperxPylubiOu00aad7bf');
-    }
-  }, [router]);
-
-  const fetchMortgages = async (authToken: string) => {
-    try {
-      setLoading(true);
-      const params: any = {};
-      if (statusFilter) params.status = statusFilter;
-      if (branchFilter) params.branch_id = branchFilter;
-      if (searchId) params.id = searchId;
-      if (searchNic) params.nic = searchNic;
-      if (searchMobile) params.mobile = searchMobile;
-      if (searchVehicle) params.vehicle_no = searchVehicle;
-      if (searchDeed) params.deed_no = searchDeed;
-
-      const res = await axios.get('http://localhost:8000/api/mortgages', {
-        headers: { Authorization: `Bearer ${authToken}` },
-        params: { ...params, per_page: 20 }
-      });
-      const data = res.data?.data ?? res.data;
-      setMortgages(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error('Error fetching mortgages:', e);
-      setMortgages([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Collect Payment modal state
-  const [paymentOpen, setPaymentOpen] = useState(false);
-  const [paymentMortgageId, setPaymentMortgageId] = useState<number | null>(null);
-  const [paymentMortgage, setPaymentMortgage] = useState<Mortgage | null>(null);
-  const [paymentAmount, setPaymentAmount] = useState<string>('');
-  const [paymentDate, setPaymentDate] = useState<string>('');
-  const [paymentMethod, setPaymentMethod] = useState<string>('cash');
-  const [paymentNote, setPaymentNote] = useState<string>('');
-  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
-  const [paymentToast, setPaymentToast] = useState<string>('');
-
-  const openPaymentModal = (id: number) => {
-    setPaymentMortgageId(id);
-    const m = mortgages.find(x => x.id === id) || null;
-    setPaymentMortgage(m);
-    setPaymentAmount('');
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
-    setPaymentDate(`${yyyy}-${mm}-${dd}`);
-    setPaymentMethod('cash');
-    setPaymentNote('');
-    setPaymentOpen(true);
-  };
-
-  const submitPayment = async () => {
-    if (!token || !paymentMortgageId) return;
-    const amountNum = parseFloat(paymentAmount);
-    if (!Number.isFinite(amountNum) || amountNum <= 0) {
-      setPaymentToast('Enter a valid amount');
-      setTimeout(() => setPaymentToast(''), 2000);
       return;
     }
-    try {
-      setPaymentSubmitting(true);
-      const payload = {
-        amount: amountNum,
-        date: paymentDate,
-        method: paymentMethod,
-        note: paymentNote || undefined,
-      };
-      // Attempt backend call (if endpoint exists); otherwise show success toast.
-      await axios.post(`http://localhost:8000/api/mortgages/${paymentMortgageId}/payments`, payload, {
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {
-        // Graceful fallback if POST not implemented yet
-        return Promise.resolve();
-      });
-      setPaymentToast('Payment recorded');
-      setPaymentOpen(false);
-      setTimeout(() => setPaymentToast(''), 2000);
-    } catch (e) {
-      console.error('Payment submit error:', e);
-      setPaymentToast('Failed to record payment');
-      setTimeout(() => setPaymentToast(''), 2500);
-    } finally {
-      setPaymentSubmitting(false);
-    }
-  };
+
+    setToken(storedToken);
+  }, [router]);
+
+  useEffect(() => {
+    if (!token) return;
+
+    const loadStats = async () => {
+      setLoading(true);
+      try {
+        const response = await axios.get('http://localhost:8000/api/mortgages', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+          params: { per_page: 1000 },
+        });
+
+        const rows = Array.isArray(response.data?.data)
+          ? response.data.data
+          : Array.isArray(response.data)
+            ? response.data
+            : [];
+
+        const normalized = rows as MortgageStatusRow[];
+        setStats({
+          total: normalized.length,
+          submitted: normalized.filter((m) => String(m.status || '').toLowerCase() === 'submitted').length,
+          approved: normalized.filter((m) => String(m.status || '').toLowerCase() === 'approved').length,
+          active: normalized.filter((m) => String(m.status || '').toLowerCase() === 'active').length,
+          arrears: normalized.filter((m) => String(m.status || '').toLowerCase() === 'arrears').length,
+          settled: normalized.filter((m) => String(m.status || '').toLowerCase() === 'settled').length,
+        });
+      } catch {
+        setStats({ total: 0, submitted: 0, approved: 0, active: 0, arrears: 0, settled: 0 });
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadStats();
+  }, [token]);
+
+  const options = useMemo(
+    () => [
+      {
+        title: 'Create Mortgage',
+        description: 'Register a new mortgage request and collateral details.',
+        icon: '📝',
+        tag: 'Origination',
+        color: 'from-blue-500 to-cyan-500',
+        bg: 'from-blue-50 to-cyan-50',
+        path: '/dashboard/mortgages/create',
+      },
+      {
+        title: 'Mortgage Approvals',
+        description: 'Review and process pending mortgage approvals.',
+        icon: '✅',
+        tag: 'Approval Desk',
+        color: 'from-emerald-500 to-teal-500',
+        bg: 'from-emerald-50 to-teal-50',
+        path: '/dashboard/mortgages/approvals',
+      },
+      {
+        title: 'Mortgage Portfolio',
+        description: 'View all mortgages, filters, schedules, and collections.',
+        icon: '📊',
+        tag: 'Portfolio',
+        color: 'from-indigo-500 to-violet-500',
+        bg: 'from-indigo-50 to-violet-50',
+        path: '/dashboard/mortgages/portfolio',
+      },
+      {
+        title: 'Collection Management',
+        description: 'Track due collections, post payments, and monitor arrears flow.',
+        icon: '💳',
+        tag: 'Collections',
+        color: 'from-teal-500 to-cyan-600',
+        bg: 'from-teal-50 to-cyan-50',
+        path: '/dashboard/mortgages/collections',
+      },
+      {
+        title: 'Mortgage Reports',
+        description: 'View mortgage-only analytics, repayment insights, and status distribution.',
+        icon: '📈',
+        tag: 'Reports',
+        color: 'from-rose-500 to-red-500',
+        bg: 'from-rose-50 to-red-50',
+        path: '/dashboard/mortgages/reports',
+      },
+    ],
+    []
+  );
+
+  if (!token || loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <ModuleHeader
-          title="Mortgage Management"
-          subtitle="Track applications, approvals, schedules and repayments"
-          breadcrumbs={[
-            { label: 'Dashboard', href: '/dashboard' },
-            { label: 'Mortgages' },
-          ]}
-          actions={(
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="rounded-lg bg-gradient-to-r from-slate-600 to-gray-800 px-4 py-2 text-white shadow-sm transition hover:opacity-95"
-              >
-                Dashboard
-              </button>
-              <button
-                onClick={() => router.back()}
-                className="rounded-lg bg-gradient-to-r from-gray-500 to-zinc-700 px-4 py-2 text-white shadow-sm transition hover:opacity-95"
-              >
-                Back
-              </button>
-              <button
-                onClick={() => router.push('/dashboard/mortgages/create')}
-                className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-2 text-white shadow-sm transition hover:opacity-95"
-              >
-                <span className="h-4 w-4">+</span>
-                New Mortgage
-              </button>
-            </div>
-          )}
-        />
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-45">
+        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
+        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
+        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
       </div>
 
-      {/* Stats + Filters */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <StatCard
-            icon={<Briefcase className="h-5 w-5" />}
-            label="Active Mortgages"
-            value={stats.active}
-            tone="primary"
-          />
-          <StatCard
-            icon={<Clock className="h-5 w-5" />}
-            label="Pending / Approved"
-            value={stats.submitted}
-            hint="Awaiting activation"
-            tone="success"
-          />
-          <StatCard
-            icon={<AlertTriangle className="h-5 w-5" />}
-            label="In Arrears"
-            value={stats.arrears}
-            hint="Past due installments"
-            tone="warning"
-          />
+      <div className="relative z-10 max-w-7xl mx-auto space-y-6">
+        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
+                Mortgage Desk
+              </span>
+              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Mortgage Dashboard</h1>
+              <p className="text-sm text-slate-600 mt-1">
+                Access mortgage operations through separate pages for creation, approvals, portfolio, and dedicated mortgage reports.
+              </p>
+            </div>
+
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
+            >
+              Back
+            </button>
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Total</p>
+              <p className="text-2xl font-extrabold text-slate-900 mt-1">{stats.total}</p>
+            </div>
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Submitted</p>
+              <p className="text-2xl font-extrabold text-amber-700 mt-1">{stats.submitted}</p>
+            </div>
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Approved</p>
+              <p className="text-2xl font-extrabold text-cyan-700 mt-1">{stats.approved}</p>
+            </div>
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Active</p>
+              <p className="text-2xl font-extrabold text-emerald-700 mt-1">{stats.active}</p>
+            </div>
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Arrears</p>
+              <p className="text-2xl font-extrabold text-rose-700 mt-1">{stats.arrears}</p>
+            </div>
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Settled</p>
+              <p className="text-2xl font-extrabold text-indigo-700 mt-1">{stats.settled}</p>
+            </div>
+          </div>
         </div>
 
-        <div className="mt-6">
-          <SectionCard title="Filters" description="Search by NIC, ID, mobile, vehicle no., or deed no.">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Status</label>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:border-transparent focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">All</option>
-                  {['draft','submitted','approved','active','arrears','settled','released'].map(s => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Branch</label>
-                <input
-                  value={branchFilter}
-                  onChange={(e) => setBranchFilter(e.target.value)}
-                  placeholder="Branch ID"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:border-transparent focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div className="flex items-end">
-                <button
-                  onClick={() => token && fetchMortgages(token)}
-                  className="inline-flex items-center rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-2 text-white shadow-sm transition hover:opacity-95"
-                >
-                  Apply Filters
-                </button>
-              </div>
-            </div>
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-5">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Mortgage ID</label>
-                <input value={searchId} onChange={(e)=>setSearchId(e.target.value)} placeholder="e.g. 2" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Customer NIC</label>
-                <input value={searchNic} onChange={(e)=>setSearchNic(e.target.value)} placeholder="e.g. 992233445V" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Mobile Number</label>
-                <input value={searchMobile} onChange={(e)=>setSearchMobile(e.target.value)} placeholder="e.g. 0771234567" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Vehicle Reg No</label>
-                <input value={searchVehicle} onChange={(e)=>setSearchVehicle(e.target.value)} placeholder="e.g. CA-1234" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Deed No</label>
-                <input value={searchDeed} onChange={(e)=>setSearchDeed(e.target.value)} placeholder="e.g. D123" className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500" />
-              </div>
-            </div>
-          </SectionCard>
-        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+          {options.map((option) => (
+            <button
+              key={option.title}
+              type="button"
+              onClick={() => router.push(option.path)}
+              className="group relative text-left bg-white/80 backdrop-blur-sm rounded-3xl shadow-[0_20px_40px_-30px_rgba(8,47,73,0.85)] hover:shadow-[0_28px_55px_-28px_rgba(8,47,73,0.75)] transition-all duration-500 cursor-pointer border border-white/50 overflow-hidden transform hover:-translate-y-2"
+            >
+              <div className={`absolute inset-0 bg-gradient-to-br ${option.bg} opacity-40 group-hover:opacity-100 transition-opacity duration-500`}></div>
 
-        <div className="mt-6">
-          <SectionCard title="Mortgage Calculator" description="Estimate monthly installment and monthly interest using amount, rate, and tenure.">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Amount</label>
-                <input
-                  value={calcPrincipal}
-                  onChange={e => setCalcPrincipal(e.target.value)}
-                  placeholder="e.g. 1,000,000"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Interest Rate (Annual %)</label>
-                <input
-                  value={calcRate}
-                  onChange={e => setCalcRate(e.target.value)}
-                  placeholder="e.g. 16"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Tenure (Months)</label>
-                <input
-                  value={calcTenure}
-                  onChange={e => setCalcTenure(e.target.value)}
-                  placeholder="e.g. 60"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">Type</label>
-                <select
-                  value={calcType}
-                  onChange={e => setCalcType(e.target.value as 'fixed' | 'reducing')}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:border-transparent focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="reducing">Reducing (EMI)</option>
-                  <option value="fixed">Fixed (Flat)</option>
-                </select>
-              </div>
-              <div className="flex items-end">
-                <div className="w-full rounded-lg border border-gray-200 bg-white p-3">
-                  <div className="text-xs text-gray-500">Monthly Installment</div>
-                  <div className="text-base font-medium text-gray-900">{formatAmount(calcResult.monthlyInstallment)}</div>
-                  <div className="mt-2 text-xs text-gray-500">Monthly Interest</div>
-                  <div className="text-base font-medium text-gray-900">{formatAmount(calcResult.monthlyInterest)}</div>
+              <div className="relative p-6">
+                <div className="flex items-start justify-between mb-4">
+                  <div className={`h-14 w-14 bg-gradient-to-r ${option.color} rounded-xl flex items-center justify-center text-2xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
+                    {option.icon}
+                  </div>
+                  <span className="inline-flex items-center rounded-full border border-white/70 bg-white/70 px-3 py-1 text-[11px] font-semibold text-slate-700">
+                    {option.tag}
+                  </span>
                 </div>
-              </div>
-            </div>
-          </SectionCard>
-        </div>
-      </div>
 
-      {/* Table */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
-        <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-          {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">NIC</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Requested</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Interest</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tenure</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Monthly Installment</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Monthly Interest</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 bg-white">
-                  {mortgages.map(m => (
-                    <tr key={m.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.id}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {(m.customer?.first_name || m.customer?.last_name) ? `${m.customer?.first_name ?? ''} ${m.customer?.last_name ?? ''}`.trim() : '—'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.customer?.phone ?? '—'}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.customer?.nic_passport ?? '—'}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        <span className="capitalize text-gray-900">{m.mortgage_type}</span>
-                        {m.asset?.asset_type === 'vehicle' && m.asset?.vehicle_reg_no ? (
-                          <span className="ml-2 text-gray-700">• {m.asset.vehicle_reg_no}</span>
-                        ) : null}
-                        {m.asset?.asset_type !== 'vehicle' && m.asset?.deed_number ? (
-                          <span className="ml-2 text-gray-700">• {m.asset.deed_number}</span>
-                        ) : null}
-                        {!m.asset?.deed_number && !m.asset?.vehicle_reg_no && m.asset?.description ? (
-                          <span className="ml-2 text-gray-700">• {m.asset.description}</span>
-                        ) : null}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{formatAmount(m.requested_amount)}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.interest_rate}% ({m.interest_type})</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.tenure_months} months</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {(() => {
-                          const { monthlyInstallment } = computeMonthlyFigures(m);
-                          return formatAmount(monthlyInstallment);
-                        })()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {(() => {
-                          const { monthlyInterest } = computeMonthlyFigures(m);
-                          return formatAmount(monthlyInterest);
-                        })()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <Badge
-                          label={m.status}
-                          variant={
-                            m.status === 'active' ? 'success' :
-                            m.status === 'arrears' ? 'warning' :
-                            m.status === 'approved' ? 'info' : 'default'
-                          }
-                        />
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div className="flex items-center gap-2">
-                          <ActionButton
-                            label="View"
-                            size="sm"
-                            variant="info"
-                            icon={<Eye className="h-4 w-4" />}
-                            onClick={() => router.push(`/dashboard/mortgages/${m.id}`)}
-                          />
-                          <ActionButton
-                            label="Collect Payment"
-                            size="sm"
-                            variant="success"
-                            icon={<Banknote className="h-4 w-4" />}
-                            onClick={() => openPaymentModal(m.id)}
-                          />
-                          <ActionButton
-                            label="View Payments"
-                            size="sm"
-                            variant="warning"
-                            icon={<Receipt className="h-4 w-4" />}
-                            onClick={() => router.push(`/dashboard/mortgages/${m.id}/payments`)}
-                          />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {mortgages.length === 0 && (
-                <div className="text-center py-12">
-                  <p className="text-gray-500">No mortgages found.</p>
+                <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">{option.title}</h3>
+                <p className="mt-2 text-sm text-slate-600 leading-relaxed">{option.description}</p>
+
+                <div className="mt-5 flex items-center gap-2 text-sm font-semibold text-slate-700 group-hover:text-slate-900">
+                  Open Page
+                  <svg className="w-4 h-4 transition-transform duration-300 group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
                 </div>
-              )}
-              {/* Payment Modal */}
-              <Modal isOpen={paymentOpen} onClose={() => setPaymentOpen(false)} title="Collect Payment" size="md">
-                <div className="grid grid-cols-1 gap-4">
-                  {paymentMortgage && (
-                    <div className="rounded-lg border border-gray-200 bg-white p-3">
-                      <div className="text-xs text-gray-500">Monthly Interest ({paymentMortgage.interest_type})</div>
-                      <div className="text-base font-medium text-gray-900">
-                        {(() => {
-                          const { monthlyInterest } = computeMonthlyFigures(paymentMortgage);
-                          return formatAmount(monthlyInterest);
-                        })()}
-                      </div>
-                      <div className="mt-2 text-xs text-gray-600">
-                        {paymentMortgage.interest_type === 'reducing' ? (
-                          <span>Reducing: interest is on current outstanding principal.</span>
-                        ) : (
-                          <span>Fixed: interest is flat on full principal.</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-gray-700">Amount</label>
-                    <input
-                      value={paymentAmount}
-                      onChange={e => setPaymentAmount(e.target.value)}
-                      placeholder="e.g. 25000.00"
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500"
-                    />
-                    {paymentMortgage && paymentAmount && (
-                      <div className="mt-1 text-xs">
-                        {(() => {
-                          const amt = parseFloat(paymentAmount);
-                          const { monthlyInterest } = computeMonthlyFigures(paymentMortgage);
-                          if (!Number.isFinite(amt)) return null;
-                          if (Math.abs(amt - monthlyInterest) < 0.01) {
-                            return <span className="text-amber-600">Interest-only payment: principal will not reduce.</span>;
-                          }
-                          if (amt < monthlyInterest) {
-                            return <span className="text-rose-600">Less than monthly interest: will be recorded with arrears.</span>;
-                          }
-                          return <span className="text-emerald-600">Covers interest; excess reduces principal.</span>;
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-gray-700">Date</label>
-                      <input
-                        type="date"
-                        value={paymentDate}
-                        onChange={e => setPaymentDate(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-gray-700">Method</label>
-                      <select
-                        value={paymentMethod}
-                        onChange={e => setPaymentMethod(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:border-transparent focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="cash">Cash</option>
-                        <option value="bank">Bank Transfer</option>
-                        <option value="card">Card</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-gray-700">Note</label>
-                    <textarea
-                      value={paymentNote}
-                      onChange={e => setPaymentNote(e.target.value)}
-                      placeholder="Optional remarks"
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500"
-                      rows={3}
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end gap-2 mt-4">
-                  <ActionButton label="Cancel" variant="default" onClick={() => setPaymentOpen(false)} />
-                  <ActionButton label={paymentSubmitting ? 'Submitting...' : 'Record Payment'} variant="success" onClick={submitPayment} disabled={paymentSubmitting} />
-                </div>
-              </Modal>
-            </div>
-          )}
+
+                <div className="absolute bottom-0 left-0 h-1 w-0 bg-gradient-to-r from-cyan-500 to-blue-500 group-hover:w-full transition-all duration-500"></div>
+              </div>
+            </button>
+          ))}
         </div>
       </div>
     </div>

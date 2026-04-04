@@ -6,11 +6,12 @@ interface SectionCardProps {
   actions?: React.ReactNode;
   children: React.ReactNode;
   padded?: boolean;
+  className?: string;
 }
 
-export default function SectionCard({ title, description, actions, children, padded = true }: SectionCardProps) {
+export default function SectionCard({ title, description, actions, children, padded = true, className = "" }: SectionCardProps) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md hover:border-slate-300">
+    <section className={`rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md hover:border-slate-300 ${className}`}>
       {(title || actions) && (
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 p-4">
           <div>

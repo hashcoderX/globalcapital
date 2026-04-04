@@ -143,7 +143,7 @@ class RolePermissionSeeder extends Seeder
         }
 
         // Ensure Super Admin user gets Super Admin role with pivot data
-        $superAdminUser = User::where('email', 'superadmin@sofcodelk.com')->first();
+        $superAdminUser = User::where('email', 'superadmin@softcodelk.com')->first();
         $superAdminRole = Role::where('name', 'Super Admin')->first();
 
         if ($superAdminUser && $superAdminRole) {

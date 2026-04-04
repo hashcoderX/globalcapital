@@ -28,7 +28,19 @@ class Mortgage extends Model
         'status',
         'approved_by',
         'approved_at',
+        'due_date',
+        'arrears_amount',
+        'due_amount',
+        'due_interest_amount',
         'created_by',
+    ];
+
+    protected $casts = [
+        'approved_at' => 'datetime',
+        'due_date' => 'date',
+        'arrears_amount' => 'decimal:2',
+        'due_amount' => 'decimal:2',
+        'due_interest_amount' => 'decimal:2',
     ];
 
     public function asset()

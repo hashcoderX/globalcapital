@@ -7,23 +7,57 @@ import ModuleHeader from "../_components/ModuleHeader";
 import SectionCard from "../_components/SectionCard";
 
 type Step =
-  | "customer"
-  | "contact"
-  | "employment"
-  | "credit"
+  | "profile"
+  | "financial"
   | "coBorrower"
-  | "loan"
-  | "asset"
-  | "documents"
-  | "review";
+  | "loanCollateral"
+  | "documentsReview";
+
+const STEP_ORDER: Step[] = [
+  "profile",
+  "financial",
+  "coBorrower",
+  "loanCollateral",
+  "documentsReview",
+];
+
+const STEP_LABELS: Record<Step, string> = {
+  profile: "Profile",
+  financial: "Financial",
+  coBorrower: "Guarantor",
+  loanCollateral: "Loan & Collateral",
+  documentsReview: "Documents & Review",
+};
+
+const hasText = (value: string) => value.trim().length > 0;
+const hasPositiveNumber = (value: string) => {
+  const normalized = value.replace(/,/g, "").trim();
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed > 0;
+};
+
+const generateFileCode = () => {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const random = Math.floor(1000 + Math.random() * 9000);
+  return `CUS-${yyyy}${mm}${dd}-${random}`;
+};
 
 export default function CreateMortgage() {
   const [token, setToken] = useState("");
-  const [step, setStep] = useState<Step>("customer");
+  const [step, setStep] = useState<Step>("profile");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalKind, setModalKind] = useState<"confirm" | "error" | "info">("info");
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalMessage, setModalMessage] = useState("");
   const router = useRouter();
 
   // Customer details
   const [fullName, setFullName] = useState("");
+  const [fileCode, setFileCode] = useState("");
   const [nic, setNic] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
   const [gender, setGender] = useState<"male" | "female" | "other">("male");
@@ -58,7 +92,7 @@ export default function CreateMortgage() {
 
   // Mortgage Loan Details
   const [mortgageType, setMortgageType] = useState<
-    "land" | "house" | "apartment" | "vehicle" | "gold" | "other"
+    "land" | "house" | "vehicle" | "gold" | "other"
   >("land");
   const [requestedAmount, setRequestedAmount] = useState("");
   const [approvedAmount, setApprovedAmount] = useState("");
@@ -117,72 +151,124 @@ export default function CreateMortgage() {
       router.push("/");
     } else {
       setToken(t);
+      setFileCode((prev) => prev || generateFileCode());
     }
   }, [router]);
 
   const nextStep = () => {
-    const order: Step[] = [
-      "customer",
-      "contact",
-      "employment",
-      "credit",
-      "coBorrower",
-      "loan",
-      "asset",
-      "documents",
-      "review",
-    ];
-    const idx = order.indexOf(step);
-    if (idx < order.length - 1) setStep(order[idx + 1]);
+    const idx = STEP_ORDER.indexOf(step);
+    if (idx < STEP_ORDER.length - 1) setStep(STEP_ORDER[idx + 1]);
   };
 
   const prevStep = () => {
-    const order: Step[] = [
-      "customer",
-      "contact",
-      "employment",
-      "credit",
-      "coBorrower",
-      "loan",
-      "asset",
-      "documents",
-      "review",
-    ];
-    const idx = order.indexOf(step);
-    if (idx > 0) setStep(order[idx - 1]);
+    const idx = STEP_ORDER.indexOf(step);
+    if (idx > 0) setStep(STEP_ORDER[idx - 1]);
   };
 
   const stepTitle = useMemo(() => {
     switch (step) {
-      case "customer":
-        return "Customer Details";
-      case "contact":
-        return "Contact Details";
-      case "employment":
-        return "Employment & Income";
-      case "credit":
-        return "Credit & Risk";
+      case "profile":
+        return "Customer & Contact Profile";
+      case "financial":
+        return "Employment, Income & Credit";
       case "coBorrower":
         return "Co-Borrower / Guarantor Details";
-      case "loan":
-        return "Mortgage Loan Details";
-      case "asset":
-        return "Mortgage Item / Collateral Details";
-      case "documents":
-        return "Documents & Attachments";
-      case "review":
-        return "Review & Submit";
+      case "loanCollateral":
+        return "Loan & Collateral Details";
+      case "documentsReview":
+        return "Documents, Review & Submit";
     }
   }, [step]);
 
+  const isProfileStepComplete = useMemo(() => {
+    return (
+      hasText(fullName) &&
+      hasText(nic) &&
+      hasText(dateOfBirth) &&
+      hasText(permanentAddress) &&
+      hasText(mobileNumber)
+    );
+  }, [fullName, nic, dateOfBirth, permanentAddress, mobileNumber]);
+
+  const isFinancialStepComplete = useMemo(() => {
+    return hasPositiveNumber(monthlyIncome);
+  }, [monthlyIncome]);
+
+  const isCoBorrowerStepComplete = useMemo(() => {
+    const hasAny =
+      hasText(coBorrowerName) ||
+      hasText(coBorrowerNic) ||
+      hasText(coBorrowerRelationship) ||
+      hasText(coBorrowerAddress) ||
+      hasText(coBorrowerContact) ||
+      hasText(coBorrowerIncome);
+
+    if (!hasAny) return true;
+
+    return (
+      hasText(coBorrowerName) &&
+      hasText(coBorrowerNic) &&
+      hasText(coBorrowerRelationship) &&
+      hasText(coBorrowerAddress) &&
+      hasPositiveNumber(coBorrowerIncome)
+    );
+  }, [coBorrowerName, coBorrowerNic, coBorrowerRelationship, coBorrowerAddress, coBorrowerContact, coBorrowerIncome]);
+
+  const isLoanCollateralStepComplete = useMemo(() => {
+    const approvedOk = !hasText(approvedAmount) || hasPositiveNumber(approvedAmount);
+    return (
+      hasPositiveNumber(requestedAmount) &&
+      hasPositiveNumber(interestRate) &&
+      hasPositiveNumber(tenureMonths) &&
+      approvedOk
+    );
+  }, [requestedAmount, approvedAmount, interestRate, tenureMonths]);
+
+  const isDocumentsReviewStepComplete = true;
+
+  const isStepComplete = (targetStep: Step) => {
+    switch (targetStep) {
+      case "profile":
+        return isProfileStepComplete;
+      case "financial":
+        return isFinancialStepComplete;
+      case "coBorrower":
+        return isCoBorrowerStepComplete;
+      case "loanCollateral":
+        return isLoanCollateralStepComplete;
+      case "documentsReview":
+        return isDocumentsReviewStepComplete;
+      default:
+        return false;
+    }
+  };
+
+  const currentStepIndex = STEP_ORDER.indexOf(step);
+  const firstIncompleteIndex = STEP_ORDER.findIndex((s) => !isStepComplete(s));
+  const maxReachableIndex = firstIncompleteIndex === -1 ? STEP_ORDER.length - 1 : firstIncompleteIndex;
+  const isCurrentStepComplete = isStepComplete(step);
+
+  const openModal = (kind: "confirm" | "error" | "info", title: string, message: string) => {
+    setModalKind(kind);
+    setModalTitle(title);
+    setModalMessage(message);
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+  };
+
   const handleSubmit = async () => {
-    if (!token) return;
+    if (!token || isSubmitting) return;
+    setIsSubmitting(true);
     try {
       // Create Customer
-      const [first, last] = fullName.split(" ").length > 1
-        ? [fullName.split(" ")[0], fullName.split(" ").slice(1).join(" ")]
-        : [fullName, ""];
+      const nameParts = fullName.trim().split(/\s+/).filter(Boolean);
+      const first = nameParts[0] || fullName.trim();
+      const last = nameParts.slice(1).join(" ") || "N/A";
       const customerPayload = {
+        customer_code: fileCode.trim() || undefined,
         first_name: first,
         last_name: last,
         email,
@@ -205,14 +291,63 @@ export default function CreateMortgage() {
         ),
         credit_score: creditScore ? parseInt(creditScore) : null,
       };
-      const custRes = await axios.post(
-        "http://localhost:8000/api/customers",
-        customerPayload,
-        {
-          headers: { Authorization: `Bearer ${token}` },
+      let createdCustomerId: number | null = null;
+
+      try {
+        const custRes = await axios.post(
+          "http://localhost:8000/api/customers",
+          customerPayload,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        createdCustomerId = custRes.data.id;
+      } catch (customerError: any) {
+        const backendError = String(
+          customerError?.response?.data?.error || customerError?.response?.data?.message || ""
+        ).toLowerCase();
+        const maybeDuplicate =
+          backendError.includes("duplicate") ||
+          backendError.includes("unique") ||
+          backendError.includes("nic_passport") ||
+          backendError.includes("email");
+
+        if (!maybeDuplicate) {
+          throw customerError;
         }
-      );
-      const createdCustomerId = custRes.data.id;
+
+        const lookupValue = (nic || email).trim();
+        if (!lookupValue) {
+          throw customerError;
+        }
+
+        const existingRes = await axios.get("http://localhost:8000/api/customers", {
+          headers: { Authorization: `Bearer ${token}` },
+          params: { q: lookupValue, per_page: 100 },
+        });
+
+        const existingRows = Array.isArray(existingRes.data?.data)
+          ? existingRes.data.data
+          : [];
+
+        const existingCustomer = existingRows.find((row: any) => {
+          const rowNic = String(row?.nic_passport || "").trim().toLowerCase();
+          const rowEmail = String(row?.email || "").trim().toLowerCase();
+          const inputNic = String(nic || "").trim().toLowerCase();
+          const inputEmail = String(email || "").trim().toLowerCase();
+          return (inputNic && rowNic === inputNic) || (inputEmail && rowEmail === inputEmail);
+        });
+
+        if (!existingCustomer?.id) {
+          throw customerError;
+        }
+
+        createdCustomerId = existingCustomer.id;
+      }
+
+      if (!createdCustomerId) {
+        throw new Error("Unable to create or resolve customer record.");
+      }
 
       // Upload selected customer documents
       for (const doc of customerDocuments) {
@@ -233,10 +368,13 @@ export default function CreateMortgage() {
       const hasLegal = deedNumber || deedDate || surveyPlanNumber || registrationOffice || lawyerName;
       const hasValuation = marketValue || forcedSaleValue || valuationDate || valuerName;
       const hasPhysical = assetAddress || landSizeOrBuildingArea || boundaries;
+      const normalizedAssetDescription = assetDescription.trim() || `${assetType} collateral`;
+
+      const normalizedMortgageType = mortgageType;
 
       const mortgagePayload: any = {
         customer_id: createdCustomerId,
-        mortgage_type: mortgageType,
+        mortgage_type: normalizedMortgageType,
         requested_amount: parseFloat(requestedAmount || "0"),
         approved_amount: approvedAmount
           ? parseFloat(approvedAmount)
@@ -251,7 +389,7 @@ export default function CreateMortgage() {
         penalty_rate: parseFloat(penaltyRate || "0"),
         asset: {
           asset_type: assetType,
-          description: assetDescription,
+          description: normalizedAssetDescription,
           ownership_type: ownershipType,
         },
       };
@@ -349,20 +487,32 @@ export default function CreateMortgage() {
         if (e.response.data.errors) {
           // Validation errors
           const errorMessages = Object.values(e.response.data.errors).flat().join('\n');
-          alert(`Validation errors:\n${errorMessages}`);
+          openModal("error", "Validation Errors", errorMessages);
         } else if (e.response.data.message) {
-          alert(`Error: ${e.response.data.message}`);
+          openModal("error", "Submission Error", String(e.response.data.message));
         } else {
-          alert(`Server error: ${JSON.stringify(e.response.data)}`);
+          openModal("error", "Server Error", JSON.stringify(e.response.data));
         }
       } else {
-        alert("Failed to create mortgage. Please check your connection and try again.");
+        openModal("error", "Network Error", "Failed to create mortgage. Please check your connection and try again.");
       }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
+  const requestSubmit = () => {
+    if (isSubmitting || !isCurrentStepComplete) return;
+    openModal("confirm", "Confirm Submission", "Are you sure you want to submit this mortgage application?");
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-40">
+        <div className="absolute -top-24 left-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
+        <div className="absolute top-24 right-8 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
+        <div className="absolute -bottom-24 left-1/3 h-80 w-80 rounded-full bg-teal-300 blur-3xl"></div>
+      </div>
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <ModuleHeader
           title="New Mortgage Application"
@@ -391,54 +541,65 @@ export default function CreateMortgage() {
         />
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      <div className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* Step indicator */}
-        <div className="flex items-center gap-3">
-          {(
-            [
-              "customer",
-              "contact",
-              "employment",
-              "credit",
-              "coBorrower",
-              "loan",
-              "asset",
-              "documents",
-              "review",
-            ] as Step[]
-          ).map((key, i, arr) => {
-            const active = i <= arr.indexOf(step);
+        <div className="rounded-2xl border border-white/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_16px_40px_-24px_rgba(14,116,144,0.55)]">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+            {STEP_ORDER.map((key, i) => {
+              const active = i <= currentStepIndex;
+              const isCurrent = i === currentStepIndex;
+              const isLocked = i > maxReachableIndex;
             return (
-              <div key={key} className="flex items-center gap-3">
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  if (!isLocked) setStep(key);
+                }}
+                disabled={isLocked}
+                className={`rounded-xl border px-3 py-2 text-left transition ${
+                  isCurrent
+                    ? "border-cyan-300 bg-gradient-to-r from-cyan-100 to-blue-100"
+                    : active
+                    ? "border-cyan-100 bg-cyan-50/60"
+                    : "border-slate-200 bg-slate-50"
+                } ${isLocked ? "cursor-not-allowed opacity-50" : ""}`}
+              >
+                <div className="flex items-center gap-2">
                 <div
                   className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold ${
-                    active
-                      ? "bg-gradient-to-br from-cyan-500 to-blue-600 text-white shadow-sm"
+                    isCurrent
+                      ? "bg-gradient-to-br from-cyan-600 to-blue-700 text-white shadow-sm"
+                      : active
+                      ? "bg-cyan-500 text-white"
                       : "bg-gray-200 text-gray-600"
                   }`}
                 >
                   {i + 1}
                 </div>
-                {i < arr.length - 1 && (
-                  <div
-                    className={`h-1 w-10 rounded-full ${
-                      active
-                        ? "bg-gradient-to-r from-cyan-400 to-blue-500"
-                        : "bg-gray-200"
-                    }`}
-                  />
-                )}
-              </div>
+                  <div>
+                    <p className={`text-xs font-semibold uppercase tracking-wide ${isCurrent ? "text-cyan-800" : "text-slate-600"}`}>
+                      {STEP_LABELS[key]}
+                    </p>
+                  </div>
+                </div>
+              </button>
             );
           })}
+          </div>
         </div>
 
         {/* Step content */}
         <SectionCard
           title={stepTitle}
           description="Provide the required information for this step"
+          className="border border-white/70 bg-white/85 backdrop-blur-xl shadow-[0_18px_45px_-28px_rgba(14,116,144,0.55)]"
         >
-          {step === "customer" && (
+          <div className="space-y-6 [&_input]:rounded-xl [&_input]:border-cyan-100 [&_input]:bg-white [&_input]:px-3 [&_input]:py-2 [&_input]:text-black [&_input]:shadow-sm [&_input]:outline-none [&_input]:transition [&_input]:focus:border-cyan-300 [&_input]:focus:ring-2 [&_input]:focus:ring-cyan-200 [&_select]:rounded-xl [&_select]:border-cyan-100 [&_select]:bg-white [&_select]:px-3 [&_select]:py-2 [&_select]:text-black [&_select]:shadow-sm [&_select]:outline-none [&_select]:transition [&_select]:focus:border-cyan-300 [&_select]:focus:ring-2 [&_select]:focus:ring-cyan-200 [&_textarea]:rounded-xl [&_textarea]:border-cyan-100 [&_textarea]:bg-white [&_textarea]:px-3 [&_textarea]:py-2 [&_textarea]:text-black [&_textarea]:shadow-sm [&_textarea]:outline-none [&_textarea]:transition [&_textarea]:focus:border-cyan-300 [&_textarea]:focus:ring-2 [&_textarea]:focus:ring-cyan-200">
+          {step === "profile" && (
+            <>
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Customer</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">
@@ -449,6 +610,17 @@ export default function CreateMortgage() {
                   onChange={(e) => setFullName(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
                   placeholder="e.g. John Doe"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  File Code
+                </label>
+                <input
+                  value={fileCode}
+                  onChange={(e) => setFileCode(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  placeholder="e.g. CUS-2026-001"
                 />
               </div>
               <div>
@@ -512,55 +684,61 @@ export default function CreateMortgage() {
                 />
               </div>
             </div>
-          )}
+            </div>
 
-          {step === "contact" && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  Permanent Address
-                </label>
-                <textarea
-                  value={permanentAddress}
-                  onChange={(e) => setPermanentAddress(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  Current Address
-                </label>
-                <textarea
-                  value={currentAddress}
-                  onChange={(e) => setCurrentAddress(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  Mobile Number
-                </label>
-                <input
-                  value={mobileNumber}
-                  onChange={(e) => setMobileNumber(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
-                />
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Contact</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Permanent Address
+                  </label>
+                  <textarea
+                    value={permanentAddress}
+                    onChange={(e) => setPermanentAddress(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Current Address
+                  </label>
+                  <textarea
+                    value={currentAddress}
+                    onChange={(e) => setCurrentAddress(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Mobile Number
+                  </label>
+                  <input
+                    value={mobileNumber}
+                    onChange={(e) => setMobileNumber(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
               </div>
             </div>
+            </>
           )}
 
-          {step === "employment" && (
+          {step === "financial" && (
+            <>
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Employment & Income</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">
@@ -617,9 +795,10 @@ export default function CreateMortgage() {
                 />
               </div>
             </div>
-          )}
+            </div>
 
-          {step === "credit" && (
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Credit & Risk</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">
@@ -661,6 +840,8 @@ export default function CreateMortgage() {
                 <input type="file" multiple />
               </div>
             </div>
+            </div>
+            </>
           )}
 
           {step === "coBorrower" && (
@@ -728,7 +909,10 @@ export default function CreateMortgage() {
             </div>
           )}
 
-          {step === "loan" && (
+          {step === "loanCollateral" && (
+            <>
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Loan Terms</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">
@@ -739,7 +923,7 @@ export default function CreateMortgage() {
                   onChange={(e) => setMortgageType(e.target.value as any)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
                 >
-                  {["land", "house", "apartment", "vehicle", "gold", "other"].map(
+                  {["land", "house", "vehicle", "gold", "other"].map(
                     (t) => (
                       <option key={t} value={t}>
                         {t}
@@ -867,9 +1051,10 @@ export default function CreateMortgage() {
                 />
               </div>
             </div>
-          )}
+            </div>
 
-          {step === "asset" && (
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Collateral</p>
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1092,9 +1277,11 @@ export default function CreateMortgage() {
                 </div>
               )}
             </div>
+            </div>
+            </>
           )}
 
-          {step === "documents" && (
+          {step === "documentsReview" && (
             <div className="space-y-6">
               <h4 className="text-sm font-semibold text-gray-800">
                 Customer Documents
@@ -1283,42 +1470,88 @@ export default function CreateMortgage() {
                   />
                 </div>
               </div>
+              <div className="rounded-xl border border-cyan-100 bg-cyan-50/60 p-4">
+                <p className="text-sm font-medium text-slate-800">Review</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  Review your mortgage details and submit.
+                </p>
+              </div>
             </div>
           )}
-
-          {step === "review" && (
-            <div>
-              <p className="text-gray-700">
-                Review your mortgage details and submit.
-              </p>
-            </div>
-          )}
+          </div>
         </SectionCard>
 
         <div className="flex justify-between">
           <button
             onClick={prevStep}
-            className="px-6 py-2 rounded-lg border border-gray-300 text-gray-700 transition hover:bg-gray-50"
+            disabled={isSubmitting || currentStepIndex === 0}
+            className="px-6 py-2 rounded-lg border border-gray-300 text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             Back
           </button>
-          {step === "review" ? (
+          {step === "documentsReview" ? (
             <button
-              onClick={handleSubmit}
-              className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-2 text-white shadow-sm transition hover:opacity-95"
+              onClick={requestSubmit}
+              disabled={isSubmitting || !isCurrentStepComplete}
+              className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-2 text-white shadow-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Submit Application
+              {isSubmitting ? 'Submitting...' : 'Submit Application'}
             </button>
           ) : (
             <button
               onClick={nextStep}
-              className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-2 text-white shadow-sm transition hover:opacity-95"
+              disabled={isSubmitting || !isCurrentStepComplete}
+              className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-2 text-white shadow-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
             >
               Next
             </button>
           )}
         </div>
       </div>
+
+      {modalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-cyan-100 bg-white shadow-2xl">
+            <div className="border-b border-cyan-100 bg-gradient-to-r from-cyan-50 to-blue-50 px-5 py-4">
+              <h3 className="text-lg font-bold text-slate-900">{modalTitle}</h3>
+            </div>
+            <div className="px-5 py-4">
+              <p className="whitespace-pre-line text-sm text-slate-700">{modalMessage}</p>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-cyan-100 bg-slate-50 px-5 py-4">
+              {modalKind === "confirm" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={closeModal}
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      closeModal();
+                      await handleSubmit();
+                    }}
+                    className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-2 text-sm font-semibold text-white"
+                  >
+                    Confirm
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-2 text-sm font-semibold text-white"
+                >
+                  OK
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

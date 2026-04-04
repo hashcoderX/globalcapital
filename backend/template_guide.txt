@@ -1,0 +1,43 @@
+Available loan data fields for placeholders:
+========================================
+
+{{customer_name}} or ${{customer_name}}
+{{customer_no}} or ${{customer_no}}
+{{loan_code}} or ${{loan_code}}
+{{issue_date}} or ${{issue_date}}
+{{loan_amount}} or ${{loan_amount}}
+{{principal}} or ${{principal}}
+{{refundable_amount}} or ${{refundable_amount}}
+{{total_payable}} or ${{total_payable}}
+{{installment}} or ${{installment}}
+{{interest_rate}} or ${{interest_rate}}
+{{interest_type}} or ${{interest_type}}
+{{terms_count}} or ${{terms_count}}
+{{refund_option}} or ${{refund_option}}
+{{address}} or ${{address}}
+{{contact_no}} or ${{contact_no}}
+{{route_name}} or ${{route_name}}
+{{center_name}} or ${{center_name}}
+{{group_name}} or ${{group_name}}
+{{request_no}} or ${{request_no}}
+
+Example usage in Word document:
+===============================
+
+LOAN AGREEMENT
+
+This Loan Agreement is made on {{issue_date}} between:
+
+Customer Name: {{customer_name}}
+Customer No: {{customer_no}}
+Address: {{address}}
+Contact: {{contact_no}}
+
+Loan Details:
+- Loan Amount: Rs. {{loan_amount}}
+- Interest Rate: {{interest_rate}}% ({{interest_type}})
+- Terms: {{terms_count}} {{refund_option}}(s)
+- Installment Amount: Rs. {{installment}}
+- Total Payable: Rs. {{total_payable}}
+
+Route/Center/Group: {{route_name}} / {{center_name}} / {{group_name}}

@@ -409,7 +409,9 @@ export default function Employees() {
       resetForm();
     } catch (error: any) {
       console.error('Error saving employee:', error);
-      if (error.response && error.response.data && error.response.data.errors) {
+      if (error.response?.status === 403) {
+        showNotice('Permission Denied', 'Your account does not have permission to create or edit employees.', 'error');
+      } else if (error.response && error.response.data && error.response.data.errors) {
         const errorMessages = Object.values(error.response.data.errors).flat().join('\n');
         showNotice('Validation Error', errorMessages, 'error');
       } else {

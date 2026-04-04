@@ -32,4 +32,9 @@ class Customer extends Model
     {
         return $this->hasMany(CustomerDocument::class);
     }
+
+    public function savingsAccounts(): HasMany
+    {
+        return $this->hasMany(SavingsAccount::class);
+    }
 }

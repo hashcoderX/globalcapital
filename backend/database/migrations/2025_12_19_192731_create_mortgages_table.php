@@ -34,7 +34,9 @@ return new class extends Migration
 
                 $table->foreign('tenant_id')->references('id')->on('companies');
                 $table->foreign('branch_id')->references('id')->on('companies');
-                $table->foreign('customer_id')->references('id')->on('customers');
+                if (Schema::hasTable('customers')) {
+                    $table->foreign('customer_id')->references('id')->on('customers');
+                }
                 $table->foreign('approved_by')->references('id')->on('users');
                 $table->foreign('created_by')->references('id')->on('users');
 

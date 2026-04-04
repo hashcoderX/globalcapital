@@ -1,0 +1,525 @@
+'use client';
+
+import axios from 'axios';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+
+type LoanRow = {
+  id: number;
+  customer_no?: string | null;
+  customer_name?: string | null;
+  field_officer?: string | null;
+  status?: string | null;
+  refundable_amount?: number | string | null;
+  loan_amount?: number | string | null;
+  arrears_balance?: number | string | null;
+  due_date?: string | null;
+  next_payment_date?: string | null;
+};
+
+type CollectionRow = {
+  mf_loan_request_id: number | string;
+  collected_amount?: number | string | null;
+};
+
+type RecoveryRow = {
+  loanId: number;
+  customerNo: string;
+  customerName: string;
+  fieldOfficer: string;
+  loanStatus: string;
+  loanAmount: number;
+  refundableAmount: number;
+  collectedAmount: number;
+  pendingAmount: number;
+  arrearsAmount: number;
+  dueDate: string;
+  nextPaymentDate: string;
+  overdueDays: number;
+  recoveryPriority: 'urgent' | 'high' | 'medium' | 'low';
+};
+
+const API_BASE = 'http://localhost:8000/api';
+
+export default function RecoveryReportPage() {
+  const router = useRouter();
+  const [token, setToken] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState<RecoveryRow[]>([]);
+  const [officerFilter, setOfficerFilter] = useState('all');
+  const [priorityFilter, setPriorityFilter] = useState<'all' | 'urgent' | 'high' | 'medium' | 'low'>('all');
+
+  useEffect(() => {
+    const storedToken = localStorage.getItem('token');
+    if (!storedToken) {
+      router.push('/');
+      return;
+    }
+
+    setToken(storedToken);
+  }, [router]);
+
+  useEffect(() => {
+    if (!token) return;
+
+    const loadReport = async () => {
+      setLoading(true);
+      try {
+        const [loanRes, collectionRes] = await Promise.all([
+          axios.get(`${API_BASE}/microfinance/loan-requests`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }),
+          axios.get(`${API_BASE}/microfinance/collections`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }),
+        ]);
+
+        const loans: LoanRow[] = Array.isArray(loanRes.data) ? loanRes.data : [];
+        const collections: CollectionRow[] = Array.isArray(collectionRes.data) ? collectionRes.data : [];
+
+        const paidByLoan = new Map<number, number>();
+        collections.forEach((collection) => {
+          const loanId = Number(collection.mf_loan_request_id || 0);
+          if (!loanId) return;
+          paidByLoan.set(loanId, (paidByLoan.get(loanId) || 0) + Number(collection.collected_amount || 0));
+        });
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const mapped: RecoveryRow[] = loans
+          .filter((loan) => {
+            const status = String(loan.status || '').toLowerCase();
+            return status === 'approved' || status === 'released' || status === 'completed';
+          })
+          .map((loan) => {
+            const loanId = Number(loan.id || 0);
+            const refundableAmount = Number(loan.refundable_amount || 0);
+            const collectedAmount = paidByLoan.get(loanId) || 0;
+            const pendingAmount = Math.max(refundableAmount - collectedAmount, 0);
+            const arrearsAmount = Math.max(Number(loan.arrears_balance || 0), 0);
+
+            const dueDateText = String(loan.due_date || '').slice(0, 10);
+            const dueDate = dueDateText ? new Date(`${dueDateText}T00:00:00`) : null;
+            const overdueDays =
+              dueDate && !Number.isNaN(dueDate.getTime()) && pendingAmount > 0
+                ? Math.max(Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)), 0)
+                : 0;
+
+            let recoveryPriority: RecoveryRow['recoveryPriority'] = 'low';
+            if (arrearsAmount >= 100000 || overdueDays >= 60 || pendingAmount >= 500000) {
+              recoveryPriority = 'urgent';
+            } else if (arrearsAmount > 0 || overdueDays >= 30 || pendingAmount >= 250000) {
+              recoveryPriority = 'high';
+            } else if (overdueDays > 0 || pendingAmount > 0) {
+              recoveryPriority = 'medium';
+            }
+
+            return {
+              loanId,
+              customerNo: String(loan.customer_no || '-'),
+              customerName: String(loan.customer_name || '-'),
+              fieldOfficer: String(loan.field_officer || 'Unassigned'),
+              loanStatus: String(loan.status || '-'),
+              loanAmount: Number(loan.loan_amount || 0),
+              refundableAmount,
+              collectedAmount,
+              pendingAmount,
+              arrearsAmount,
+              dueDate: dueDateText || '-',
+              nextPaymentDate: String(loan.next_payment_date || '').slice(0, 10) || '-',
+              overdueDays,
+              recoveryPriority,
+            };
+          })
+          .filter((row) => row.pendingAmount > 0 || row.arrearsAmount > 0)
+          .sort((a, b) => {
+            const rank = { urgent: 4, high: 3, medium: 2, low: 1 };
+            if (rank[b.recoveryPriority] !== rank[a.recoveryPriority]) {
+              return rank[b.recoveryPriority] - rank[a.recoveryPriority];
+            }
+            return b.pendingAmount + b.arrearsAmount - (a.pendingAmount + a.arrearsAmount);
+          });
+
+        setRows(mapped);
+      } catch {
+        setRows([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadReport();
+  }, [token]);
+
+  const officerOptions = useMemo(() => {
+    return Array.from(new Set(rows.map((row) => row.fieldOfficer))).sort((a, b) => a.localeCompare(b));
+  }, [rows]);
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      if (officerFilter !== 'all' && row.fieldOfficer.toLowerCase() !== officerFilter) {
+        return false;
+      }
+
+      if (priorityFilter !== 'all' && row.recoveryPriority !== priorityFilter) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [rows, officerFilter, priorityFilter]);
+
+  const summary = useMemo(() => {
+    return filteredRows.reduce(
+      (acc, row) => {
+        acc.count += 1;
+        acc.loanAmount += row.loanAmount;
+        acc.refundable += row.refundableAmount;
+        acc.collected += row.collectedAmount;
+        acc.pending += row.pendingAmount;
+        acc.arrears += row.arrearsAmount;
+        if (row.recoveryPriority === 'urgent') acc.urgent += 1;
+        if (row.recoveryPriority === 'high') acc.high += 1;
+        if (row.recoveryPriority === 'medium') acc.medium += 1;
+        if (row.recoveryPriority === 'low') acc.low += 1;
+        return acc;
+      },
+      {
+        count: 0,
+        loanAmount: 0,
+        refundable: 0,
+        collected: 0,
+        pending: 0,
+        arrears: 0,
+        urgent: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+      }
+    );
+  }, [filteredRows]);
+
+  const formatMoney = (value: number) => Number(value || 0).toFixed(2);
+
+  const formatDate = (value: string) => {
+    if (!value || value === '-') return '-';
+    const parsed = new Date(`${value}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return value;
+
+    return new Intl.DateTimeFormat('en-LK', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+    }).format(parsed);
+  };
+
+  const getReportFileDate = () => new Date().toISOString().slice(0, 10);
+
+  const handleDownloadCsv = () => {
+    const headers = [
+      'Loan ID',
+      'Customer No',
+      'Customer Name',
+      'Field Officer',
+      'Loan Status',
+      'Loan Amount',
+      'Refundable Amount',
+      'Collected Amount',
+      'Pending Amount',
+      'Arrears Amount',
+      'Due Date',
+      'Next Payment Date',
+      'Overdue Days',
+      'Recovery Priority',
+    ];
+
+    const escapeCsv = (value: string | number) => {
+      const text = String(value ?? '');
+      if (text.includes(',') || text.includes('"') || text.includes('\n')) {
+        return `"${text.replace(/"/g, '""')}"`;
+      }
+      return text;
+    };
+
+    const body = filteredRows.map((row) => [
+      row.loanId,
+      row.customerNo,
+      row.customerName,
+      row.fieldOfficer,
+      row.loanStatus,
+      formatMoney(row.loanAmount),
+      formatMoney(row.refundableAmount),
+      formatMoney(row.collectedAmount),
+      formatMoney(row.pendingAmount),
+      formatMoney(row.arrearsAmount),
+      formatDate(row.dueDate),
+      formatDate(row.nextPaymentDate),
+      row.overdueDays,
+      row.recoveryPriority,
+    ]);
+
+    const csv = [headers, ...body].map((line) => line.map(escapeCsv).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `recovery-report-${getReportFileDate()}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const handleDownloadPdf = () => {
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const generatedAt = new Intl.DateTimeFormat('en-LK', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date());
+
+    const officerText = officerFilter === 'all' ? 'Officer: All' : `Officer: ${officerFilter}`;
+    const priorityText = `Priority: ${priorityFilter}`;
+
+    doc.setFontSize(16);
+    doc.text('Recovery Report', 40, 40);
+    doc.setFontSize(10);
+    doc.text(`${officerText} | ${priorityText} | Generated: ${generatedAt}`, 40, 58);
+
+    autoTable(doc, {
+      startY: 72,
+      head: [[
+        'Loan ID',
+        'Customer No',
+        'Customer',
+        'Officer',
+        'Pending',
+        'Arrears',
+        'Overdue Days',
+        'Priority',
+      ]],
+      body: filteredRows.map((row) => [
+        row.loanId,
+        row.customerNo,
+        row.customerName,
+        row.fieldOfficer,
+        formatMoney(row.pendingAmount),
+        formatMoney(row.arrearsAmount),
+        row.overdueDays,
+        row.recoveryPriority,
+      ]),
+      styles: {
+        fontSize: 8,
+        cellPadding: 4,
+      },
+      headStyles: {
+        fillColor: [13, 148, 136],
+        textColor: [255, 255, 255],
+      },
+      alternateRowStyles: {
+        fillColor: [240, 253, 250],
+      },
+      margin: { left: 24, right: 24, top: 72, bottom: 24 },
+      theme: 'striped',
+    });
+
+    doc.save(`recovery-report-${getReportFileDate()}.pdf`);
+  };
+
+  if (!token || loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-45">
+        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
+        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
+        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
+      </div>
+
+      <div className="relative z-10 max-w-7xl mx-auto space-y-6">
+        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
+                Reports Desk
+              </span>
+              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Recovery Report</h1>
+              <p className="text-sm text-slate-600 mt-1">Monitor recovery portfolio, prioritize accounts, and track pending and arrears exposure.</p>
+            </div>
+            <button
+              onClick={() => router.push('/dashboard/microfinance')}
+              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
+            >
+              Back
+            </button>
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Recovery Accounts</p>
+              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.count}</p>
+            </div>
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Pending</p>
+              <p className="text-2xl font-extrabold text-rose-700 mt-1">
+                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Arrears</p>
+              <p className="text-2xl font-extrabold text-orange-700 mt-1">
+                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.arrears)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Urgent / High</p>
+              <p className="text-2xl font-extrabold text-red-700 mt-1">{summary.urgent} / {summary.high}</p>
+            </div>
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Medium / Low</p>
+              <p className="text-2xl font-extrabold text-cyan-700 mt-1">{summary.medium} / {summary.low}</p>
+            </div>
+            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Collected</p>
+              <p className="text-2xl font-extrabold text-emerald-700 mt-1">
+                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected)}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h2 className="text-lg font-bold text-slate-900">Recovery Portfolio</h2>
+            <div className="flex items-end gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleDownloadCsv}
+                className="px-3 py-2 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-sm font-semibold border border-emerald-200"
+              >
+                Download CSV
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadPdf}
+                className="px-3 py-2 rounded-xl bg-cyan-100 hover:bg-cyan-200 text-cyan-800 text-sm font-semibold border border-cyan-200"
+              >
+                Download PDF
+              </button>
+              <div>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Officer</label>
+                <select
+                  value={officerFilter}
+                  onChange={(e) => setOfficerFilter(e.target.value)}
+                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                >
+                  <option value="all">All Officers</option>
+                  {officerOptions.map((officer) => (
+                    <option key={officer} value={officer.toLowerCase()}>
+                      {officer}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Priority</label>
+                <select
+                  value={priorityFilter}
+                  onChange={(e) => setPriorityFilter(e.target.value as 'all' | 'urgent' | 'high' | 'medium' | 'low')}
+                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                >
+                  <option value="all">All</option>
+                  <option value="urgent">Urgent</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setOfficerFilter('all');
+                  setPriorityFilter('all');
+                }}
+                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+
+          {filteredRows.length === 0 ? (
+            <div className="mt-4 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-100/60 to-teal-100/40 p-8 text-sm text-slate-700 text-center">
+              No recovery data found for selected filters.
+            </div>
+          ) : (
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
+              <table className="min-w-full text-sm text-left text-slate-700 bg-white">
+                <thead className="bg-cyan-50/70 text-slate-700">
+                  <tr>
+                    <th className="px-3 py-2 font-semibold">Loan ID</th>
+                    <th className="px-3 py-2 font-semibold">Customer No</th>
+                    <th className="px-3 py-2 font-semibold">Customer</th>
+                    <th className="px-3 py-2 font-semibold">Field Officer</th>
+                    <th className="px-3 py-2 font-semibold">Loan Status</th>
+                    <th className="px-3 py-2 font-semibold">Pending</th>
+                    <th className="px-3 py-2 font-semibold">Arrears</th>
+                    <th className="px-3 py-2 font-semibold">Due Date</th>
+                    <th className="px-3 py-2 font-semibold">Next Payment</th>
+                    <th className="px-3 py-2 font-semibold">Overdue Days</th>
+                    <th className="px-3 py-2 font-semibold">Priority</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRows.map((row) => (
+                    <tr key={row.loanId} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
+                      <td className="px-3 py-2">{row.loanId}</td>
+                      <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
+                      <td className="px-3 py-2">{row.customerName}</td>
+                      <td className="px-3 py-2">{row.fieldOfficer}</td>
+                      <td className="px-3 py-2 capitalize">{row.loanStatus}</td>
+                      <td className="px-3 py-2 text-rose-700 font-semibold">{formatMoney(row.pendingAmount)}</td>
+                      <td className="px-3 py-2 text-orange-700 font-semibold">{formatMoney(row.arrearsAmount)}</td>
+                      <td className="px-3 py-2">{formatDate(row.dueDate)}</td>
+                      <td className="px-3 py-2">{formatDate(row.nextPaymentDate)}</td>
+                      <td className="px-3 py-2">{row.overdueDays}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${
+                          row.recoveryPriority === 'urgent'
+                            ? 'border-red-200 bg-red-50 text-red-800'
+                            : row.recoveryPriority === 'high'
+                            ? 'border-orange-200 bg-orange-50 text-orange-800'
+                            : row.recoveryPriority === 'medium'
+                            ? 'border-amber-200 bg-amber-50 text-amber-800'
+                            : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                        }`}>
+                          {row.recoveryPriority}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -7,7 +7,7 @@ import ModuleHeader from '../_components/ModuleHeader';
 import SectionCard from '../_components/SectionCard';
 import Badge from '../_components/Badge';
 import StatCard from '../_components/StatCard';
-import { Banknote, PercentCircle, CalendarDays, MapPin, FileText, Users, Send, Check, XCircle, Unlock } from 'lucide-react';
+import { Banknote, PercentCircle, CalendarDays, MapPin, Users, Send, Check, XCircle, Unlock, Landmark, ShieldCheck, Loader2 } from 'lucide-react';
 import ActionButton from '../_components/ActionButton';
 
 export default function MortgageDetails() {
@@ -18,6 +18,7 @@ export default function MortgageDetails() {
   const id = params?.id as string;
   const [toast, setToast] = useState<string>('');
   const [actionLoading, setActionLoading] = useState(false);
+  const [actionInProgress, setActionInProgress] = useState<'submit' | 'approve' | 'reject' | 'release' | null>(null);
 
   useEffect(() => {
     const t = localStorage.getItem('token');
@@ -44,6 +45,7 @@ export default function MortgageDetails() {
     if (!token) return;
     try {
       setActionLoading(true);
+      setActionInProgress(action);
       const res = await axios.post(`http://localhost:8000/api/mortgages/${id}/status`, { action }, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -54,6 +56,7 @@ export default function MortgageDetails() {
       console.error(e);
     } finally {
       setActionLoading(false);
+      setActionInProgress(null);
       setTimeout(() => setToast(''), 2500);
     }
   };
@@ -67,6 +70,11 @@ export default function MortgageDetails() {
   const canSubmit = useMemo(() => mortgage?.status === 'draft', [mortgage]);
   const canApproveReject = useMemo(() => mortgage?.status === 'submitted', [mortgage]);
   const canRelease = useMemo(() => mortgage?.status === 'approved', [mortgage]);
+  const statusVariant = useMemo(() => (
+    mortgage?.status === 'active' ? 'success' :
+    mortgage?.status === 'arrears' ? 'warning' :
+    mortgage?.status === 'approved' ? 'info' : 'default'
+  ), [mortgage]);
 
   const toNumber = (v: number | string | null | undefined): number => {
     if (typeof v === 'number') return v;
@@ -106,13 +114,18 @@ export default function MortgageDetails() {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-45">
+        <div className="absolute -top-24 left-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
+        <div className="absolute top-16 right-10 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
+        <div className="absolute -bottom-24 left-1/3 h-80 w-80 rounded-full bg-teal-300 blur-3xl"></div>
+      </div>
       {toast && (
-        <div className="fixed right-4 top-4 z-50 rounded-lg bg-gradient-to-r from-emerald-500 to-green-600 px-4 py-2 text-white shadow-lg">
+        <div className="fixed right-4 top-4 z-50 rounded-xl border border-emerald-300 bg-gradient-to-r from-emerald-500 to-green-600 px-4 py-2 text-white shadow-lg">
           {toast}
         </div>
       )}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <ModuleHeader
           title={`Mortgage #${id}`}
           subtitle={undefined}
@@ -133,9 +146,41 @@ export default function MortgageDetails() {
         />
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        <div className="rounded-3xl border border-white/70 bg-white/80 backdrop-blur-xl p-6 shadow-[0_22px_60px_-30px_rgba(14,116,144,0.55)]">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-700">Mortgage Profile</p>
+              <h2 className="mt-2 text-2xl font-extrabold text-slate-900 capitalize">{mortgage.mortgage_type} Mortgage</h2>
+              <p className="mt-1 text-sm text-slate-600">Customer #{mortgage.customer_id} • Created {new Date(mortgage.created_at).toLocaleDateString()}</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <Badge label={mortgage.status} variant={statusVariant as any} />
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-4">
+            <div className="rounded-xl border border-cyan-100 bg-cyan-50/70 p-3">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Requested</p>
+              <p className="mt-1 text-lg font-bold text-slate-900">{formatAmount(mortgage.requested_amount)}</p>
+            </div>
+            <div className="rounded-xl border border-cyan-100 bg-cyan-50/70 p-3">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Approved</p>
+              <p className="mt-1 text-lg font-bold text-slate-900">{formatAmount(mortgage.approved_amount)}</p>
+            </div>
+            <div className="rounded-xl border border-cyan-100 bg-cyan-50/70 p-3">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Installment</p>
+              <p className="mt-1 text-lg font-bold text-slate-900">{formatAmount(mortgage.installment_amount ?? monthlyFigures.monthlyInstallment)}</p>
+            </div>
+            <div className="rounded-xl border border-cyan-100 bg-cyan-50/70 p-3">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Total Interest</p>
+              <p className="mt-1 text-lg font-bold text-slate-900">{formatAmount(monthlyFigures.totalInterest)}</p>
+            </div>
+          </div>
+        </div>
+
         {/* Top metrics */}
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-3 mb-6">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
           <StatCard icon={<Banknote className="h-5 w-5"/>} label="Requested Amount" value={formatAmount(mortgage.requested_amount)} tone="primary" />
           <StatCard icon={<PercentCircle className="h-5 w-5"/>} label="Interest" value={`${mortgage.interest_rate}% (${mortgage.interest_type})`} tone="success" />
           <StatCard icon={<CalendarDays className="h-5 w-5"/>} label="Tenure" value={`${mortgage.tenure_months} months`} tone="warning" />
@@ -147,16 +192,10 @@ export default function MortgageDetails() {
           <SectionCard
             title="Details"
             description={undefined}
+            className="border-white/80 bg-white/85 backdrop-blur-xl"
           >
-            <div className="mb-4">
-              <Badge
-                label={mortgage.status}
-                variant={
-                  mortgage.status === 'active' ? 'success' :
-                  mortgage.status === 'arrears' ? 'warning' :
-                  mortgage.status === 'approved' ? 'info' : 'default'
-                }
-              />
+            <div className="mb-4 inline-flex rounded-full border border-cyan-100 bg-cyan-50/70 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-800">
+              Core Finance Snapshot
             </div>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div className="flex items-center gap-2"><MapPin className="h-4 w-4 text-gray-500"/><span className="text-gray-800">Type:</span> <span className="capitalize text-gray-800">{mortgage.mortgage_type}</span></div>
@@ -167,47 +206,34 @@ export default function MortgageDetails() {
               <div><span className="text-gray-800">Penalty Rate:</span> <span className="text-gray-900">{mortgage.penalty_rate}%</span></div>
             </div>
           </SectionCard>
-          <SectionCard title="Actions" description={undefined}>
+          <SectionCard title="Actions" description="Progress this mortgage through the lifecycle" className="border-white/80 bg-white/85 backdrop-blur-xl">
             <div className="grid grid-cols-1 gap-2">
               <ActionButton
-                label="Submit for Approval"
-                icon={<Send className="h-4 w-4" />}
+                label={actionInProgress === 'submit' ? 'Submitting...' : 'Submit for Approval'}
+                icon={actionInProgress === 'submit' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 variant="primary"
                 onClick={() => handleStatus('submit')}
                 disabled={!canSubmit || actionLoading}
                 className="w-full"
               />
-              <ActionButton
-                label="Approve"
-                icon={<Check className="h-4 w-4" />}
-                variant="success"
-                onClick={() => handleStatus('approve')}
-                disabled={!canApproveReject || actionLoading}
-                className="w-full"
-              />
-              <ActionButton
-                label="Reject"
-                icon={<XCircle className="h-4 w-4" />}
-                variant="danger"
-                onClick={() => handleStatus('reject')}
-                disabled={!canApproveReject || actionLoading}
-                className="w-full"
-              />
-              <ActionButton
-                label="Release"
-                icon={<Unlock className="h-4 w-4" />}
-                variant="info"
-                onClick={() => handleStatus('release')}
-                disabled={!canRelease || actionLoading}
-                className="w-full"
-              />
+            </div>
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+              <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-cyan-700"/>Only allowed transitions are enabled for current status.</div>
+            </div>
+          </SectionCard>
+          <SectionCard title="Structure" description="Current terms and frequency mapping" className="border-white/80 bg-white/85 backdrop-blur-xl">
+            <div className="space-y-2 text-sm">
+              <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2"><span className="text-slate-600">Refund Frequency</span><span className="font-semibold text-slate-900 capitalize">{mortgage.installment_frequency || '-'}</span></div>
+              <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2"><span className="text-slate-600">Interest Calc Frequency</span><span className="font-semibold text-slate-900 capitalize">{mortgage.interest_calculation_frequency || '-'}</span></div>
+              <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2"><span className="text-slate-600">Installment Amount</span><span className="font-semibold text-slate-900">{formatAmount(mortgage.installment_amount)}</span></div>
+              <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2"><span className="text-slate-600">Interest Type</span><span className="font-semibold text-slate-900 capitalize">{mortgage.interest_type || '-'}</span></div>
             </div>
           </SectionCard>
         </div>
 
         {/* Asset & Valuation */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 mt-6">
-          <SectionCard title="Asset Details" description="Collateral information" padded>
+          <SectionCard title="Asset Details" description="Collateral information" padded className="border-white/80 bg-white/85 backdrop-blur-xl">
             {mortgage.asset ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                 <div><span className="text-gray-800">Type:</span> <span className="capitalize text-gray-800">{mortgage.asset.asset_type}</span></div>
@@ -227,7 +253,7 @@ export default function MortgageDetails() {
             )}
           </SectionCard>
 
-          <SectionCard title="Valuation" description="Market and forced sale values" padded>
+          <SectionCard title="Valuation" description="Market and forced sale values" padded className="border-white/80 bg-white/85 backdrop-blur-xl">
             {mortgage.valuation ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                 <div className="flex items-center gap-2"><Banknote className="h-4 w-4 text-gray-500"/><span className="text-gray-800">Market Value:</span> <span className="text-gray-900">{formatAmount(mortgage.valuation.market_value)}</span></div>
@@ -243,11 +269,11 @@ export default function MortgageDetails() {
 
         {/* Guarantors */}
         <div className="mt-6">
-          <SectionCard title="Guarantors" description="People backing the mortgage" padded>
+          <SectionCard title="Guarantors" description="People backing the mortgage" padded className="border-white/80 bg-white/85 backdrop-blur-xl">
             {Array.isArray(mortgage.guarantors) && mortgage.guarantors.length > 0 ? (
               <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
+                <table className="min-w-full divide-y divide-cyan-100">
+                  <thead className="bg-cyan-50/70">
                     <tr>
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">NIC</th>
@@ -256,9 +282,9 @@ export default function MortgageDetails() {
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200 bg-white">
+                  <tbody className="divide-y divide-cyan-100 bg-white">
                     {mortgage.guarantors.map((g: any, idx: number) => (
-                      <tr key={idx} className="hover:bg-gray-50">
+                      <tr key={idx} className="hover:bg-cyan-50/40 transition-colors">
                         <td className="px-4 py-2 text-sm text-gray-900">{g.name}</td>
                         <td className="px-4 py-2 text-sm text-gray-900">{g.nic}</td>
                         <td className="px-4 py-2 text-sm text-gray-900">{g.relationship}</td>
@@ -270,7 +296,7 @@ export default function MortgageDetails() {
                 </table>
               </div>
             ) : (
-              <div className="flex items-center gap-2 text-sm text-gray-500"><Users className="h-4 w-4"/>No guarantors added.</div>
+              <div className="flex items-center gap-2 rounded-xl border border-cyan-100 bg-cyan-50/60 p-3 text-sm text-gray-600"><Users className="h-4 w-4"/>No guarantors added.</div>
             )}
           </SectionCard>
         </div>

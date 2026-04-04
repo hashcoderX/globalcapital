@@ -14,11 +14,12 @@ class StoreCustomerRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'customer_code' => ['nullable', 'string', 'max:60', 'unique:customers,customer_code'],
             'first_name' => ['required', 'string', 'max:120'],
             'last_name' => ['required', 'string', 'max:120'],
-            'email' => ['nullable', 'email', 'max:255'],
+            'email' => ['nullable', 'email', 'max:255', 'unique:customers,email'],
             'phone' => ['required', 'string', 'max:20'],
-            'nic_passport' => ['required', 'string', 'max:60'],
+            'nic_passport' => ['required', 'string', 'max:60', 'unique:customers,nic_passport'],
             'date_of_birth' => ['required', 'date'],
             'gender' => ['required', 'in:male,female,other'],
             'marital_status' => ['nullable', 'in:single,married,divorced,widowed'],
