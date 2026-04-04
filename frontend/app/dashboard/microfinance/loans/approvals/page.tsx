@@ -58,7 +58,10 @@ export default function LoanApprovalsPage() {
   const [token, setToken] = useState('');
   const [requests, setRequests] = useState<LoanRequest[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
-  const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
+  const [approvingId, setApprovingId] = useState<number | null>(null);
+  const [rejectingId, setRejectingId] = useState<number | null>(null);
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [documentRequestingId, setDocumentRequestingId] = useState<number | null>(null);
   const [query, setQuery] = useState('');
   const [scopeFilter, setScopeFilter] = useState('all');
   const [routeFilter, setRouteFilter] = useState('all');
@@ -175,7 +178,7 @@ export default function LoanApprovalsPage() {
   const handleApprove = async (loanId: number) => {
     if (!token) return;
 
-    setActionLoadingId(loanId);
+    setApprovingId(loanId);
     try {
       await axios.post(
         `${API_BASE}/microfinance/loan-requests/${loanId}/approve`,
@@ -188,14 +191,14 @@ export default function LoanApprovalsPage() {
       const message = error?.response?.data?.message || 'Failed to approve loan.';
       openModal(message, 'Error');
     } finally {
-      setActionLoadingId(null);
+      setApprovingId(null);
     }
   };
 
   const handleReject = async (loanId: number) => {
     if (!token) return;
 
-    setActionLoadingId(loanId);
+    setRejectingId(loanId);
     try {
       await axios.post(
         `${API_BASE}/microfinance/loan-requests/${loanId}/reject`,
@@ -208,14 +211,14 @@ export default function LoanApprovalsPage() {
       const message = error?.response?.data?.message || 'Failed to reject loan.';
       openModal(message, 'Error');
     } finally {
-      setActionLoadingId(null);
+      setRejectingId(null);
     }
   };
 
   const handleDocumentRequest = async (loanId: number) => {
     if (!token) return;
 
-    setActionLoadingId(loanId);
+    setDocumentRequestingId(loanId);
     try {
       await axios.post(
         `${API_BASE}/microfinance/loan-requests/${loanId}/request-documents`,
@@ -240,14 +243,14 @@ export default function LoanApprovalsPage() {
       const message = error?.response?.data?.message || 'Failed to request documents.';
       openModal(message, 'Error');
     } finally {
-      setActionLoadingId(null);
+      setDocumentRequestingId(null);
     }
   };
 
   const handleDownloadAgreement = async (loanId: number, customerNo: string) => {
     if (!token) return;
 
-    setActionLoadingId(loanId);
+    setDownloadingId(loanId);
     try {
       const response = await axios.get(
         `${API_BASE}/microfinance/loan-requests/${loanId}/download-agreement`,
@@ -258,13 +261,17 @@ export default function LoanApprovalsPage() {
       );
 
       const blob = new Blob([response.data], {
-        type: response.headers['content-type'] || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        type: response.headers['content-type'] || 'application/pdf',
       });
+
+      const contentDisposition = response.headers['content-disposition'] || '';
+      const fileNameMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+      const serverFileName = decodeURIComponent(fileNameMatch?.[1] || fileNameMatch?.[2] || '');
 
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `loan_agreement_${customerNo || loanId}.docx`;
+      link.download = serverFileName || `loan_agreement_${customerNo || loanId}.pdf`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -289,7 +296,7 @@ export default function LoanApprovalsPage() {
 
       openModal(message, 'Error');
     } finally {
-      setActionLoadingId(null);
+      setDownloadingId(null);
     }
   };
 
@@ -451,10 +458,10 @@ export default function LoanApprovalsPage() {
                         e.stopPropagation();
                         handleDownloadAgreement(loan.id, loan.customer_no);
                       }}
-                      disabled={actionLoadingId === loan.id}
+                      disabled={downloadingId === loan.id}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 text-white font-semibold shadow disabled:opacity-70"
                     >
-                      {actionLoadingId === loan.id ? 'Processing...' : 'Download Agreement'}
+                      {downloadingId === loan.id ? 'Processing...' : 'Download Agreement'}
                     </button>
                     <button
                       onClick={(e) => {
@@ -462,10 +469,10 @@ export default function LoanApprovalsPage() {
                         e.stopPropagation();
                         handleReject(loan.id);
                       }}
-                      disabled={actionLoadingId === loan.id}
+                      disabled={rejectingId === loan.id}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-rose-500 to-red-500 text-white font-semibold shadow disabled:opacity-70"
                     >
-                      {actionLoadingId === loan.id ? 'Processing...' : 'Reject'}
+                      {rejectingId === loan.id ? 'Processing...' : 'Reject'}
                     </button>
                     <button
                       onClick={(e) => {
@@ -473,13 +480,13 @@ export default function LoanApprovalsPage() {
                         e.stopPropagation();
                         handleApprove(loan.id);
                       }}
-                      disabled={actionLoadingId === loan.id}
+                      disabled={approvingId === loan.id}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold shadow disabled:opacity-70"
                     >
-                      {actionLoadingId === loan.id && (
+                      {approvingId === loan.id && (
                         <span className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin"></span>
                       )}
-                      {actionLoadingId === loan.id ? 'Accepting...' : 'Accept'}
+                      {approvingId === loan.id ? 'Accepting...' : 'Accept'}
                     </button>
                   </div>
                 </div>

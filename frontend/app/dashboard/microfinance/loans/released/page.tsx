@@ -142,6 +142,9 @@ export default function ReleasedLoansPage() {
     guarantors: [{ name: '', nic: '', address: '', contact_no: '', relationship: '' }],
   });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [downloadingAgreementId, setDownloadingAgreementId] = useState<number | null>(null);
+  const [downloadingReminderId, setDownloadingReminderId] = useState<number | null>(null);
+  const [downloadingLegalId, setDownloadingLegalId] = useState<number | null>(null);
   const [editStep, setEditStep] = useState(1);
 
   const openModal = (message: string, title = 'Notice') => {
@@ -296,6 +299,165 @@ export default function ReleasedLoansPage() {
   const buildDocumentUrl = (filePath: string) => {
     const normalizedPath = (filePath || '').replace(/^public\//, '');
     return `http://localhost:8000/storage/${normalizedPath}`;
+  };
+
+  const handleDownloadAgreement = async (loanId: number, customerNo: string) => {
+    if (!token) return;
+
+    setDownloadingAgreementId(loanId);
+    try {
+      const response = await axios.get(
+        `${API_BASE}/microfinance/loan-requests/${loanId}/download-agreement`,
+        {
+          headers,
+          responseType: 'blob',
+        }
+      );
+
+      const blob = new Blob([response.data], {
+        type: response.headers['content-type'] || 'application/pdf',
+      });
+
+      const contentDisposition = response.headers['content-disposition'] || '';
+      const fileNameMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+      const serverFileName = decodeURIComponent(fileNameMatch?.[1] || fileNameMatch?.[2] || '');
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = serverFileName || `loan_agreement_${customerNo || loanId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      openModal('Agreement downloaded successfully.', 'Success');
+    } catch (error: any) {
+      let message = 'Failed to download agreement.';
+      const responseData = error?.response?.data;
+
+      if (responseData instanceof Blob) {
+        try {
+          const text = await responseData.text();
+          const parsed = JSON.parse(text);
+          message = parsed?.message || message;
+        } catch {
+          // Keep default message.
+        }
+      } else if (responseData?.message) {
+        message = responseData.message;
+      }
+
+      openModal(message, 'Error');
+    } finally {
+      setDownloadingAgreementId(null);
+    }
+  };
+
+  const handleDownloadReminderLetter = async (loanId: number, customerNo: string) => {
+    if (!token) return;
+
+    setDownloadingReminderId(loanId);
+    try {
+      const response = await axios.get(
+        `${API_BASE}/microfinance/loan-requests/${loanId}/download-reminder-letter`,
+        {
+          headers,
+          responseType: 'blob',
+        }
+      );
+
+      const blob = new Blob([response.data], {
+        type: response.headers['content-type'] || 'application/pdf',
+      });
+
+      const contentDisposition = response.headers['content-disposition'] || '';
+      const fileNameMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+      const serverFileName = decodeURIComponent(fileNameMatch?.[1] || fileNameMatch?.[2] || '');
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = serverFileName || `reminder_letter_${customerNo || loanId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      openModal('Reminder letter downloaded successfully.', 'Success');
+    } catch (error: any) {
+      let message = 'Failed to download reminder letter.';
+      const responseData = error?.response?.data;
+
+      if (responseData instanceof Blob) {
+        try {
+          const text = await responseData.text();
+          const parsed = JSON.parse(text);
+          message = parsed?.message || message;
+        } catch {
+          // Keep default message.
+        }
+      } else if (responseData?.message) {
+        message = responseData.message;
+      }
+
+      openModal(message, 'Error');
+    } finally {
+      setDownloadingReminderId(null);
+    }
+  };
+
+  const handleDownloadLegalLetter = async (loanId: number, customerNo: string) => {
+    if (!token) return;
+
+    setDownloadingLegalId(loanId);
+    try {
+      const response = await axios.get(
+        `${API_BASE}/microfinance/loan-requests/${loanId}/download-legal-letter`,
+        {
+          headers,
+          responseType: 'blob',
+        }
+      );
+
+      const blob = new Blob([response.data], {
+        type: response.headers['content-type'] || 'application/pdf',
+      });
+
+      const contentDisposition = response.headers['content-disposition'] || '';
+      const fileNameMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+      const serverFileName = decodeURIComponent(fileNameMatch?.[1] || fileNameMatch?.[2] || '');
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = serverFileName || `legal_letter_${customerNo || loanId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      openModal('Legal letter downloaded successfully.', 'Success');
+    } catch (error: any) {
+      let message = 'Failed to download legal letter.';
+      const responseData = error?.response?.data;
+
+      if (responseData instanceof Blob) {
+        try {
+          const text = await responseData.text();
+          const parsed = JSON.parse(text);
+          message = parsed?.message || message;
+        } catch {
+          // Keep default message.
+        }
+      } else if (responseData?.message) {
+        message = responseData.message;
+      }
+
+      openModal(message, 'Error');
+    } finally {
+      setDownloadingLegalId(null);
+    }
   };
 
   const [query, setQuery] = useState('');
@@ -617,6 +779,30 @@ export default function ReleasedLoansPage() {
 
                   <div className="text-right">
                     <div className="mb-2 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadAgreement(loan.id, loan.customer_no)}
+                        disabled={downloadingAgreementId === loan.id}
+                        className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {downloadingAgreementId === loan.id ? 'Downloading...' : 'Download Agreement'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadReminderLetter(loan.id, loan.customer_no)}
+                        disabled={downloadingReminderId === loan.id}
+                        className="px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {downloadingReminderId === loan.id ? 'Downloading...' : 'Reminder Letter'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadLegalLetter(loan.id, loan.customer_no)}
+                        disabled={downloadingLegalId === loan.id}
+                        className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {downloadingLegalId === loan.id ? 'Downloading...' : 'Legal Letter'}
+                      </button>
                       <button
                         type="button"
                         onClick={() => openEditModal(loan)}

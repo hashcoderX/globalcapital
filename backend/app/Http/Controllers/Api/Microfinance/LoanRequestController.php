@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers\Api\Microfinance;
 
+use Barryvdh\DomPDF\Facade\Pdf;
 use App\Http\Controllers\Controller;
+use App\Models\Company;
 use App\Models\CompanyDocumentTemplate;
 use App\Models\Customer;
 use App\Models\Employee;
@@ -19,22 +21,606 @@ use Illuminate\Support\Facades\Storage;
 
 class LoanRequestController extends Controller
 {
+    private function extractTemplateTextFromDocx(string $docxPath): string
+    {
+        $zip = new \ZipArchive();
+        if ($zip->open($docxPath) !== true) {
+            return '';
+        }
+
+        $textChunks = [];
+
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $entryName = $zip->getNameIndex($i);
+            if (!$entryName || !str_starts_with($entryName, 'word/') || !str_ends_with($entryName, '.xml')) {
+                continue;
+            }
+
+            $content = $zip->getFromIndex($i);
+            if (!is_string($content) || $content === '') {
+                continue;
+            }
+
+            // Preserve basic paragraph/line structure before removing XML tags.
+            $normalized = str_replace(['</w:p>', '</w:tr>', '</w:tc>', '<w:br/>', '<w:br />'], ["\n", "\n", ' ', "\n", "\n"], $content);
+            $plain = preg_replace('/<[^>]+>/', '', $normalized);
+            $plain = html_entity_decode((string) $plain, ENT_QUOTES | ENT_XML1, 'UTF-8');
+            $plain = preg_replace('/\s+\n/', "\n", (string) $plain);
+
+            if (trim((string) $plain) !== '') {
+                $textChunks[] = trim((string) $plain);
+            }
+        }
+
+        $zip->close();
+
+        return trim(implode("\n\n", $textChunks));
+    }
+
+    private function generateAgreementHtmlWithOpenAi(string $filledTemplateText, array $loanData, array $companyDetails = []): string
+    {
+        $apiKey = (string) env('OPENAI_API_KEY', '');
+        if ($apiKey === '') {
+            return '';
+        }
+
+        $templateExcerpt = mb_substr($filledTemplateText, 0, 15000);
+
+        $promptPayload = [
+            'task' => 'Convert the provided FILLED loan agreement text into print-ready HTML while preserving original sequence and wording.',
+            'rules' => [
+                'Return JSON only with one key: html.',
+                'Return only inner HTML fragments (no html/head/body tags).',
+                'Do not add new legal clauses, sections, or extra pages.',
+                'Keep the same order and wording from filled_template_text.',
+                'Keep all loan values exactly as provided in filled_template_text.',
+                'Use clean legal formatting with paragraphs, numbered lists, and spacing only.',
+            ],
+            'filled_template_text' => $templateExcerpt,
+            'loan_data' => $loanData,
+            'company_details' => $companyDetails,
+        ];
+
+        $requests = [
+            [
+                'model' => env('OPENAI_MODEL', 'gpt-4o-mini'),
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'You produce strict JSON output and expert legal-document HTML formatting.',
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => json_encode($promptPayload, JSON_UNESCAPED_UNICODE),
+                    ],
+                ],
+                'temperature' => 0,
+                'response_format' => ['type' => 'json_object'],
+            ],
+            [
+                'model' => env('OPENAI_MODEL', 'gpt-4o-mini'),
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'Return only JSON: {"html":"..."}. Do not include markdown fences.',
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => json_encode($promptPayload, JSON_UNESCAPED_UNICODE),
+                    ],
+                ],
+                'temperature' => 0,
+            ],
+        ];
+
+        foreach ($requests as $index => $payload) {
+            try {
+                $response = Http::withToken($apiKey)
+                    ->timeout(40)
+                    ->post('https://api.openai.com/v1/chat/completions', $payload);
+
+                if (!$response->successful()) {
+                    Log::warning('OpenAI agreement generation request failed', [
+                        'attempt' => $index + 1,
+                        'status' => $response->status(),
+                        'body' => mb_substr((string) $response->body(), 0, 500),
+                    ]);
+                    continue;
+                }
+
+                $content = (string) data_get($response->json(), 'choices.0.message.content', '');
+                if ($content === '') {
+                    continue;
+                }
+
+                $decoded = json_decode($content, true);
+                $html = '';
+
+                if (is_array($decoded) && array_key_exists('html', $decoded)) {
+                    $html = (string) $decoded['html'];
+                } elseif (str_contains($content, '<') && str_contains($content, '>')) {
+                    // Some models may return HTML directly.
+                    $html = $content;
+                }
+
+                $html = trim((string) $html);
+                $html = preg_replace('/^```(?:html|json)?\s*/i', '', $html);
+                $html = preg_replace('/\s*```$/', '', (string) $html);
+                $html = preg_replace('/<\/?(?:html|head|body)[^>]*>/i', '', (string) $html);
+
+                if (trim((string) $html) !== '') {
+                    return trim((string) $html);
+                }
+            } catch (\Throwable $e) {
+                Log::error('OpenAI agreement HTML generation failed', [
+                    'attempt' => $index + 1,
+                    'message' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return '';
+    }
+
+    private function applyMappingToTemplateText(string $templateText, array $mapping): string
+    {
+        $filledText = $templateText;
+
+        foreach ($mapping as $key => $value) {
+            if (!is_string($value)) {
+                continue;
+            }
+
+            $escapedKey = preg_quote((string) $key, '/');
+            $filledText = preg_replace('/\{\{\s*' . $escapedKey . '\s*\}\}/', $value, (string) $filledText);
+            $filledText = preg_replace('/\$\{\s*' . $escapedKey . '\s*\}/', $value, (string) $filledText);
+        }
+
+        // Fill common underscore placeholders while preserving template appearance.
+        $labelPatterns = [
+            '/(Lender\s*:\s*Name\s*:\s*)_{3,}/i' => ($mapping['lender_name'] ?? '__________'),
+            '/(Lender\s*:\s*Address\s*:\s*)_{3,}/i' => ($mapping['lender_address'] ?? '__________'),
+            '/(Lender\s*:\s*(?:NIC\/Company\s*No\s*:|NIC\s*:)\s*)_{3,}/i' => ($mapping['lender_nic'] ?? '__________'),
+            '/(Borrower\s*:\s*Name\s*:\s*)_{3,}/i' => ($mapping['borrower_name'] ?? '__________'),
+            '/(Borrower\s*:\s*Address\s*:\s*)_{3,}/i' => ($mapping['borrower_address'] ?? '__________'),
+            '/(Borrower\s*:\s*(?:NIC\/Company\s*No\s*:|NIC\s*:)\s*)_{3,}/i' => ($mapping['borrower_nic'] ?? '__________'),
+            '/(Customer\s*Name\s*:\s*)_{3,}/i' => ($mapping['customer_name'] ?? '__________'),
+            '/(Customer\s*No\s*:\s*)_{3,}/i' => ($mapping['customer_no'] ?? '__________'),
+            '/(Address\s*:\s*)_{3,}/i' => ($mapping['address'] ?? '__________'),
+            '/(Contact\s*:\s*)_{3,}/i' => ($mapping['contact_no'] ?? '__________'),
+        ];
+
+        foreach ($labelPatterns as $pattern => $replacementValue) {
+            $filledText = preg_replace($pattern, '$1' . (string) $replacementValue, (string) $filledText);
+        }
+
+        // Handle templates that use plain labels + blanks (no {{placeholders}}).
+        $lines = preg_split('/\R/', (string) $filledText) ?: [];
+        $context = '';
+
+        foreach ($lines as $index => $line) {
+            $trimmed = trim((string) $line);
+
+            if (preg_match('/^Lender\s*:/i', $trimmed)) {
+                $context = 'lender';
+                continue;
+            }
+
+            if (preg_match('/^Borrower\s*:/i', $trimmed)) {
+                $context = 'borrower';
+                continue;
+            }
+
+            if (preg_match('/^This\s+Loan\s+Agreement\s+is\s+made\s+on\s+this\s*$/i', $trimmed)) {
+                $lines[$index] = 'This Loan Agreement is made on this ' . (string) ($mapping['issue_date'] ?? '__________');
+                continue;
+            }
+
+            if (preg_match('/^Date\s*:\s*$/i', $trimmed)) {
+                $lines[$index] = 'Date: ' . (string) ($mapping['today_date'] ?? $mapping['issue_date'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^To\s*:\s*$/i', $trimmed)) {
+                $toValue = trim(((string) ($mapping['customer_name'] ?? '')) . ' - ' . ((string) ($mapping['address'] ?? '')));
+                $lines[$index] = 'To: ' . trim($toValue, ' -');
+                continue;
+            }
+
+            if (preg_match('/^Subject\s*:\s*Reminder\s+for\s+Loan\s+Payment\s*$/i', $trimmed)) {
+                $subjectLoanRef = (string) ($mapping['loan_code'] ?? $mapping['customer_no'] ?? '');
+                $lines[$index] = 'Subject: Reminder for Loan Payment' . ($subjectLoanRef !== '' ? ' - ' . $subjectLoanRef : '');
+                continue;
+            }
+
+            if (preg_match('/^Name\s*:\s*$/i', $trimmed)) {
+                $name = $context === 'lender'
+                    ? (string) ($mapping['lender_name'] ?? '')
+                    : (string) ($mapping['borrower_name'] ?? $mapping['customer_name'] ?? '');
+                if (trim($name) !== '') {
+                    $lines[$index] = 'Name: ' . $name;
+                }
+                continue;
+            }
+
+            if (preg_match('/^Address\s*:?\s*$/i', $trimmed)) {
+                $address = $context === 'lender'
+                    ? (string) ($mapping['lender_address'] ?? '')
+                    : (string) ($mapping['borrower_address'] ?? $mapping['address'] ?? '');
+                if (trim($address) !== '') {
+                    $lines[$index] = str_ends_with($trimmed, ':') ? 'Address: ' . $address : 'Address ' . $address;
+                }
+                continue;
+            }
+
+            if (preg_match('/^(NIC\/Company\s*No\s*:|NIC\s*:)\s*$/i', $trimmed, $m)) {
+                $nic = $context === 'lender'
+                    ? (string) ($mapping['lender_nic'] ?? '')
+                    : (string) ($mapping['borrower_nic'] ?? $mapping['nic'] ?? '');
+                if (trim($nic) !== '') {
+                    $lines[$index] = $m[1] . ' ' . $nic;
+                }
+                continue;
+            }
+
+            if (preg_match('/^Amount\s*:\s*LKR/i', $trimmed)) {
+                $lines[$index] = 'Amount: LKR ' . (string) ($mapping['loan_amount'] ?? $mapping['principal'] ?? '0.00');
+                continue;
+            }
+
+            if (preg_match('/^(Loan\s*(No|Number|Code)\s*:)\s*$/i', $trimmed, $m)) {
+                $lines[$index] = $m[1] . ' ' . (string) ($mapping['loan_code'] ?? $mapping['customer_no'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^(Customer\s*Name\s*:)\s*$/i', $trimmed, $m)) {
+                $lines[$index] = $m[1] . ' ' . (string) ($mapping['customer_name'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^(Customer\s*No\s*:)\s*$/i', $trimmed, $m)) {
+                $lines[$index] = $m[1] . ' ' . (string) ($mapping['customer_no'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^(Issue\s*Date\s*:)\s*$/i', $trimmed, $m)) {
+                $lines[$index] = $m[1] . ' ' . (string) ($mapping['issue_date'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^(Due\s*Date\s*:)\s*$/i', $trimmed, $m)) {
+                $lines[$index] = $m[1] . ' ' . (string) ($mapping['due_date'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^(Next\s*Payment\s*Date\s*:)\s*$/i', $trimmed, $m)) {
+                $lines[$index] = $m[1] . ' ' . (string) ($mapping['next_payment_date'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^(Outstanding\s*Amount\s*:)\s*$/i', $trimmed, $m)) {
+                $lines[$index] = $m[1] . ' LKR ' . (string) ($mapping['outstanding_amount'] ?? $mapping['total_payable'] ?? '0.00');
+                continue;
+            }
+
+            if (preg_match('/^(Arrears\s*(Amount|Balance)\s*:)\s*$/i', $trimmed, $m)) {
+                $lines[$index] = $m[1] . ' LKR ' . (string) ($mapping['arrears_balance'] ?? '0.00');
+                continue;
+            }
+
+            if (preg_match('/^(Field\s*Officer\s*:)\s*$/i', $trimmed, $m)) {
+                $lines[$index] = $m[1] . ' ' . (string) ($mapping['field_officer'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^(Manager\s*Name\s*:)\s*$/i', $trimmed, $m)) {
+                $lines[$index] = $m[1] . ' ' . (string) ($mapping['manager_name'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^Installment\s+Amount\s*:\s*LKR/i', $trimmed)) {
+                $lines[$index] = 'Installment Amount: LKR ' . (string) ($mapping['installment'] ?? '0.00');
+                continue;
+            }
+
+            if (preg_match('/^Payment\s+Frequency\s*:\s*$/i', $trimmed)) {
+                $lines[$index] = 'Payment Frequency: ' . (string) ($mapping['refund_option'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^Number\s+of\s+Installments\s*:\s*$/i', $trimmed)) {
+                $lines[$index] = 'Number of Installments: ' . (string) ($mapping['terms_count'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^Start\s+Date\s*:/i', $trimmed)) {
+                $issueDate = (string) ($mapping['issue_date'] ?? '');
+                $formattedDate = $issueDate;
+                if ($issueDate !== '' && strtotime($issueDate) !== false) {
+                    $formattedDate = date('d / m / Y', strtotime($issueDate));
+                }
+                $lines[$index] = 'Start Date: ' . ($formattedDate !== '' ? $formattedDate : '___ / ___ / ______');
+                continue;
+            }
+
+            if (preg_match('/^Payments\s+shall\s+be\s+made\s+to\s*:\s*$/i', $trimmed)) {
+                $lines[$index] = 'Payments shall be made to: ' . (string) ($mapping['lender_name'] ?? '');
+                continue;
+            }
+
+            if (preg_match('/^A\s+late\s+fee\s+of\s+LKR/i', $trimmed)) {
+                $lines[$index] = 'A late fee of LKR 0.00 or 0% will be charged.';
+                continue;
+            }
+
+            if (str_contains(mb_strtolower($trimmed), 'installment of lkr') && str_contains(mb_strtolower($trimmed), 'was due on')) {
+                $lines[$index] = 'According to our agreement, your installment of LKR ' . (string) ($mapping['installment'] ?? '0.00') . ' was due on ' . (string) ($mapping['due_date'] ?? $mapping['next_payment_date'] ?? '') . '.';
+                continue;
+            }
+
+            if (preg_match('/^Please\s+contact\s+us\s+at\s*:?\s*$/i', $trimmed)) {
+                $contactBits = array_filter([
+                    (string) ($mapping['company_phone'] ?? $mapping['lender_phone'] ?? ''),
+                    (string) ($mapping['company_email'] ?? ''),
+                ], fn ($v) => trim((string) $v) !== '');
+                $lines[$index] = 'Please contact us at: ' . (count($contactBits) > 0 ? implode(' | ', $contactBits) : '');
+                continue;
+            }
+
+            if (preg_match('/^Branch\s*:\s*$/i', $trimmed)) {
+                $lines[$index] = 'Branch: ' . (string) ($mapping['center_name'] ?? $mapping['route_name'] ?? '');
+                continue;
+            }
+
+            if (str_contains($trimmed, '[Due / Overdue by days]')) {
+                $statusText = (string) ($mapping['payment_status_text'] ?? 'Due');
+                $lines[$index] = str_replace('[Due / Overdue by days]', $statusText, $trimmed);
+                continue;
+            }
+        }
+
+        $filledText = implode("\n", $lines);
+        $filledText = str_replace('[Due / Overdue by days]', (string) ($mapping['payment_status_text'] ?? 'Due'), $filledText);
+
+        return (string) $filledText;
+    }
+
+    private function applyMappingToHtml(string $html, array $mapping): string
+    {
+        $updated = $html;
+
+        foreach ($mapping as $key => $value) {
+            if (!is_string($value)) {
+                continue;
+            }
+
+            $escapedKey = preg_quote((string) $key, '/');
+            $updated = preg_replace('/\{\{\s*' . $escapedKey . '\s*\}\}/', $value, (string) $updated);
+            $updated = preg_replace('/\$\{\s*' . $escapedKey . '\s*\}/', $value, (string) $updated);
+        }
+
+        // Apply the same underscore-based replacements to AI HTML just before PDF rendering.
+        $updated = $this->applyMappingToTemplateText((string) $updated, $mapping);
+
+        return (string) $updated;
+    }
+
+    private function buildTemplateFaithfulPdfHtml(string $filledTemplateText, string $aiInnerHtml): string
+    {
+        $lines = preg_split('/\R/', (string) $filledTemplateText) ?: [];
+        $chunks = [];
+
+        foreach ($lines as $line) {
+            $trimmed = trim((string) $line);
+
+            if ($trimmed === '') {
+                $chunks[] = '<div class="spacer"></div>';
+                continue;
+            }
+
+            if (preg_match('/^LOAN\s+AGREEMENT$/i', $trimmed)) {
+                $chunks[] = '<h1 class="title">' . e($trimmed) . '</h1>';
+                continue;
+            }
+
+            if (preg_match('/^BETWEEN\s*:?$/i', $trimmed)) {
+                $chunks[] = '<h2 class="section-title">' . e($trimmed) . '</h2>';
+                continue;
+            }
+
+            if (preg_match('/^\d+\./', $trimmed)) {
+                $chunks[] = '<h3 class="clause-title">' . e($trimmed) . '</h3>';
+                continue;
+            }
+
+            if (preg_match('/^(Lender|Borrower)\s*:\s*$/i', $trimmed)) {
+                $chunks[] = '<p class="party-label"><strong>' . e($trimmed) . '</strong></p>';
+                continue;
+            }
+
+            if (preg_match('/^(Name|Address|NIC\/Company\s*No|Customer\s*No|Loan\s*Code|Amount|Installment\s*Amount|Payment\s*Frequency|Number\s*of\s*Installments|Start\s*Date|Date|Witness\s*\d+|Lender\s*Signature|Borrower\s*Signature)\s*:/i', $trimmed)) {
+                $chunks[] = '<p class="label-line">' . e($trimmed) . '</p>';
+                continue;
+            }
+
+            $chunks[] = '<p class="body-line">' . e($trimmed) . '</p>';
+        }
+
+        $docLikeContent = implode("\n", $chunks);
+        $bodyContent = trim($aiInnerHtml) !== '' ? $aiInnerHtml : $docLikeContent;
+
+        return '<!doctype html><html><head><meta charset="UTF-8"><style>@page{margin:26px 34px;}body{font-family:"Times New Roman", DejaVu Serif, serif;font-size:12pt;line-height:1.5;color:#000;} .title{text-align:center;font-size:24pt;font-weight:700;margin:0 0 16px 0;letter-spacing:0.3px;} .section-title{font-size:15pt;font-weight:700;margin:16px 0 8px 0;text-transform:uppercase;} .clause-title{font-size:13.2pt;font-weight:700;margin:14px 0 6px 0;} .party-label{margin:8px 0 2px 0;} .label-line{margin:2px 0 6px 0;} .body-line{margin:0 0 7px 0;text-align:justify;} .spacer{height:9px;} p{orphans:3;widows:3;} h1,h2,h3{page-break-after:avoid;} </style></head><body>' . $bodyContent . '</body></html>';
+    }
+
+    private function buildFallbackAgreementHtml(string $templateText, array $mapping): string
+    {
+        $filledText = $templateText;
+
+        foreach ($mapping as $key => $value) {
+            if (!is_string($value)) {
+                continue;
+            }
+
+            $escapedKey = preg_quote((string) $key, '/');
+            $filledText = preg_replace('/\{\{\s*' . $escapedKey . '\s*\}\}/', $value, (string) $filledText);
+            $filledText = preg_replace('/\$\{\s*' . $escapedKey . '\s*\}/', $value, (string) $filledText);
+        }
+
+        $safeText = nl2br(e((string) $filledText));
+
+        return '<!doctype html><html><head><meta charset="UTF-8"><style>body{font-family: DejaVu Sans, sans-serif; font-size: 12px; line-height: 1.5; margin: 28px; color:#111;} h1{font-size:18px; margin-bottom:16px;} p{margin:0 0 8px;}</style></head><body>' . $safeText . '</body></html>';
+    }
+
+        private function buildProfessionalAgreementHtml(array $loanData, ?Company $company, string $templateText, string $aiClauseHtml): string
+        {
+                $value = function (string $key, string $fallback = 'N/A') use ($loanData): string {
+                        $raw = isset($loanData[$key]) ? (string) $loanData[$key] : '';
+                        $trimmed = trim($raw);
+                        return $trimmed !== '' ? e($trimmed) : e($fallback);
+                };
+
+                $companyName = $company ? (string) ($company->name ?? '') : '';
+                $companyAddress = $company ? (string) ($company->address ?? '') : '';
+                $companyPhone = $company ? (string) ($company->phone ?? '') : '';
+
+                $lenderName = trim($companyName) !== '' ? e($companyName) : 'Microfinance Company';
+                $lenderAddress = trim($companyAddress) !== '' ? e($companyAddress) : 'Company Address';
+                $lenderPhone = trim($companyPhone) !== '' ? e($companyPhone) : 'N/A';
+
+                $safeAiClauseHtml = trim($aiClauseHtml);
+                if ($safeAiClauseHtml === '') {
+                        $safeAiClauseHtml = '<p>The Borrower agrees to repay the loan in scheduled installments, and the Lender may apply applicable charges for late payments as per policy.</p>';
+                }
+
+                $templateSnapshot = trim($templateText) !== ''
+                        ? nl2br(e(mb_substr($templateText, 0, 2500)))
+                        : 'N/A';
+
+                return '<!doctype html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        @page { margin: 26px 30px; }
+        body { font-family: DejaVu Sans, sans-serif; font-size: 12px; color: #111827; line-height: 1.55; }
+        .header { border-bottom: 2px solid #0f766e; padding-bottom: 10px; margin-bottom: 16px; }
+        .title { font-size: 20px; font-weight: 700; color: #0f172a; margin: 0 0 6px 0; }
+        .subtitle { font-size: 11px; color: #475569; margin: 0; }
+        .section { margin-top: 14px; }
+        .section h2 { font-size: 14px; margin: 0 0 8px 0; color: #0f172a; border-left: 4px solid #0f766e; padding-left: 8px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+        th, td { border: 1px solid #cbd5e1; padding: 7px 8px; vertical-align: top; }
+        th { background: #f1f5f9; text-align: left; width: 34%; font-weight: 700; }
+        .note { font-size: 10px; color: #64748b; }
+        .signature-wrap { margin-top: 28px; }
+        .signature-table td { border: none; width: 50%; padding: 18px 10px 0 0; }
+        .line { border-top: 1px solid #1f2937; margin-top: 30px; padding-top: 4px; font-size: 11px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <p class="title">Loan Agreement</p>
+        <p class="subtitle">This agreement is made on ' . $value('issue_date') . ' between the Lender and Borrower named below.</p>
+    </div>
+
+    <div class="section">
+        <h2>1. Parties</h2>
+        <table>
+            <tr><th>Lender Name</th><td>' . $lenderName . '</td></tr>
+            <tr><th>Lender Address</th><td>' . $lenderAddress . '</td></tr>
+            <tr><th>Lender Contact</th><td>' . $lenderPhone . '</td></tr>
+            <tr><th>Borrower Name</th><td>' . $value('customer_name') . '</td></tr>
+            <tr><th>Borrower NIC</th><td>' . $value('nic') . '</td></tr>
+            <tr><th>Borrower Address</th><td>' . $value('address') . '</td></tr>
+            <tr><th>Borrower Contact</th><td>' . $value('contact_no') . '</td></tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>2. Loan Details</h2>
+        <table>
+            <tr><th>Request No</th><td>' . $value('request_no') . '</td></tr>
+            <tr><th>Customer No</th><td>' . $value('customer_no') . '</td></tr>
+            <tr><th>Loan Code</th><td>' . $value('loan_code') . '</td></tr>
+            <tr><th>Principal Amount</th><td>' . $value('principal') . '</td></tr>
+            <tr><th>Total Payable</th><td>' . $value('total_payable') . '</td></tr>
+            <tr><th>Installment Amount</th><td>' . $value('installment') . '</td></tr>
+            <tr><th>Interest Rate</th><td>' . $value('interest_rate') . '% (' . $value('interest_type') . ')</td></tr>
+            <tr><th>Terms</th><td>' . $value('terms_count') . ' installments (' . $value('refund_option') . ' basis)</td></tr>
+            <tr><th>Route / Center / Group</th><td>' . $value('route_name') . ' / ' . $value('center_name') . ' / ' . $value('group_name') . '</td></tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>3. Agreement Clauses</h2>
+        ' . $safeAiClauseHtml . '
+    </div>
+
+    <div class="section">
+        <h2>4. Template Reference Snapshot</h2>
+        <p class="note">For traceability, the source template text excerpt used for AI processing is included below.</p>
+        <p>' . $templateSnapshot . '</p>
+    </div>
+
+    <div class="signature-wrap">
+        <table class="signature-table">
+            <tr>
+                <td>
+                    <div class="line">Authorized Signatory (Lender)</div>
+                </td>
+                <td>
+                    <div class="line">Borrower Signature</div>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <div class="line">Witness 1</div>
+                </td>
+                <td>
+                    <div class="line">Witness 2</div>
+                </td>
+            </tr>
+        </table>
+    </div>
+</body>
+</html>';
+        }
+
     public function buildLoanAgreementVariables(MicrofinanceLoanRequest $loanRequest): array
     {
         $issueDate = $loanRequest->loan_request_date ?: date('Y-m-d');
+        $todayDate = date('Y-m-d');
         $routeName = optional($loanRequest->route)->name ?: '-';
         $centerName = optional($loanRequest->center)->name ?: '-';
         $groupName = optional($loanRequest->group)->name ?: '-';
+        $totalCollected = (float) $loanRequest->collections()->sum('collected_amount');
+        $totalPayable = (float) ($loanRequest->refundable_amount ?: 0);
+        $outstandingAmount = max($totalPayable - $totalCollected, 0);
+
+        $dueDate = (string) ($loanRequest->due_date ?: '');
+        $overdueDays = 0;
+        if ($dueDate !== '' && strtotime($dueDate) !== false) {
+            $todayTs = strtotime($todayDate);
+            $dueTs = strtotime($dueDate);
+            if ($todayTs !== false && $dueTs !== false && $todayTs > $dueTs) {
+                $overdueDays = (int) floor(($todayTs - $dueTs) / 86400);
+            }
+        }
+
+        $paymentStatusText = $overdueDays > 0 ? ('Overdue by ' . $overdueDays . ' days') : 'Due';
 
         return [
             'customer_name' => (string) ($loanRequest->customer_name ?: ''),
             'customer_no' => (string) ($loanRequest->customer_no ?: ''),
             'loan_code' => (string) ($loanRequest->loan_code ?: ''),
+            'nic' => (string) ($loanRequest->nic ?: ''),
             'issue_date' => (string) $issueDate,
+            'today_date' => (string) $todayDate,
             'loan_amount' => number_format((float) ($loanRequest->loan_amount ?: 0), 2, '.', ''),
             'principal' => number_format((float) ($loanRequest->loan_amount ?: 0), 2, '.', ''),
             'refundable_amount' => number_format((float) ($loanRequest->refundable_amount ?: 0), 2, '.', ''),
-            'total_payable' => number_format((float) ($loanRequest->refundable_amount ?: 0), 2, '.', ''),
+            'total_payable' => number_format($totalPayable, 2, '.', ''),
+            'total_collected' => number_format($totalCollected, 2, '.', ''),
             'installment' => number_format((float) ($loanRequest->installment_amount ?: 0), 2, '.', ''),
             'interest_rate' => number_format((float) ($loanRequest->interest_rate ?: 0), 2, '.', ''),
             'interest_type' => (string) ($loanRequest->interest_type ?: ''),
@@ -42,10 +628,22 @@ class LoanRequestController extends Controller
             'refund_option' => (string) ($loanRequest->refund_option ?: ''),
             'address' => (string) ($loanRequest->address ?: ''),
             'contact_no' => (string) ($loanRequest->contact_no ?: ''),
+            'manager_name' => (string) ($loanRequest->manager_name ?: ''),
+            'field_officer' => (string) ($loanRequest->field_officer ?: ''),
+            'group_leader' => (string) ($loanRequest->group_leader ?: ''),
             'route_name' => (string) $routeName,
             'center_name' => (string) $centerName,
             'group_name' => (string) $groupName,
             'request_no' => (string) ($loanRequest->id ?: ''),
+            'reason' => (string) ($loanRequest->reason ?: ''),
+            'status' => (string) ($loanRequest->status ?: ''),
+            'due_date' => (string) ($loanRequest->due_date ?: ''),
+            'next_payment_date' => (string) ($loanRequest->next_payment_date ?: ''),
+            'loan_end_date' => (string) ($loanRequest->loan_end_date ?: ''),
+            'arrears_balance' => number_format((float) ($loanRequest->arrears_balance ?: 0), 2, '.', ''),
+            'outstanding_amount' => number_format($outstandingAmount, 2, '.', ''),
+            'overdue_days' => (string) $overdueDays,
+            'payment_status_text' => (string) $paymentStatusText,
         ];
     }
 
@@ -87,26 +685,36 @@ class LoanRequestController extends Controller
     {
         $mapping = [];
 
-        // Handle standard {{field}} patterns
-        foreach ($placeholders as $key => $value) {
-            if (isset($loanData[$key])) {
-                $mapping[$key] = (string) $loanData[$key];
-            }
+        // Seed mapping from all available loan data so replacement works even if placeholder extraction is incomplete.
+        foreach ($loanData as $key => $value) {
+            $mapping[$key] = is_scalar($value) ? (string) $value : '';
         }
 
         // Create mapping for context-based underscore placeholders
         $date = strtotime($loanData['issue_date'] ?? 'now');
         $mapping['day'] = date('j', $date); // Day of month
         $mapping['month'] = date('F', $date); // Full month name
-        $mapping['lender_name'] = 'Microfinance Company'; // TODO: Get from company settings
-        $mapping['lender_address'] = 'Company Address'; // TODO: Get from company settings
-        $mapping['lender_nic'] = 'Company Registration No'; // TODO: Get from company settings
-        $mapping['borrower_name'] = $loanData['customer_name'] ?? '';
-        $mapping['borrower_address'] = $loanData['address'] ?? '';
-        $mapping['borrower_nic'] = $loanData['nic'] ?? '';
+        $mapping['lender_name'] = trim((string) ($mapping['lender_name'] ?? '')) !== ''
+            ? (string) $mapping['lender_name']
+            : 'Microfinance Company';
+        $mapping['lender_address'] = trim((string) ($mapping['lender_address'] ?? '')) !== ''
+            ? (string) $mapping['lender_address']
+            : 'Company Address';
+        $mapping['lender_nic'] = trim((string) ($mapping['lender_nic'] ?? '')) !== ''
+            ? (string) $mapping['lender_nic']
+            : 'Company Registration No';
+        $mapping['borrower_name'] = trim((string) ($mapping['borrower_name'] ?? '')) !== ''
+            ? (string) $mapping['borrower_name']
+            : (string) ($loanData['customer_name'] ?? '');
+        $mapping['borrower_address'] = trim((string) ($mapping['borrower_address'] ?? '')) !== ''
+            ? (string) $mapping['borrower_address']
+            : (string) ($loanData['address'] ?? '');
+        $mapping['borrower_nic'] = trim((string) ($mapping['borrower_nic'] ?? '')) !== ''
+            ? (string) $mapping['borrower_nic']
+            : (string) ($loanData['nic'] ?? '');
 
         $apiKey = (string) env('OPENAI_API_KEY', '');
-        if ($apiKey === '' || count($mapping) === count($loanData)) {
+        if ($apiKey === '') {
             return $mapping;
         }
 
@@ -189,13 +797,15 @@ class LoanRequestController extends Controller
                 continue;
             }
 
-            // Replace standard {{field}} patterns first
+            // Replace standard {{field}} and ${field} patterns first.
             foreach ($mapping as $pattern => $value) {
                 if (!is_string($value)) {
-                    // Standard {{field}} pattern
-                    $content = str_replace('{{' . $pattern . '}}', (string) $value, $content);
-                    $content = str_replace('${' . $pattern . '}', (string) $value, $content);
+                    continue;
                 }
+
+                $escapedPattern = preg_quote((string) $pattern, '/');
+                $content = preg_replace('/\{\{\s*' . $escapedPattern . '\s*\}\}/', $value, $content);
+                $content = preg_replace('/\$\{\s*' . $escapedPattern . '\s*\}/', $value, $content);
             }
 
             // Handle context-based underscore patterns with regex replacement
@@ -975,11 +1585,14 @@ class LoanRequestController extends Controller
         ]);
     }
 
-    public function downloadAgreement(Request $request, MicrofinanceLoanRequest $loanRequest)
+    private function downloadLoanDocumentByTemplate(MicrofinanceLoanRequest $loanRequest, string $templateType, string $filePrefix)
     {
         $companyId = (int) ($loanRequest->branch_id ?: 0);
         if ($companyId <= 0) {
-            Log::warning('Download agreement failed: No company ID for loan request', ['loan_id' => $loanRequest->id]);
+            Log::warning('Download loan document failed: No company ID for loan request', [
+                'loan_id' => $loanRequest->id,
+                'template_type' => $templateType,
+            ]);
             return response()->json([
                 'message' => 'Company is not linked to this loan request.'
             ], 422);
@@ -987,26 +1600,28 @@ class LoanRequestController extends Controller
 
         $template = CompanyDocumentTemplate::query()
             ->where('company_id', $companyId)
-            ->where('template_type', 'loan_agreement')
+            ->where('template_type', $templateType)
             ->where('is_active', true)
             ->latest('id')
             ->first();
 
         if (!$template) {
-            Log::warning('Download agreement failed: No active template found', [
+            Log::warning('Download loan document failed: No active template found', [
                 'company_id' => $companyId,
-                'loan_id' => $loanRequest->id
+                'loan_id' => $loanRequest->id,
+                'template_type' => $templateType,
             ]);
             return response()->json([
-                'message' => 'Active loan agreement template not found for this company.'
+                'message' => 'Active template not found for this company.'
             ], 404);
         }
 
         if (!Storage::disk('public')->exists($template->file_path)) {
-            Log::error('Download agreement failed: Template file not found', [
+            Log::error('Download loan document failed: Template file not found', [
                 'template_id' => $template->id,
                 'file_path' => $template->file_path,
-                'loan_id' => $loanRequest->id
+                'loan_id' => $loanRequest->id,
+                'template_type' => $templateType,
             ]);
             return response()->json([
                 'message' => 'Template file does not exist in storage.'
@@ -1015,51 +1630,102 @@ class LoanRequestController extends Controller
 
         $inputPath = Storage::disk('public')->path($template->file_path);
         $placeholderKeys = $this->extractPlaceholdersFromDocx($inputPath);
+        $templateText = $this->extractTemplateTextFromDocx($inputPath);
 
-        Log::info('Download agreement processing', [
+        Log::info('Download loan document processing', [
             'loan_id' => $loanRequest->id,
             'template_id' => $template->id,
+            'template_type' => $templateType,
             'placeholders_found' => count($placeholderKeys),
-            'placeholder_keys' => $placeholderKeys
+            'placeholder_keys' => $placeholderKeys,
+            'template_text_length' => strlen($templateText),
         ]);
 
-        $loanData = $this->buildLoanAgreementVariables($loanRequest->load(['route:id,name,code', 'center:id,name,code', 'group:id,name,code']));
-        $mapping = $this->mapPlaceholdersWithOpenAi($placeholderKeys, $loanData);
-
-        Log::info('Placeholder mapping completed', [
-            'loan_id' => $loanRequest->id,
-            'mapping_count' => count($mapping),
-            'sample_mapping' => array_slice($mapping, 0, 5)
-        ]);
-
-        $tempBase = tempnam(sys_get_temp_dir(), 'loan_agreement_');
-        $outputPath = $tempBase . '.docx';
-        @unlink($tempBase);
-
-        $filled = $this->fillDocxTemplate($inputPath, $outputPath, $mapping);
-        if (!$filled) {
-            Log::error('Download agreement failed: Template filling failed', [
-                'loan_id' => $loanRequest->id,
-                'template_id' => $template->id,
-                'input_path' => $inputPath,
-                'output_path' => $outputPath
-            ]);
+        if ($templateText === '') {
             return response()->json([
-                'message' => 'Failed to generate agreement document.'
-            ], 500);
+                'message' => 'Template text could not be extracted for AI processing.'
+            ], 422);
         }
 
-        $downloadName = 'loan_agreement_' . ($loanRequest->customer_no ?: $loanRequest->id) . '.docx';
+        $loanData = $this->buildLoanAgreementVariables($loanRequest->load(['route:id,name,code', 'center:id,name,code', 'group:id,name,code']));
+        $company = Company::query()->find($companyId);
 
-        Log::info('Download agreement successful', [
+        if ($company) {
+            $loanData['lender_name'] = (string) ($company->name ?? '');
+            $loanData['lender_address'] = (string) ($company->address ?? '');
+            $loanData['lender_phone'] = (string) ($company->phone ?? '');
+            $loanData['company_name'] = (string) ($company->name ?? '');
+            $loanData['company_address'] = (string) ($company->address ?? '');
+            $loanData['company_phone'] = (string) ($company->phone ?? '');
+            $loanData['company_email'] = (string) ($company->email ?? '');
+            $loanData['company_website'] = (string) ($company->website ?? '');
+            $loanData['company_country'] = (string) ($company->country ?? '');
+            $loanData['company_currency'] = (string) ($company->currency ?? '');
+        }
+
+        $companyDetails = [
+            'name' => (string) ($company?->name ?? ''),
+            'address' => (string) ($company?->address ?? ''),
+            'phone' => (string) ($company?->phone ?? ''),
+            'email' => (string) ($company?->email ?? ''),
+            'website' => (string) ($company?->website ?? ''),
+            'country' => (string) ($company?->country ?? ''),
+            'currency' => (string) ($company?->currency ?? ''),
+        ];
+
+        $mapping = $this->mapPlaceholdersWithOpenAi($placeholderKeys, $loanData);
+        $filledTemplateText = $this->applyMappingToTemplateText($templateText, $mapping);
+        $aiHtml = $this->generateAgreementHtmlWithOpenAi($filledTemplateText, $loanData, $companyDetails);
+
+        if (trim($aiHtml) === '') {
+            Log::warning('AI generation unavailable, falling back to deterministic filled content', [
+                'loan_id' => $loanRequest->id,
+                'template_type' => $templateType,
+                'template_text_length' => strlen($templateText),
+                'filled_text_length' => strlen($filledTemplateText),
+            ]);
+        }
+
+        $safeAiHtml = $this->applyMappingToHtml($aiHtml, $mapping);
+        $safeFilledTemplateText = $this->applyMappingToTemplateText($filledTemplateText, $mapping);
+        $finalHtml = $this->buildTemplateFaithfulPdfHtml($safeFilledTemplateText, $safeAiHtml);
+
+        Log::info('Loan document mapping completed', [
             'loan_id' => $loanRequest->id,
+            'template_type' => $templateType,
+            'mapping_count' => count($mapping),
+            'sample_mapping' => array_slice($mapping, 0, 5),
+            'used_ai_html' => $aiHtml !== '',
+            'filled_text_length' => strlen($safeFilledTemplateText),
+            'filled_text_preview' => mb_substr(preg_replace('/\s+/', ' ', $safeFilledTemplateText), 0, 300),
+            'final_html_length' => strlen($finalHtml),
+        ]);
+
+        $downloadName = $filePrefix . '_' . ($loanRequest->customer_no ?: $loanRequest->id) . '.pdf';
+
+        Log::info('Download loan document successful', [
+            'loan_id' => $loanRequest->id,
+            'template_type' => $templateType,
             'download_name' => $downloadName
         ]);
 
-        return response()->download(
-            $outputPath,
-            $downloadName,
-            ['Content-Type' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
-        )->deleteFileAfterSend(true);
+        return Pdf::loadHTML($finalHtml)
+            ->setPaper('a4', 'portrait')
+            ->download($downloadName);
+    }
+
+    public function downloadAgreement(Request $request, MicrofinanceLoanRequest $loanRequest)
+    {
+        return $this->downloadLoanDocumentByTemplate($loanRequest, 'loan_agreement', 'loan_agreement');
+    }
+
+    public function downloadReminderLetter(Request $request, MicrofinanceLoanRequest $loanRequest)
+    {
+        return $this->downloadLoanDocumentByTemplate($loanRequest, 'reminder_letter', 'reminder_letter');
+    }
+
+    public function downloadLegalLetter(Request $request, MicrofinanceLoanRequest $loanRequest)
+    {
+        return $this->downloadLoanDocumentByTemplate($loanRequest, 'arrears_letter', 'legal_letter');
     }
 }
