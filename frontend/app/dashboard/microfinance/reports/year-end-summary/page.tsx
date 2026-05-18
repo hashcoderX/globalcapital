@@ -152,7 +152,7 @@ export default function YearEndSummaryReportPage() {
             </div>
             <button
               type="button"
-              onClick={() => router.push('/dashboard/microfinance')}
+              onClick={() => router.back()}
               className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
             >
               Back

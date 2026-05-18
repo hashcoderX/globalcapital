@@ -7,9 +7,14 @@ import axios from 'axios';
 export default function Home() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotPassword, setForgotPassword] = useState('');
+  const [forgotPasswordConfirm, setForgotPasswordConfirm] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [showForgotModal, setShowForgotModal] = useState(false);
   const router = useRouter();
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -38,8 +43,44 @@ export default function Home() {
     }
   };
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (forgotPassword !== forgotPasswordConfirm) {
+      setModalMessage('New password and confirm password do not match.');
+      setShowModal(true);
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const response = await axios.post(`${API_URL}/api/forgot-password`, {
+        email: forgotEmail.trim().toLowerCase(),
+        password: forgotPassword,
+        password_confirmation: forgotPasswordConfirm,
+      });
+
+      setShowForgotModal(false);
+      setForgotEmail('');
+      setForgotPassword('');
+      setForgotPasswordConfirm('');
+      setModalMessage(String(response?.data?.message || 'Password reset successful.'));
+      setShowModal(true);
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.message ||
+        error?.response?.data?.errors?.email?.[0] ||
+        error?.response?.data?.errors?.password?.[0] ||
+        'Failed to reset password.';
+      setModalMessage(String(message));
+      setShowModal(true);
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-sky-100 via-cyan-100 to-emerald-100 px-4 py-8 sm:px-6 lg:px-8">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-sky-100 via-cyan-100 to-emerald-100 px-4 sm:px-6 lg:px-8">
       <div className="pointer-events-none absolute inset-0 opacity-70">
         <div className="absolute -top-16 left-8 h-72 w-72 rounded-full bg-cyan-300/70 blur-3xl"></div>
         <div className="absolute top-24 right-6 h-96 w-96 rounded-full bg-emerald-300/65 blur-3xl"></div>
@@ -99,9 +140,21 @@ export default function Home() {
             </div>
 
             <div>
-              <label htmlFor="password" className="mb-2 block text-sm font-semibold text-slate-700">
-                Password
-              </label>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <label htmlFor="password" className="block text-sm font-semibold text-slate-700">
+                  Password
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotEmail(email.trim().toLowerCase());
+                    setShowForgotModal(true);
+                  }}
+                  className="text-xs font-semibold text-cyan-700 hover:text-cyan-800"
+                >
+                  Forgot password?
+                </button>
+              </div>
               <input
                 id="password"
                 name="password"
@@ -140,6 +193,78 @@ export default function Home() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showForgotModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-cyan-200 bg-white p-6 shadow-[0_28px_70px_-30px_rgba(14,116,144,0.55)]">
+            <h3 className="text-xl font-extrabold text-cyan-700">Reset Password</h3>
+            <p className="mt-3 text-sm text-slate-700">Enter your email and choose a new password.</p>
+
+            <form className="mt-4 space-y-3" onSubmit={handleForgotPassword}>
+              <div>
+                <label htmlFor="forgot-email" className="mb-1 block text-sm font-semibold text-slate-700">Email</label>
+                <input
+                  id="forgot-email"
+                  type="email"
+                  required
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  className="block w-full rounded-xl border border-cyan-100 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100"
+                  placeholder="name@company.com"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="forgot-password" className="mb-1 block text-sm font-semibold text-slate-700">New Password</label>
+                <input
+                  id="forgot-password"
+                  type="password"
+                  minLength={8}
+                  required
+                  value={forgotPassword}
+                  onChange={(e) => setForgotPassword(e.target.value)}
+                  className="block w-full rounded-xl border border-cyan-100 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100"
+                  placeholder="Minimum 8 characters"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="forgot-password-confirm" className="mb-1 block text-sm font-semibold text-slate-700">Confirm New Password</label>
+                <input
+                  id="forgot-password-confirm"
+                  type="password"
+                  minLength={8}
+                  required
+                  value={forgotPasswordConfirm}
+                  onChange={(e) => setForgotPasswordConfirm(e.target.value)}
+                  className="block w-full rounded-xl border border-cyan-100 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-cyan-300 focus:ring-4 focus:ring-cyan-100"
+                  placeholder="Re-enter new password"
+                />
+              </div>
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (forgotLoading) return;
+                    setShowForgotModal(false);
+                  }}
+                  className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={forgotLoading}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-emerald-600 text-white text-sm font-semibold disabled:opacity-60"
+                >
+                  {forgotLoading ? 'Resetting...' : 'Reset Password'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

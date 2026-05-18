@@ -4,8 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Models\Role;
 use App\Models\Permission;
+use App\Models\Designation;
+use App\Models\Company;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 
 class RoleController extends Controller
@@ -29,14 +33,37 @@ class RoleController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        $role = Role::create([
-            'name' => $request->name,
-            'description' => $request->description,
-        ]);
+        $role = DB::transaction(function () use ($request) {
+            $role = Role::create([
+                'name' => $request->name,
+                'description' => $request->description,
+            ]);
 
-        if ($request->has('permissions')) {
-            $role->permissions()->attach($request->permissions);
-        }
+            if ($request->has('permissions')) {
+                $role->permissions()->attach($request->permissions);
+            }
+
+            // Keep designation list aligned with roles: create designation if it does not exist.
+            $defaultCompanyId = (int) (Company::query()->orderBy('id')->value('id') ?? 1);
+            $requestedBranchId = (int) ($request->user()?->branch_id ?? 0);
+            $branchId = Company::query()->whereKey($requestedBranchId)->exists()
+                ? $requestedBranchId
+                : $defaultCompanyId;
+
+            Designation::firstOrCreate(
+                [
+                    'tenant_id' => $defaultCompanyId,
+                    'name' => (string) $request->name,
+                ],
+                [
+                    'branch_id' => $branchId,
+                    'description' => (string) ($request->description ?? ''),
+                    'is_active' => true,
+                ]
+            );
+
+            return $role;
+        });
 
         return response()->json($role->load('permissions'), 201);
     }
@@ -71,14 +98,26 @@ class RoleController extends Controller
         return response()->json($role->load('permissions'));
     }
 
-    public function destroy(Role $role): JsonResponse
+    public function destroy(Request $request, Role $role): JsonResponse
     {
+        $force = $request->boolean('force');
+
         // Check if role is assigned to any users
-        if ($role->users()->exists()) {
-            return response()->json(['message' => 'Cannot delete role that is assigned to users'], 409);
+        if (!$force && $role->users()->exists()) {
+            return response()->json([
+                'message' => 'Cannot delete role that is assigned to users',
+                'assigned_users' => $role->users()->count(),
+            ], 409);
         }
 
-        $role->delete();
+        DB::transaction(function () use ($role): void {
+            $role->users()->detach();
+            $role->permissions()->detach();
+            $role->userRoles()->delete();
+            $role->rolePermissions()->delete();
+            $role->delete();
+        });
+
         return response()->json(['message' => 'Role deleted successfully']);
     }
 
@@ -96,7 +135,7 @@ class RoleController extends Controller
         $user = \App\Models\User::find($request->user_id);
         $user->roles()->syncWithoutDetaching([
             $request->role_id => [
-                'assigned_by' => auth()->id(),
+                'assigned_by' => Auth::id() ?? $user->id,
                 'assigned_at' => now(),
             ],
         ]);

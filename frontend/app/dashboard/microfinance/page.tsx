@@ -32,6 +32,16 @@ type AuthUser = {
   designation_id?: number | null;
   designation?: { id: number; name: string } | null;
   employee?: { id: number; first_name?: string; last_name?: string; email?: string } | null;
+  roles?: Array<{
+    id?: number;
+    name?: string;
+    permissions?: Array<{
+      id?: number;
+      name?: string;
+      module?: string | null;
+      description?: string | null;
+    }>;
+  }>;
 };
 
 export default function MicrofinanceDashboard() {
@@ -54,9 +64,80 @@ export default function MicrofinanceDashboard() {
   });
   const [statsLoading, setStatsLoading] = useState(false);
   const router = useRouter();
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const normalizedApiBase = API_URL.replace(/\/+$/, '');
+  const withApiPrefix = normalizedApiBase.endsWith('/api')
+    ? normalizedApiBase
+    : `${normalizedApiBase}/api`;
 
-  const designationName = String(authUser?.designation?.name || '').toLowerCase();
-  const isFieldOfficer = designationName.includes('field') && designationName.includes('officer');
+  const normalizeText = (value: string) =>
+    String(value || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const designationName = normalizeText(String(authUser?.designation?.name || ''));
+  const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+  const permissionTexts = (authUser?.roles || [])
+    .flatMap((role) => role.permissions || [])
+    .map((permission) =>
+      normalizeText(
+        `${permission?.name || ''} ${permission?.module || ''} ${permission?.description || ''}`
+      )
+    )
+    .filter(Boolean);
+  const permissionNames = new Set(
+    (authUser?.roles || [])
+      .flatMap((role) => role.permissions || [])
+      .map((permission) => String(permission?.name || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  const hasAnyPermissionToken = (tokens: string[]) =>
+    tokens.some((token) => {
+      const normalizedToken = normalizeText(token);
+      if (!normalizedToken) return false;
+
+      return permissionTexts.some((text) => text.includes(normalizedToken));
+    });
+
+  const hasAnyPermissionName = (names: string[]) =>
+    names.some((name) => permissionNames.has(String(name || '').trim().toLowerCase()));
+
+  const isFieldOfficer = designationName.includes('field officer') || roleNames.some((role) => role.includes('field officer'));
+  const isCollectionOfficer = designationName.includes('collection officer') || roleNames.some((role) => role.includes('collection officer'));
+  const isAdminUser =
+    normalizeText(String(authUser?.email || '')) === 'superadmin softcodelk com' ||
+    designationName.includes('admin') ||
+    roleNames.some((role) => role.includes('admin'));
+
+  const hasFullDataAccess =
+    normalizeText(String(authUser?.email || '')) === 'superadmin softcodelk com' ||
+    designationName.includes('admin') ||
+    designationName.includes('branch manager') ||
+    designationName.includes('finance manager') ||
+    roleNames.some((role) =>
+      role.includes('admin') || role.includes('branch manager') || role.includes('finance manager')
+    );
+
+  const isScopedUser = !hasFullDataAccess;
+
+  const hasMicrofinanceSettingsAccess =
+    isAdminUser ||
+    hasAnyPermissionToken([
+      '/dashboard/microfinance/settings',
+      'settings workspace',
+      'microfinance settings',
+      'create route',
+      'create center',
+      'create group',
+      'mark holiday',
+      'initial penalty rate',
+      'loan hold',
+      'loan close',
+    ]);
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -75,6 +156,25 @@ export default function MicrofinanceDashboard() {
     }
   }, [router]);
 
+  useEffect(() => {
+    if (!token) return;
+
+    const fetchAuthUser = async () => {
+      try {
+        const response = await axios.get(`${withApiPrefix}/user`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        setAuthUser(response.data || null);
+        localStorage.setItem('auth_user', JSON.stringify(response.data || null));
+      } catch {
+        // Fallback to cached auth_user if API call fails.
+      }
+    };
+
+    fetchAuthUser();
+  }, [token, withApiPrefix]);
+
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('auth_user');
@@ -89,9 +189,17 @@ export default function MicrofinanceDashboard() {
     { name: 'Settings', icon: '⚙️', color: 'from-gray-500 to-slate-500', bgColor: 'from-gray-50 to-slate-50', description: 'Configure microfinance settings' },
   ];
 
-  const visibleModules = isFieldOfficer
-    ? microfinanceModules.filter((module) => module.name !== 'Loan Management' && module.name !== 'Settings')
-    : microfinanceModules;
+  const visibleModules = microfinanceModules.filter((module) => {
+    if (module.name === 'Settings') {
+      return hasMicrofinanceSettingsAccess;
+    }
+
+    if (isFieldOfficer) {
+      return module.name !== 'Loan Management';
+    }
+
+    return true;
+  });
 
   const reportModules = [
     {
@@ -101,6 +209,7 @@ export default function MicrofinanceDashboard() {
       bgColor: 'from-cyan-50 to-blue-50',
       description: 'Summarize daily and period-wise collection performance.',
       path: '/dashboard/microfinance/reports/collection',
+      permissionTokens: ['collection report', 'micro finance related reports', '/dashboard/microfinance/reports/collection'],
     },
     {
       name: 'Field Officer Collection Report',
@@ -109,6 +218,7 @@ export default function MicrofinanceDashboard() {
       bgColor: 'from-sky-50 to-cyan-50',
       description: 'Track collection efficiency by each field officer.',
       path: '/dashboard/microfinance/reports/field-officer-collection',
+      permissionTokens: ['field officer collection report', '/dashboard/microfinance/reports/field-officer-collection'],
     },
     {
       name: 'Arrears Report',
@@ -117,6 +227,7 @@ export default function MicrofinanceDashboard() {
       bgColor: 'from-amber-50 to-orange-50',
       description: 'Identify overdue and arrears-heavy accounts quickly.',
       path: '/dashboard/microfinance/reports/arrears',
+      permissionTokens: ['arrears report', '/dashboard/microfinance/reports/arrears'],
     },
     {
       name: 'Active Member Report',
@@ -125,6 +236,7 @@ export default function MicrofinanceDashboard() {
       bgColor: 'from-emerald-50 to-teal-50',
       description: 'View active members and their current loan activity.',
       path: '/dashboard/microfinance/reports/active-members',
+      permissionTokens: ['active member report', '/dashboard/microfinance/reports/active-members'],
     },
     {
       name: 'Blacklisted Customer Report',
@@ -133,6 +245,7 @@ export default function MicrofinanceDashboard() {
       bgColor: 'from-rose-50 to-red-50',
       description: 'Review blacklisted customers and related risk data.',
       path: '/dashboard/microfinance/reports/blacklisted-customers',
+      permissionTokens: ['blacklisted customer report', '/dashboard/microfinance/reports/blacklisted-customers'],
     },
     {
       name: 'Re-Payment Report',
@@ -141,6 +254,7 @@ export default function MicrofinanceDashboard() {
       bgColor: 'from-indigo-50 to-blue-50',
       description: 'Analyze repayment patterns across customer segments.',
       path: '/dashboard/microfinance/reports/repayment',
+      permissionTokens: ['re-payment report', 'repayment report', '/dashboard/microfinance/reports/repayment'],
     },
     {
       name: 'Recovery Report',
@@ -149,6 +263,7 @@ export default function MicrofinanceDashboard() {
       bgColor: 'from-teal-50 to-cyan-50',
       description: 'Monitor recovery progress for difficult loan portfolios.',
       path: '/dashboard/microfinance/reports/recovery',
+      permissionTokens: ['recovery report', '/dashboard/microfinance/reports/recovery'],
     },
     {
       name: 'Not Paid Customer Report',
@@ -157,6 +272,7 @@ export default function MicrofinanceDashboard() {
       bgColor: 'from-rose-50 to-orange-50',
       description: 'List customers with pending loan balances and unpaid installments.',
       path: '/dashboard/microfinance/reports/not-paid-customers',
+      permissionTokens: ['not paid customer report', '/dashboard/microfinance/reports/not-paid-customers'],
     },
     {
       name: 'Year End Summary Report',
@@ -165,6 +281,7 @@ export default function MicrofinanceDashboard() {
       bgColor: 'from-violet-50 to-indigo-50',
       description: 'View Jan to Dec monthly totals for collection, capital collection, and profit.',
       path: '/dashboard/microfinance/reports/year-end-summary',
+      permissionTokens: ['year end summary report', '/dashboard/microfinance/reports/year-end-summary'],
     },
     {
       name: 'Customer Payment History Report',
@@ -173,8 +290,97 @@ export default function MicrofinanceDashboard() {
       bgColor: 'from-fuchsia-50 to-pink-50',
       description: 'Track payment history by customer with capital, interest, and penalty details.',
       path: '/dashboard/microfinance/reports/customer-payment-history',
+      permissionTokens: ['customer payment history report', '/dashboard/microfinance/reports/customer-payment-history'],
     },
   ];
+
+  const visibleReportModules = reportModules.filter((report) =>
+    isAdminUser || hasAnyPermissionToken(report.permissionTokens)
+  );
+
+  const summaryReportCards = [
+    {
+      label: 'Total Outstanding Amount',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.totalOutstandingAmount),
+      tone: 'from-amber-500 to-orange-500',
+      permissionNames: [
+        'credit_summary_report_workspace_summary_report_total_outstanding_amount',
+        'credit_general_summary_report_total_outstanding_amount',
+      ],
+    },
+    {
+      label: 'Today Collection',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.todayCollection),
+      tone: 'from-blue-500 to-cyan-500',
+      permissionNames: [
+        'credit_summary_report_workspace_summary_report_today_collection',
+        'credit_general_summary_report_today_collection',
+      ],
+    },
+    {
+      label: 'Asset Value Total',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.assetValueTotal),
+      tone: 'from-lime-500 to-emerald-500',
+      permissionNames: [
+        'credit_summary_report_workspace_summary_report_asset_value_total',
+        'credit_general_summary_report_asset_value_total',
+      ],
+    },
+    {
+      label: 'Month Collection',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.monthCollection),
+      tone: 'from-indigo-500 to-blue-500',
+      permissionNames: [
+        'credit_summary_report_workspace_summary_report_month_collection',
+        'credit_general_summary_report_month_collection',
+      ],
+    },
+    {
+      label: 'Imagine Profit',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.imagineProfit),
+      tone: 'from-emerald-500 to-green-500',
+      permissionNames: [
+        'credit_summary_report_workspace_summary_report_imagine_profit',
+        'credit_general_summary_report_imagine_profit',
+      ],
+    },
+    {
+      label: 'Today Profit',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.todayProfit),
+      tone: 'from-teal-500 to-cyan-500',
+      permissionNames: [
+        'credit_summary_report_workspace_summary_report_today_profit',
+        'credit_general_summary_report_today_profit',
+      ],
+    },
+    {
+      label: 'Month Profit',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.monthProfit),
+      tone: 'from-sky-500 to-blue-500',
+      permissionNames: [
+        'credit_summary_report_workspace_summary_report_month_profit',
+        'credit_general_summary_report_month_profit',
+      ],
+    },
+  ];
+
+  const visibleSummaryReportCards = summaryReportCards.filter((item) =>
+    isAdminUser || hasAnyPermissionName(item.permissionNames)
+  );
 
   useEffect(() => {
     if (!token) return;
@@ -210,7 +416,7 @@ export default function MicrofinanceDashboard() {
           String(authUser?.employee?.email || '').trim().toLowerCase(),
         ].filter((v, i, arr) => v !== '' && arr.indexOf(v) === i);
 
-        const scopedLoans = !isFieldOfficer
+        const scopedLoans = !isScopedUser
           ? allLoans
           : allLoans.filter((loan) => {
               const loanBranchId = Number(loan.branch_id || 0);
@@ -365,7 +571,7 @@ export default function MicrofinanceDashboard() {
     };
 
     loadDashboardStats();
-  }, [token, isFieldOfficer, authUser]);
+  }, [token, isScopedUser, authUser]);
 
   if (!token) {
     return (
@@ -509,57 +715,7 @@ export default function MicrofinanceDashboard() {
               <span className="text-xs font-semibold text-cyan-700 rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1">Live Snapshot</span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                {
-                  label: 'Total Outstanding Amount',
-                  value: statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.totalOutstandingAmount),
-                  tone: 'from-amber-500 to-orange-500',
-                },
-                {
-                  label: 'Today Collection',
-                  value: statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.todayCollection),
-                  tone: 'from-blue-500 to-cyan-500',
-                },
-                {
-                  label: 'Asset Value Total',
-                  value: statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.assetValueTotal),
-                  tone: 'from-lime-500 to-emerald-500',
-                },
-                {
-                  label: 'Month Collection',
-                  value: statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.monthCollection),
-                  tone: 'from-indigo-500 to-blue-500',
-                },
-                {
-                  label: 'Imagine Profit',
-                  value: statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.imagineProfit),
-                  tone: 'from-emerald-500 to-green-500',
-                },
-                {
-                  label: 'Today Profit',
-                  value: statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.todayProfit),
-                  tone: 'from-teal-500 to-cyan-500',
-                },
-                {
-                  label: 'Month Profit',
-                  value: statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summaryStats.monthProfit),
-                  tone: 'from-sky-500 to-blue-500',
-                },
-              ].map((item) => (
+              {visibleSummaryReportCards.map((item) => (
                 <div key={item.label} className="rounded-xl border border-cyan-100 bg-white p-4">
                   <div className={`h-1.5 w-20 rounded-full bg-gradient-to-r ${item.tone} mb-3`}></div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
@@ -567,10 +723,15 @@ export default function MicrofinanceDashboard() {
                 </div>
               ))}
             </div>
+            {visibleSummaryReportCards.length === 0 && (
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                No summary cards are available for your current permissions.
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {reportModules.map((report, index) => (
+            {visibleReportModules.map((report, index) => (
               <div
                 key={index}
                 className="group relative bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 border border-white/20 overflow-hidden transform hover:-translate-y-2"
@@ -620,7 +781,7 @@ export default function MicrofinanceDashboard() {
         </div>
 
         {/* Quick Stats Section */}
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="mt-10 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 md:gap-5">
           {[
             {
               label: 'Active Loans',
@@ -651,13 +812,18 @@ export default function MicrofinanceDashboard() {
               color: 'from-red-500 to-pink-500',
             },
           ].map((stat, index) => (
-            <div key={index} className="bg-white/70 backdrop-blur-sm rounded-xl shadow-lg border border-white/20 p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">{stat.label}</p>
-                  <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
+            <div
+              key={index}
+              className="bg-white/75 backdrop-blur-sm rounded-xl shadow-lg border border-white/20 px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-5 overflow-hidden"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm md:text-[15px] leading-5 font-medium text-gray-600">{stat.label}</p>
+                  <p className="mt-1 text-lg sm:text-xl lg:text-[1.35rem] leading-tight font-bold text-gray-900 break-words [overflow-wrap:anywhere]">{stat.value}</p>
                 </div>
-                <div className={`w-12 h-12 bg-gradient-to-r ${stat.color} rounded-lg flex items-center justify-center text-xl`}>
+                <div
+                  className={`h-10 w-10 sm:h-11 sm:w-11 md:h-12 md:w-12 shrink-0 bg-gradient-to-r ${stat.color} rounded-lg flex items-center justify-center text-lg sm:text-xl`}
+                >
                   {stat.icon}
                 </div>
               </div>

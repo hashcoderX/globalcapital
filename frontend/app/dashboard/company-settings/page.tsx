@@ -30,6 +30,14 @@ type CompanyTemplate = {
   file_url?: string;
 };
 
+type MFHoliday = {
+  id: number;
+  holiday_date: string;
+  name: string;
+  note?: string | null;
+  is_active: boolean;
+};
+
 export default function CompanySettingsPage() {
   const router = useRouter();
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -63,6 +71,7 @@ export default function CompanySettingsPage() {
   const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
   const [showResetCredentialsModal, setShowResetCredentialsModal] = useState(false);
   const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetPassword, setResetPassword] = useState('');
   const [resettingSystem, setResettingSystem] = useState(false);
   const [resetCredentials, setResetCredentials] = useState<{ email: string; password: string } | null>(null);
   const [deleteTemplateModal, setDeleteTemplateModal] = useState<{ open: boolean; id: number | null; name: string }>({
@@ -70,6 +79,10 @@ export default function CompanySettingsPage() {
     id: null,
     name: '',
   });
+  const [holidays, setHolidays] = useState<MFHoliday[]>([]);
+  const [holidayForm, setHolidayForm] = useState({ id: 0, holiday_date: '', name: '', note: '', is_active: true });
+  const [holidaySaving, setHolidaySaving] = useState(false);
+  const [deletingHolidayId, setDeletingHolidayId] = useState<number | null>(null);
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -104,6 +117,20 @@ export default function CompanySettingsPage() {
     return 'Mortgage Legal Letter';
   };
 
+  const formatDate = (value?: string | null) => {
+    const raw = String(value || '').slice(0, 10);
+    if (!raw) return '-';
+    const parsed = new Date(`${raw}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return raw;
+    return new Intl.DateTimeFormat('en-LK', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+    }).format(parsed);
+  };
+
+  const resetHolidayForm = () => setHolidayForm({ id: 0, holiday_date: '', name: '', note: '', is_active: true });
+
   const fetchTemplates = async (authToken: string, companyId: number) => {
     try {
       const response = await axios.get(`${API_URL}/api/companies/${companyId}/document-templates`, {
@@ -114,6 +141,19 @@ export default function CompanySettingsPage() {
       setTemplates(rows);
     } catch {
       setTemplates([]);
+    }
+  };
+
+  const fetchHolidays = async (authToken: string) => {
+    try {
+      const response = await axios.get(`${API_URL}/api/microfinance/settings/holidays`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+
+      const rows = Array.isArray(response.data) ? response.data : [];
+      setHolidays(rows);
+    } catch {
+      setHolidays([]);
     }
   };
 
@@ -157,6 +197,7 @@ export default function CompanySettingsPage() {
   useEffect(() => {
     if (!token) return;
     fetchCompanies(token);
+    fetchHolidays(token);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -436,7 +477,7 @@ export default function CompanySettingsPage() {
     try {
       const response = await axios.post(
         `${API_URL}/api/system/reset`,
-        {},
+        { password: resetPassword },
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -449,6 +490,7 @@ export default function CompanySettingsPage() {
       setResetCredentials({ email: emailValue, password: passwordValue });
       setShowResetConfirmModal(false);
       setResetConfirmText('');
+      setResetPassword('');
       setShowResetCredentialsModal(true);
       setNotice({ type: 'success', text: 'System reset completed. Please store the new Super Admin credentials.' });
     } catch (error: any) {
@@ -533,6 +575,73 @@ export default function CompanySettingsPage() {
       }
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleHolidaySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+
+    setHolidaySaving(true);
+    setNotice(null);
+
+    try {
+      const payload = {
+        holiday_date: holidayForm.holiday_date,
+        name: holidayForm.name,
+        note: holidayForm.note || null,
+        is_active: holidayForm.is_active,
+      };
+
+      let message = 'Holiday saved successfully.';
+      if (holidayForm.id) {
+        const response = await axios.put(
+          `${API_URL}/api/microfinance/settings/holidays/${holidayForm.id}`,
+          payload,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        message = response.data?.message || message;
+      } else {
+        const response = await axios.post(`${API_URL}/api/microfinance/settings/holidays`, payload, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        message = response.data?.message || message;
+      }
+
+      await fetchHolidays(token);
+      resetHolidayForm();
+      setNotice({ type: 'success', text: message });
+    } catch (error: any) {
+      setNotice({
+        type: 'error',
+        text: error?.response?.data?.message || 'Failed to save holiday. Date may already be marked.',
+      });
+    } finally {
+      setHolidaySaving(false);
+    }
+  };
+
+  const handleHolidayDelete = async (holidayId: number) => {
+    if (!token) return;
+
+    setDeletingHolidayId(holidayId);
+    setNotice(null);
+
+    try {
+      const response = await axios.delete(`${API_URL}/api/microfinance/settings/holidays/${holidayId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      await fetchHolidays(token);
+      if (holidayForm.id === holidayId) {
+        resetHolidayForm();
+      }
+
+      setNotice({ type: 'success', text: response.data?.message || 'Holiday deleted successfully.' });
+    } catch (error: any) {
+      setNotice({ type: 'error', text: error?.response?.data?.message || 'Failed to delete holiday.' });
+    } finally {
+      setDeletingHolidayId(null);
     }
   };
 
@@ -854,6 +963,110 @@ export default function CompanySettingsPage() {
                   </table>
                 </div>
               </div>
+
+              <div className="h-px bg-gradient-to-r from-transparent via-cyan-200 to-transparent" />
+
+              <div className="space-y-4">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">Global Holiday Management</h2>
+                  <p className="text-sm text-slate-600 mt-1">
+                    Configure holidays from Company Settings and apply them across Microfinance, Finance, and Mortgage loan flows.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <form onSubmit={handleHolidaySubmit} className="rounded-2xl border border-cyan-100 bg-white/80 p-4 space-y-3">
+                    <h3 className="text-base font-bold text-slate-900">{holidayForm.id ? 'Edit Holiday' : 'Mark Holiday'}</h3>
+                    <input
+                      type="date"
+                      value={holidayForm.holiday_date}
+                      onChange={(e) => setHolidayForm({ ...holidayForm, holiday_date: e.target.value })}
+                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+                      required
+                    />
+                    <input
+                      value={holidayForm.name}
+                      onChange={(e) => setHolidayForm({ ...holidayForm, name: e.target.value })}
+                      placeholder="Holiday name"
+                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+                      required
+                    />
+                    <input
+                      value={holidayForm.note}
+                      onChange={(e) => setHolidayForm({ ...holidayForm, note: e.target.value })}
+                      placeholder="Note (optional)"
+                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+                    />
+                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={holidayForm.is_active}
+                        onChange={(e) => setHolidayForm({ ...holidayForm, is_active: e.target.checked })}
+                      />
+                      Active
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        type="submit"
+                        disabled={holidaySaving}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {holidaySaving ? 'Saving...' : holidayForm.id ? 'Update Holiday' : 'Mark Holiday'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={resetHolidayForm}
+                        className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </form>
+
+                  <div className="rounded-2xl border border-cyan-100 bg-white/80 p-4">
+                    <h3 className="text-base font-bold text-slate-900 mb-3">Holiday List</h3>
+                    <div className="space-y-2 max-h-[360px] overflow-auto">
+                      {holidays.map((item) => (
+                        <div key={item.id} className="rounded-xl border border-cyan-100 bg-white p-3 flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{item.name}</p>
+                            <p className="text-xs text-slate-600">
+                              Date: {formatDate(item.holiday_date)} • {item.is_active ? 'Active' : 'Inactive'}
+                              {item.note ? ` • ${item.note}` : ''}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setHolidayForm({
+                                  id: item.id,
+                                  holiday_date: String(item.holiday_date || '').slice(0, 10),
+                                  name: item.name,
+                                  note: item.note || '',
+                                  is_active: item.is_active,
+                                })
+                              }
+                              className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-100 text-amber-700 font-semibold"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleHolidayDelete(item.id)}
+                              disabled={deletingHolidayId === item.id}
+                              className="text-xs px-2.5 py-1.5 rounded-lg bg-red-100 text-red-700 font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                              {deletingHolidayId === item.id ? 'Deleting...' : 'Delete'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {holidays.length === 0 && <p className="text-sm text-slate-500">No holidays marked yet.</p>}
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -876,7 +1089,8 @@ export default function CompanySettingsPage() {
           <div className="w-full max-w-xl rounded-2xl border border-rose-200 bg-white p-6 shadow-[0_30px_70px_-30px_rgba(190,24,93,0.55)]">
             <h3 className="text-xl font-extrabold text-rose-700">Reset Entire System</h3>
             <p className="mt-3 text-sm text-slate-700">
-              This action will permanently delete all records and uploaded files, rebuild the database, and create a fresh Super Admin account.
+              This action will permanently delete all records and uploaded files, and rebuild the database.
+              Department data, Designation data, and the Super Admin user will be preserved.
             </p>
             <p className="mt-2 text-sm font-semibold text-rose-700">Type RESET to continue.</p>
 
@@ -887,6 +1101,15 @@ export default function CompanySettingsPage() {
               placeholder="Type RESET"
             />
 
+            <label className="mt-3 block text-sm font-semibold text-slate-700">Enter your password</label>
+            <input
+              type="password"
+              value={resetPassword}
+              onChange={(e) => setResetPassword(e.target.value)}
+              className="mt-1 w-full rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-slate-900"
+              placeholder="Current password"
+            />
+
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
@@ -894,6 +1117,7 @@ export default function CompanySettingsPage() {
                   if (resettingSystem) return;
                   setShowResetConfirmModal(false);
                   setResetConfirmText('');
+                  setResetPassword('');
                 }}
                 className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold"
               >
@@ -902,7 +1126,11 @@ export default function CompanySettingsPage() {
               <button
                 type="button"
                 onClick={handleResetSystem}
-                disabled={resettingSystem || resetConfirmText.trim().toUpperCase() !== 'RESET'}
+                disabled={
+                  resettingSystem ||
+                  resetConfirmText.trim().toUpperCase() !== 'RESET' ||
+                  resetPassword.trim() === ''
+                }
                 className="px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {resettingSystem ? 'Resetting...' : 'Confirm Reset'}

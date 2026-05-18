@@ -7,6 +7,10 @@ import axios from 'axios';
 
 export default function HRM() {
   const [token, setToken] = useState('');
+  const [userRoles, setUserRoles] = useState<string[]>([]);
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
+  const [isAdminUser, setIsAdminUser] = useState(false);
+  const [accessReady, setAccessReady] = useState(false);
   const [activeEmployees, setActiveEmployees] = useState(0);
   const [attendanceRate, setAttendanceRate] = useState(0);
   const [departmentsCount, setDepartmentsCount] = useState(0);
@@ -31,9 +35,59 @@ export default function HRM() {
 
   useEffect(() => {
     if (token) {
+      fetchAccessProfile();
       fetchDashboardData();
     }
   }, [token]);
+
+  const fetchAccessProfile = async () => {
+    try {
+      const userRes = await axios.get('http://localhost:8000/api/user', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const userData = userRes.data || {};
+      const employeeId = Number(userData?.employee_id || userData?.employee?.id || 0);
+
+      const roleNames = [
+        String(userData?.role || ''),
+        ...(Array.isArray(userData?.roles)
+          ? userData.roles.map((role: any) => String(role?.name || role || ''))
+          : []),
+      ]
+        .map((role) => role.trim().toLowerCase())
+        .filter(Boolean);
+
+      const permissionNames = Array.isArray(userData?.roles)
+        ? userData.roles.flatMap((role: any) =>
+            Array.isArray(role?.permissions)
+              ? role.permissions.map((permission: any) =>
+                  String(permission?.name || '').trim().toLowerCase()
+                )
+              : []
+          )
+        : [];
+
+      const roleBlob = roleNames.join(' ');
+      const adminUser =
+        !employeeId ||
+        roleBlob.includes('super admin') ||
+        roleBlob.includes('superadmin') ||
+        roleBlob.includes('administrator') ||
+        roleBlob.includes('admin');
+
+      setUserRoles(Array.from(new Set(roleNames)));
+      setUserPermissions(Array.from(new Set(permissionNames.filter(Boolean))));
+      setIsAdminUser(adminUser);
+    } catch (error) {
+      console.error('Error fetching HRM access profile:', error);
+      setUserRoles([]);
+      setUserPermissions([]);
+      setIsAdminUser(false);
+    } finally {
+      setAccessReady(true);
+    }
+  };
 
   const fetchDashboardData = async () => {
     try {
@@ -135,6 +189,11 @@ export default function HRM() {
     }
   };
 
+  const hasAnyPermission = (keywords: string[]) => {
+    if (isAdminUser) return true;
+    return userPermissions.some((permission) => keywords.some((keyword) => permission.includes(keyword)));
+  };
+
   const hrmModules = [
     {
       name: 'Employees',
@@ -143,7 +202,8 @@ export default function HRM() {
       description: 'Manage employee records',
       color: 'from-blue-500 to-cyan-500',
       bgColor: 'from-blue-50 to-cyan-50',
-      getStats: () => loading ? '...' : `${totalEmployees} Employees`
+      getStats: () => loading ? '...' : `${totalEmployees} Employees`,
+      accessKeywords: ['view_employees', 'create_employees', 'edit_employees', 'delete_employees']
     },
     {
       name: 'Departments',
@@ -152,7 +212,8 @@ export default function HRM() {
       description: 'Manage company departments',
       color: 'from-green-500 to-emerald-500',
       bgColor: 'from-green-50 to-emerald-50',
-      getStats: () => loading ? '...' : `${departmentsCount} Departments`
+      getStats: () => loading ? '...' : `${departmentsCount} Departments`,
+      accessKeywords: ['view_departments', 'create_departments', 'edit_departments', 'delete_departments']
     },
     {
       name: 'Designations',
@@ -161,7 +222,8 @@ export default function HRM() {
       description: 'Manage job positions',
       color: 'from-purple-500 to-indigo-500',
       bgColor: 'from-purple-50 to-indigo-50',
-      getStats: () => loading ? '...' : `${designationsCount} Positions`
+      getStats: () => loading ? '...' : `${designationsCount} Positions`,
+      accessKeywords: ['view_designations', 'create_designations', 'edit_designations', 'delete_designations']
     },
     {
       name: 'Attendance',
@@ -170,7 +232,8 @@ export default function HRM() {
       description: 'Track employee attendance',
       color: 'from-orange-500 to-red-500',
       bgColor: 'from-orange-50 to-red-50',
-      getStats: () => loading ? '...' : `${todayAttendance} Marked Today`
+      getStats: () => loading ? '...' : `${todayAttendance} Marked Today`,
+      accessKeywords: ['view_attendance', 'create_attendance', 'edit_attendance', 'delete_attendance']
     },
     {
       name: 'Leaves',
@@ -179,7 +242,8 @@ export default function HRM() {
       description: 'Manage leave requests',
       color: 'from-teal-500 to-green-500',
       bgColor: 'from-teal-50 to-green-50',
-      getStats: () => loading ? '...' : `${pendingLeaves} Pending Requests`
+      getStats: () => loading ? '...' : `${pendingLeaves} Pending Requests`,
+      accessKeywords: ['view_leaves', 'create_leaves', 'approve_leaves', 'reject_leaves']
     },
     {
       name: 'Roles & Privileges',
@@ -188,7 +252,8 @@ export default function HRM() {
       description: 'Manage user roles and permissions',
       color: 'from-indigo-500 to-purple-500',
       bgColor: 'from-indigo-50 to-purple-50',
-      getStats: () => loading ? '...' : 'Access Control'
+      getStats: () => loading ? '...' : 'Access Control',
+      accessKeywords: ['view_roles', 'create_roles', 'edit_roles', 'delete_roles', 'assign_roles', 'view_permissions', 'create_permissions', 'edit_permissions', 'delete_permissions']
     },
     {
       name: 'Payroll',
@@ -197,16 +262,69 @@ export default function HRM() {
       description: 'Process payroll and salaries',
       color: 'from-yellow-500 to-orange-500',
       bgColor: 'from-yellow-50 to-orange-50',
-      getStats: () => loading ? '...' : `${pendingPayrolls} Pending`
+      getStats: () => loading ? '...' : `${pendingPayrolls} Pending`,
+      accessKeywords: ['view_payrolls', 'create_payrolls', 'edit_payrolls', 'delete_payrolls']
     },
   ];
+
+  const isSalesRefOnly =
+    !isAdminUser && userRoles.length > 0 && userRoles.every((role) => role === 'sales ref');
+
+  const visibleHrmModules = hrmModules.filter((module) => {
+    if (isAdminUser) return true;
+    if (module.name === 'Leaves') {
+      // All employees should be able to open leave requests.
+      return true;
+    }
+    if (isSalesRefOnly) {
+      return module.name === 'Leaves';
+    }
+    return hasAnyPermission(module.accessKeywords);
+  });
+
+  const quickActions = [
+    {
+      icon: '➕',
+      title: 'Add Employee',
+      desc: 'New hire',
+      path: '/dashboard/hrm/employees',
+      accessKeywords: ['create_employees', 'edit_employees', 'view_employees'],
+    },
+    {
+      icon: '📊',
+      title: 'View Reports',
+      desc: 'Analytics',
+      path: '/dashboard/hrm/payroll',
+      accessKeywords: ['view_payrolls', 'view_employees', 'view_attendance', 'view_leaves'],
+    },
+    {
+      icon: '📅',
+      title: 'Mark Attendance',
+      desc: 'Daily check-in',
+      path: '/dashboard/hrm/attendance',
+      accessKeywords: ['create_attendance', 'edit_attendance', 'view_attendance'],
+    },
+    {
+      icon: '💰',
+      title: 'Process Payroll',
+      desc: 'Monthly run',
+      path: '/dashboard/hrm/payroll',
+      accessKeywords: ['create_payrolls', 'edit_payrolls', 'view_payrolls'],
+    },
+  ];
+
+  const visibleQuickActions = quickActions.filter((action) => {
+    if (isAdminUser) return true;
+    if (isSalesRefOnly) return false;
+    return hasAnyPermission(action.accessKeywords);
+  });
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     router.push('/');
   };
 
-  if (!token) {
+  if (!token || !accessReady) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
@@ -226,8 +344,8 @@ export default function HRM() {
       {/* Modern Navigation */}
       <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center h-auto sm:h-16 py-3 sm:py-0 gap-3 sm:gap-0">
+            <div className="flex items-center justify-between sm:justify-start">
               <Link href="/dashboard" className="flex items-center space-x-2 text-gray-700 hover:text-blue-600 transition-colors duration-300">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -235,7 +353,7 @@ export default function HRM() {
                 <span className="font-medium">Back to Dashboard</span>
               </Link>
             </div>
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center justify-between sm:justify-end space-x-3 sm:space-x-4">
               <div className="hidden md:flex items-center space-x-2 text-sm text-gray-600">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                 <span>HRM System Active</span>
@@ -244,7 +362,7 @@ export default function HRM() {
                 <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
                   HR
                 </div>
-                <span className="font-medium text-gray-900">Human Resources</span>
+                <span className="font-medium text-gray-900 text-sm sm:text-base">Human Resources</span>
               </div>
               <button
                 onClick={handleLogout}
@@ -265,14 +383,14 @@ export default function HRM() {
               <span className="text-4xl">👥</span>
             </div>
           </div>
-          <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">
+          <h2 className="text-3xl md:text-5xl font-bold text-gray-900 mb-4">
             Human Resource <span className="bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">Management</span>
           </h2>
-          <p className="text-xl text-gray-600 max-w-3xl mx-auto leading-relaxed mb-6">
+          <p className="text-lg sm:text-xl text-gray-600 max-w-3xl mx-auto leading-relaxed mb-6 px-1">
             Streamline your workforce management with comprehensive HR tools.
             From employee onboarding to payroll processing, manage everything in one place.
           </p>
-          <div className="flex justify-center space-x-6">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 sm:space-x-6">
             <div className="text-center">
               <div className="text-2xl font-bold text-blue-600">
                 {loading ? '...' : activeEmployees}
@@ -296,7 +414,7 @@ export default function HRM() {
 
         {/* HRM Module Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {hrmModules.map((module, index) => (
+          {visibleHrmModules.map((module, index) => (
             <Link
               key={index}
               href={module.path}
@@ -338,6 +456,12 @@ export default function HRM() {
           ))}
         </div>
 
+        {visibleHrmModules.length === 0 && (
+          <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            No HRM features are assigned to your role yet. Please contact an administrator.
+          </div>
+        )}
+
         {/* Quick Actions Section */}
         <div className="mt-12 bg-white/70 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 overflow-hidden">
           <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-6">
@@ -354,14 +478,10 @@ export default function HRM() {
 
           <div className="p-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {[
-                { icon: '➕', title: 'Add Employee', desc: 'New hire' },
-                { icon: '📊', title: 'View Reports', desc: 'Analytics' },
-                { icon: '📅', title: 'Mark Attendance', desc: 'Daily check-in' },
-                { icon: '💰', title: 'Process Payroll', desc: 'Monthly run' },
-              ].map((action, index) => (
-                <div
+              {visibleQuickActions.map((action, index) => (
+                <Link
                   key={index}
+                  href={action.path}
                   className="group bg-white/50 hover:bg-white/80 rounded-xl p-4 border border-white/30 hover:border-white/50 transition-all duration-300 cursor-pointer transform hover:scale-105 text-center"
                 >
                   <div className="text-2xl mb-2">{action.icon}</div>
@@ -371,9 +491,14 @@ export default function HRM() {
                   <p className="text-xs text-gray-600 group-hover:text-gray-700 transition-colors duration-300">
                     {action.desc}
                   </p>
-                </div>
+                </Link>
               ))}
             </div>
+            {visibleQuickActions.length === 0 && (
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                No quick actions available for your current permissions.
+              </div>
+            )}
           </div>
         </div>
       </main>

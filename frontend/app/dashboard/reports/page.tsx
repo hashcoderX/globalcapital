@@ -18,9 +18,30 @@ type ReportCategory = {
   reports: ReportItem[];
 };
 
+type AuthUser = {
+  id?: number;
+  designation?: { id?: number; name?: string } | null;
+  roles?: Array<{ id?: number; name?: string }>;
+};
+
 export default function ReportsHubPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+
+  const normalizeText = (value: string) =>
+    String(value || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const designationName = normalizeText(String(authUser?.designation?.name || ''));
+  const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+  const isCollectionOfficer =
+    designationName.includes('collection officer') ||
+    roleNames.some((role) => role.includes('collection officer'));
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -30,6 +51,17 @@ export default function ReportsHubPage() {
     }
 
     setToken(storedToken);
+
+    const storedUser = localStorage.getItem('auth_user');
+    if (storedUser) {
+      try {
+        setAuthUser(JSON.parse(storedUser));
+      } catch {
+        setAuthUser(null);
+      }
+    } else {
+      setAuthUser(null);
+    }
   }, [router]);
 
   const categories = useMemo<ReportCategory[]>(
@@ -175,6 +207,33 @@ export default function ReportsHubPage() {
     []
   );
 
+  const collectionOfficerBlockedCategoryKeys = new Set(['mortgage', 'savings', 'finance', 'branch']);
+  const collectionOfficerBlockedMicrofinanceReportTitles = new Set([
+    'Arrears Report',
+    'Active Member Report',
+    'Blacklisted Customer Report',
+    'Re-Payment Report',
+    'Recovery Report',
+  ]);
+
+  const visibleCategories = isCollectionOfficer
+    ? categories
+        .filter((category) => !collectionOfficerBlockedCategoryKeys.has(category.key))
+        .map((category) => {
+          if (category.key !== 'microfinance') {
+            return category;
+          }
+
+          return {
+            ...category,
+            reports: category.reports.filter(
+              (report) => !collectionOfficerBlockedMicrofinanceReportTitles.has(report.title)
+            ),
+          };
+        })
+        .filter((category) => category.reports.length > 0)
+    : categories;
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-cyan-50 via-blue-50 to-indigo-100 flex items-center justify-center">
@@ -205,7 +264,7 @@ export default function ReportsHubPage() {
             </div>
 
             <button
-              onClick={() => router.push('/dashboard')}
+              onClick={() => router.back()}
               className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
             >
               Back
@@ -214,7 +273,7 @@ export default function ReportsHubPage() {
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          {categories.map((category) => (
+          {visibleCategories.map((category) => (
             <div
               key={category.key}
               className="group relative bg-white/80 backdrop-blur-sm rounded-3xl shadow-[0_20px_40px_-30px_rgba(8,47,73,0.85)] border border-white/50 overflow-hidden"
@@ -248,7 +307,13 @@ export default function ReportsHubPage() {
                       {report.path ? (
                         <button
                           type="button"
-                          onClick={() => router.push(report.path as string)}
+                          onClick={() => {
+                            if (isCollectionOfficer && collectionOfficerBlockedCategoryKeys.has(category.key)) {
+                              return;
+                            }
+
+                            router.push(report.path as string);
+                          }}
                           className="shrink-0 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-700"
                         >
                           Open

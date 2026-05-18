@@ -14,11 +14,53 @@ use ZipArchive;
 
 class LoanRequestController extends Controller
 {
+    private function isAdminUser(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isSystemAdmin') && $user->isSystemAdmin()) {
+            return true;
+        }
+
+        $designationName = strtolower(trim((string) optional($user->designation)->name));
+        if ($designationName !== '' && str_contains($designationName, 'admin')) {
+            return true;
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        foreach ($user->roles()->pluck('name') as $roleName) {
+            $normalized = strtolower(trim((string) $roleName));
+            if ($normalized !== '' && str_contains($normalized, 'admin')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function currentUserBranchId(Request $request): ?int
+    {
+        $branchId = (int) ($request->user()?->branch_id ?? 0);
+        return $branchId > 0 ? $branchId : null;
+    }
+
     public function index(Request $request): JsonResponse
     {
         $perPage = (int) $request->get('per_page', 20);
 
         $query = LoanRequest::query()->withCount('documents')->orderByDesc('id');
+
+        if (!$this->isAdminUser($request->user())) {
+            $branchId = $this->currentUserBranchId($request);
+            if ($branchId !== null) {
+                $query->where('branch_id', $branchId);
+            }
+        }
 
         if ($request->filled('status')) {
             $query->where('status', (string) $request->get('status'));
@@ -31,9 +73,18 @@ class LoanRequestController extends Controller
         return response()->json($query->paginate($perPage));
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
-        return response()->json(LoanRequest::with('documents')->findOrFail($id));
+        $query = LoanRequest::with('documents');
+
+        if (!$this->isAdminUser($request->user())) {
+            $branchId = $this->currentUserBranchId($request);
+            if ($branchId !== null) {
+                $query->where('branch_id', $branchId);
+            }
+        }
+
+        return response()->json($query->findOrFail($id));
     }
 
     public function store(Request $request): JsonResponse
@@ -164,7 +215,15 @@ class LoanRequestController extends Controller
             'note' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        $loanRequest = LoanRequest::findOrFail($id);
+        $query = LoanRequest::query();
+        if (!$this->isAdminUser($request->user())) {
+            $branchId = $this->currentUserBranchId($request);
+            if ($branchId !== null) {
+                $query->where('branch_id', $branchId);
+            }
+        }
+
+        $loanRequest = $query->findOrFail($id);
 
         if ($loanRequest->status !== 'pending_approval') {
             return response()->json([

@@ -19,11 +19,76 @@ use Carbon\Carbon;
 
 class MortgageController extends Controller
 {
+    private function isAdminUser(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isSystemAdmin') && $user->isSystemAdmin()) {
+            return true;
+        }
+
+        $designationName = strtolower(trim((string) optional($user->designation)->name));
+        if ($designationName !== '' && str_contains($designationName, 'admin')) {
+            return true;
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        foreach ($user->roles()->pluck('name') as $roleName) {
+            $normalized = strtolower(trim((string) $roleName));
+            if ($normalized !== '' && str_contains($normalized, 'admin')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function scopedBranchId(Request $request): ?int
+    {
+        $requestedBranchId = (int) ($request->get('branch_id', 0));
+
+        if ($this->isAdminUser($request->user())) {
+            return $requestedBranchId > 0 ? $requestedBranchId : null;
+        }
+
+        $branchId = (int) ($request->user()?->branch_id ?? 0);
+        return $branchId > 0 ? $branchId : null;
+    }
+
+    private function applyMortgageBranchScope($query, Request $request, string $column = 'branch_id')
+    {
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $query->where($column, $branchId);
+        }
+
+        return $query;
+    }
+
+    private function resolveMortgageOrFail(Request $request, int $id, array $with = []): Mortgage
+    {
+        $query = Mortgage::query();
+        if (!empty($with)) {
+            $query->with($with);
+        }
+
+        $this->applyMortgageBranchScope($query, $request);
+
+        return $query->findOrFail($id);
+    }
+
     // List mortgages
     public function index(Request $request): JsonResponse
     {
         $perPage = (int)($request->get('per_page', 20));
         $query = Mortgage::with(['customer', 'asset', 'valuation', 'guarantors'])->orderBy('id', 'desc');
+
+        $this->applyMortgageBranchScope($query, $request);
 
         if ($request->filled('id')) {
             $query->where('id', (int)$request->get('id'));
@@ -99,10 +164,21 @@ class MortgageController extends Controller
                 if (!$customer) {
                     throw new \Exception('Customer not found');
                 }
+
+                if (!$this->isAdminUser($user)) {
+                    $userBranchId = (int) ($user->branch_id ?? 0);
+                    $customerBranchId = (int) ($customer->branch_id ?? 0);
+
+                    if ($userBranchId > 0 && $customerBranchId > 0 && $userBranchId !== $customerBranchId) {
+                        throw new \Exception('You can create mortgages only for customers in your branch');
+                    }
+                }
+
+                $resolvedBranchId = (int) ($user->branch_id ?? $customer->branch_id ?? 1);
                 
             $mortgage = Mortgage::create([
-                'tenant_id' => 1, // Temporarily hardcode for testing
-                'branch_id' => 1, // Temporarily hardcode for testing
+                'tenant_id' => (int) ($user->tenant_id ?? 1),
+                'branch_id' => $resolvedBranchId,
                 'customer_id' => $validated['customer_id'],
                 'mortgage_type' => $validated['mortgage_type'],
                 'requested_amount' => $validated['requested_amount'],
@@ -203,9 +279,9 @@ class MortgageController extends Controller
     }
 
     // Show mortgage
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
-        $mortgage = Mortgage::with(['asset', 'valuation', 'guarantors'])->findOrFail($id);
+        $mortgage = $this->resolveMortgageOrFail($request, $id, ['asset', 'valuation', 'guarantors']);
         return response()->json($mortgage);
     }
 
@@ -266,9 +342,11 @@ class MortgageController extends Controller
         return round($installment, 2);
     }
 
-    public function payments(int $id): JsonResponse
+    public function payments(Request $request, int $id): JsonResponse
     {
-        $payments = MortgagePayment::where('mortgage_id', $id)
+        $mortgage = $this->resolveMortgageOrFail($request, $id);
+
+        $payments = MortgagePayment::where('mortgage_id', $mortgage->id)
             ->orderBy('paid_date', 'asc')
             ->get()
             ->map(function ($p) {
@@ -304,6 +382,13 @@ class MortgageController extends Controller
             ])
             ->orderByDesc('paid_date')
             ->orderByDesc('id');
+
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $baseQuery->whereHas('mortgage', function ($query) use ($branchId) {
+                $query->where('branch_id', $branchId);
+            });
+        }
 
         if (!empty($validated['from_date'])) {
             $baseQuery->whereDate('paid_date', '>=', $validated['from_date']);
@@ -404,6 +489,8 @@ class MortgageController extends Controller
             ->orderByDesc('arrears_amount')
             ->orderBy('due_date');
 
+        $this->applyMortgageBranchScope($baseQuery, $request);
+
         if (!empty($validated['from_due_date'])) {
             $baseQuery->whereDate('due_date', '>=', $validated['from_due_date']);
         }
@@ -495,6 +582,8 @@ class MortgageController extends Controller
                 'valuation:id,mortgage_id,market_value,forced_sale_value',
             ])
             ->orderByDesc('id');
+
+        $this->applyMortgageBranchScope($baseQuery, $request);
 
         if (!empty($validated['from_date'])) {
             $baseQuery->whereDate('created_at', '>=', $validated['from_date']);
@@ -593,9 +682,11 @@ class MortgageController extends Controller
         ]);
     }
 
-    public function documents(int $id): JsonResponse
+    public function documents(Request $request, int $id): JsonResponse
     {
-        $documents = MortgageDocument::where('mortgage_id', $id)->get();
+        $mortgage = $this->resolveMortgageOrFail($request, $id);
+
+        $documents = MortgageDocument::where('mortgage_id', $mortgage->id)->get();
         return response()->json([
             'data' => $documents,
         ]);
@@ -608,7 +699,7 @@ class MortgageController extends Controller
             'file' => 'required|file|mimes:pdf,doc,docx,jpg,jpeg,png|max:10240',
         ]);
 
-        $mortgage = Mortgage::findOrFail($id);
+        $mortgage = $this->resolveMortgageOrFail($request, $id);
         $user = $request->user();
 
         if ($request->hasFile('file')) {
@@ -634,9 +725,11 @@ class MortgageController extends Controller
         return response()->json(['message' => 'No file uploaded'], 400);
     }
 
-    public function schedule(int $id): JsonResponse
+    public function schedule(Request $request, int $id): JsonResponse
     {
-        $schedules = MortgageSchedule::where('mortgage_id', $id)->orderBy('installment_no')->get();
+        $mortgage = $this->resolveMortgageOrFail($request, $id);
+
+        $schedules = MortgageSchedule::where('mortgage_id', $mortgage->id)->orderBy('installment_no')->get();
         return response()->json([
             'data' => $schedules,
         ]);
@@ -651,7 +744,7 @@ class MortgageController extends Controller
             'note' => ['nullable', 'string'],
         ]);
 
-        $mortgage = Mortgage::findOrFail($id);
+        $mortgage = $this->resolveMortgageOrFail($request, $id);
 
         $map = [
             'draft' => [
@@ -684,7 +777,7 @@ class MortgageController extends Controller
             $mortgage->approved_by = $user->id ?? null;
             $mortgage->approved_at = now();
             $tenureMonths = (int) ($mortgage->tenure_months ?? 0);
-            $mortgage->due_date = now()->addMonths(max(1, $tenureMonths))->toDateString();
+            $mortgage->setAttribute('due_date', now()->addMonths(max(1, $tenureMonths))->toDateString());
 
             $principal = (float) ($mortgage->approved_amount ?? $mortgage->requested_amount ?? 0);
             $mortgage->setAttribute('due_amount', round(max($principal, 0), 2));
@@ -722,7 +815,7 @@ class MortgageController extends Controller
             'collected_by' => ['nullable', 'integer'],
         ]);
 
-        $mortgage = Mortgage::findOrFail($id);
+        $mortgage = $this->resolveMortgageOrFail($request, $id);
 
         if (!empty($validated['mortgage_id']) && (int) $validated['mortgage_id'] !== (int) $mortgage->id) {
             return response()->json([
@@ -787,7 +880,7 @@ class MortgageController extends Controller
 
             $paidAt = Carbon::parse($paidDate);
             $nextDueDate = $this->addFrequency($paidAt, (string) ($mortgage->installment_frequency ?? 'monthly'));
-            $mortgage->due_date = $nextDueDate->toDateString();
+            $mortgage->setAttribute('due_date', $nextDueDate->toDateString());
 
             if ((float) $mortgage->due_amount <= 0.01 && (float) $mortgage->due_interest_amount <= 0.01) {
                 $mortgage->status = 'settled';
@@ -881,7 +974,7 @@ class MortgageController extends Controller
             'note' => ['nullable', 'string'],
         ]);
 
-        $mortgage = Mortgage::findOrFail($id);
+        $mortgage = $this->resolveMortgageOrFail($request, $id);
 
         if (in_array($mortgage->status, ['settled', 'rejected'], true)) {
             return response()->json([

@@ -46,6 +46,7 @@ type AuthUser = {
   branch_id?: number | null;
   designation?: { id: number; name: string } | null;
   employee?: { id: number; first_name?: string; last_name?: string; email?: string } | null;
+  roles?: Array<{ id?: number; name?: string }>;
 };
 
 const API_BASE = 'http://localhost:8000/api';
@@ -66,6 +67,9 @@ export default function CollectionManagementPage() {
     return tomorrow.toISOString().slice(0, 10);
   });
   const [query, setQuery] = useState('');
+  const [loanOfficerFilter, setLoanOfficerFilter] = useState('all');
+  const [loanRouteFilter, setLoanRouteFilter] = useState('all');
+  const [loanCenterFilter, setLoanCenterFilter] = useState('all');
   const [selectedCenterId, setSelectedCenterId] = useState<number | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<number | null>(null);
@@ -105,10 +109,46 @@ export default function CollectionManagementPage() {
     loan: null,
   });
 
-  const designationName = String(authUser?.designation?.name || '').toLowerCase();
-  const isFieldOfficer = designationName.includes('field') && designationName.includes('officer');
+  const normalizeText = (value: string) =>
+    String(value || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const designationName = normalizeText(String(authUser?.designation?.name || ''));
+  const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+
+  const hasRoleOrDesignation = (keywords: string[]) => {
+    return keywords.some((keyword) => {
+      const normalizedKeyword = normalizeText(keyword);
+      if (normalizedKeyword === '') return false;
+
+      if (designationName.includes(normalizedKeyword)) return true;
+      return roleNames.some((name) => name.includes(normalizedKeyword));
+    });
+  };
+
+  const isFieldOfficer = hasRoleOrDesignation(['field officer']);
+  const isCollectionOfficer = hasRoleOrDesignation(['collection officer']);
+  const isCashier = hasRoleOrDesignation(['cashier']);
   const isAdmin =
-    designationName.includes('admin') || String(authUser?.email || '').toLowerCase() === 'superadmin@softcodelk.com';
+    hasRoleOrDesignation(['admin']) || normalizeText(String(authUser?.email || '')) === 'superadmin softcodelk com';
+
+  const canViewOfficeCollection =
+    isAdmin ||
+    hasRoleOrDesignation([
+      'finance manager',
+      'branch manager',
+      'loan officer',
+      'credit officer',
+      'collection supervisor',
+      'admin officer',
+      'cashier',
+    ]);
+
+  const canViewCenterRouteCollections = !isCashier;
 
   const officerNameCandidates = useMemo(() => {
     const fullName = [authUser?.employee?.first_name || '', authUser?.employee?.last_name || '']
@@ -309,24 +349,12 @@ export default function CollectionManagementPage() {
 
   const getFinderLoanCode = (loan: LoanRow) => {
     const loanCodeField = String(loan.loan_code || '').trim();
-    const customerNoField = String(loan.customer_no || '').trim();
-    const customerCodeField = String(loan.customer_code || '').trim();
-
-    if (loanCodeField) return loanCodeField;
-    if (isLoanCodeText(customerNoField)) return customerNoField;
-    if (isLoanCodeText(customerCodeField)) return customerCodeField;
-
-    return `LR-${loan.id}`;
+    return loanCodeField || '-';
   };
 
   const getFinderCustomerNo = (loan: LoanRow) => {
     const customerNoField = String(loan.customer_no || '').trim();
-    const customerCodeField = String(loan.customer_code || '').trim();
-
-    if (customerNoField && !isLoanCodeText(customerNoField)) return customerNoField;
-    if (customerCodeField && !isLoanCodeText(customerCodeField)) return customerCodeField;
-
-    return customerCodeField || customerNoField || '-';
+    return customerNoField || '-';
   };
 
   const scopeType = activeMode === 'center' ? 'center_loan' : activeMode === 'route' ? 'route_loan' : null;
@@ -347,8 +375,25 @@ export default function CollectionManagementPage() {
 
   const filteredLoans = useMemo(() => {
     const keyword = query.trim().toLowerCase();
+    const selectedRouteId = loanRouteFilter === 'all' ? null : Number(loanRouteFilter);
+    const selectedCenterIdByFilter = loanCenterFilter === 'all' ? null : Number(loanCenterFilter);
 
     return scopedLoans.filter((loan) => {
+      if (loanOfficerFilter !== 'all') {
+        const officerName = String(loan.field_officer || '').trim().toLowerCase();
+        if (officerName !== loanOfficerFilter) return false;
+      }
+
+      if (selectedRouteId) {
+        const routeId = Number(loan.route?.id ?? loan.mf_route_id ?? 0);
+        if (routeId !== selectedRouteId) return false;
+      }
+
+      if (selectedCenterIdByFilter) {
+        const centerId = Number(loan.center?.id || 0);
+        if (centerId !== selectedCenterIdByFilter) return false;
+      }
+
       if (scopeType && loan.loan_scope !== scopeType) return false;
       if (!keyword) return true;
 
@@ -364,7 +409,77 @@ export default function CollectionManagementPage() {
 
       return haystack.includes(keyword);
     });
-  }, [scopedLoans, query, scopeType]);
+  }, [scopedLoans, query, scopeType, loanOfficerFilter, loanRouteFilter, loanCenterFilter]);
+
+  const loanOfficerOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        scopedLoans
+          .map((loan) => String(loan.field_officer || '').trim())
+          .filter((name) => name !== '')
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [scopedLoans]);
+
+  const loanRouteOptions = useMemo(() => {
+    const routeMap = new Map<number, string>();
+
+    scopedLoans.forEach((loan) => {
+      const routeId = Number(loan.route?.id ?? loan.mf_route_id ?? 0);
+      if (!routeId) return;
+
+      const routeName = String(loan.route?.name || loan.route_name || `Route ${routeId}`).trim();
+      routeMap.set(routeId, routeName);
+    });
+
+    return Array.from(routeMap.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [scopedLoans]);
+
+  const loanCenterOptions = useMemo(() => {
+    const centerMap = new Map<number, { id: number; name: string; routeId: number | null }>();
+    const selectedRouteId = loanRouteFilter === 'all' ? null : Number(loanRouteFilter);
+
+    scopedLoans.forEach((loan) => {
+      const centerId = Number(loan.center?.id || 0);
+      if (!centerId) return;
+
+      centerMap.set(centerId, {
+        id: centerId,
+        name: String(loan.center?.name || `Center ${centerId}`).trim(),
+        routeId: Number(loan.route?.id ?? loan.mf_route_id ?? 0) || null,
+      });
+    });
+
+    return Array.from(centerMap.values())
+      .filter((center) => (selectedRouteId ? center.routeId === selectedRouteId : true))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [scopedLoans, loanRouteFilter]);
+
+  const filteredScopedLoans = useMemo(() => {
+    const selectedRouteId = loanRouteFilter === 'all' ? null : Number(loanRouteFilter);
+    const selectedCenterIdByFilter = loanCenterFilter === 'all' ? null : Number(loanCenterFilter);
+
+    return scopedLoans.filter((loan) => {
+      if (loanOfficerFilter !== 'all') {
+        const officerName = String(loan.field_officer || '').trim().toLowerCase();
+        if (officerName !== loanOfficerFilter) return false;
+      }
+
+      if (selectedRouteId) {
+        const routeId = Number(loan.route?.id ?? loan.mf_route_id ?? 0);
+        if (routeId !== selectedRouteId) return false;
+      }
+
+      if (selectedCenterIdByFilter) {
+        const centerId = Number(loan.center?.id || 0);
+        if (centerId !== selectedCenterIdByFilter) return false;
+      }
+
+      return true;
+    });
+  }, [scopedLoans, loanOfficerFilter, loanRouteFilter, loanCenterFilter]);
 
   const routeCollections = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -387,7 +502,7 @@ export default function CollectionManagementPage() {
       return { routeId, routeName, routeCode };
     };
 
-    scopedLoans
+    filteredScopedLoans
       .filter((loan) => {
         if (loan.loan_scope !== 'route_loan') return false;
         const routeId = Number(loan.route?.id ?? loan.mf_route_id ?? 0);
@@ -425,7 +540,7 @@ export default function CollectionManagementPage() {
     return rows
       .filter((row) => [row.routeName, row.routeCode].join(' ').toLowerCase().includes(keyword))
       .sort((a, b) => a.routeName.localeCompare(b.routeName));
-  }, [scopedLoans, query]);
+  }, [filteredScopedLoans, query]);
 
   const centerCollections = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -443,7 +558,7 @@ export default function CollectionManagementPage() {
       }
     >();
 
-    scopedLoans
+    filteredScopedLoans
       .filter((loan) => loan.loan_scope === 'center_loan' && loan.center?.id)
       .forEach((loan) => {
         const centerId = loan.center!.id;
@@ -482,7 +597,7 @@ export default function CollectionManagementPage() {
         return haystack.includes(keyword);
       })
       .sort((a, b) => a.centerName.localeCompare(b.centerName));
-  }, [scopedLoans, query]);
+  }, [filteredScopedLoans, query]);
 
   const groupCollections = useMemo(() => {
     if (!selectedCenterId) return [];
@@ -500,7 +615,7 @@ export default function CollectionManagementPage() {
       }
     >();
 
-    scopedLoans
+    filteredScopedLoans
       .filter((loan) => loan.loan_scope === 'center_loan' && loan.center?.id === selectedCenterId)
       .forEach((loan) => {
         const groupId = loan.group?.id || 0;
@@ -534,7 +649,7 @@ export default function CollectionManagementPage() {
     return rows
       .filter((row) => [row.groupName, row.groupCode].join(' ').toLowerCase().includes(keyword))
       .sort((a, b) => a.groupName.localeCompare(b.groupName));
-  }, [scopedLoans, selectedCenterId, query]);
+  }, [filteredScopedLoans, selectedCenterId, query]);
 
   const selectedCenter = useMemo(
     () => centerCollections.find((row) => row.centerId === selectedCenterId) || null,
@@ -556,7 +671,7 @@ export default function CollectionManagementPage() {
 
     const keyword = query.trim().toLowerCase();
 
-    const rows = scopedLoans.filter(
+    const rows = filteredScopedLoans.filter(
       (loan) =>
         loan.loan_scope === 'center_loan' &&
         loan.center?.id === selectedCenterId &&
@@ -571,14 +686,14 @@ export default function CollectionManagementPage() {
         .toLowerCase();
       return haystack.includes(keyword);
     });
-  }, [scopedLoans, selectedCenterId, selectedGroupId, query]);
+  }, [filteredScopedLoans, selectedCenterId, selectedGroupId, query]);
 
   const routeLoanRecords = useMemo(() => {
     if (!selectedRouteId) return [];
 
     const keyword = query.trim().toLowerCase();
 
-    const rows = scopedLoans.filter(
+    const rows = filteredScopedLoans.filter(
       (loan) =>
         loan.loan_scope === 'route_loan' && Number(loan.route?.id ?? loan.mf_route_id ?? 0) === selectedRouteId
     );
@@ -591,7 +706,7 @@ export default function CollectionManagementPage() {
         .toLowerCase();
       return haystack.includes(keyword);
     });
-  }, [scopedLoans, selectedRouteId, query]);
+  }, [filteredScopedLoans, selectedRouteId, query]);
 
   const totalInstallment = useMemo(
     () => filteredLoans.reduce((sum, loan) => sum + Number(loan.installment_amount || 0), 0),
@@ -857,20 +972,35 @@ export default function CollectionManagementPage() {
       }
 
       closeCollectModal();
+      const modalLines = [
+        `Collected Amount: ${Number(savedCollection?.collected_amount || collectModal.amount || 0).toFixed(2)}`,
+        `Arrears Outstanding (Before): ${Number(breakdown.arrears_outstanding_before || 0).toFixed(2)}`,
+        `Arrears Deducted: ${Number(breakdown.arrears_deducted || 0).toFixed(2)}`,
+        `Arrears Outstanding (After): ${Number(breakdown.arrears_outstanding_after || 0).toFixed(2)}`,
+      ];
+
+      if (isAdmin) {
+        modalLines.push(
+          `Capital Collection: ${Number(breakdown.capital_amount || 0).toFixed(2)}`,
+          `Interest Collection: ${Number(breakdown.interest_amount || 0).toFixed(2)}`,
+          `Penalty Collection: ${Number(breakdown.penalty_amount || 0).toFixed(2)}`,
+          `Penalty Rate: ${Number(breakdown.penalty_rate || 0).toFixed(2)}% | Grace Days: ${Number(breakdown.grace_days || 0)} | Late Days: ${Number(breakdown.late_days || 0)}`,
+          `Profit (Interest + Penalty): ${Number(breakdown.profit_amount || 0).toFixed(2)}`,
+          `Business Fund (Capital): ${Number(breakdown.business_fund_amount || 0).toFixed(2)}`,
+          `Outstanding Principal: ${Number(breakdown.outstanding_principal_after || 0).toFixed(2)}`
+        );
+      } else {
+        modalLines.push(
+          `Penalty Collection: ${Number(breakdown.penalty_amount || 0).toFixed(2)}`,
+          `Penalty Rate: ${Number(breakdown.penalty_rate || 0).toFixed(2)}% | Grace Days: ${Number(breakdown.grace_days || 0)} | Late Days: ${Number(breakdown.late_days || 0)}`,
+          `Outstanding Principal: ${Number(breakdown.outstanding_principal_after || 0).toFixed(2)}`
+        );
+      }
+
       setNoticeModal({
         open: true,
         title: 'Collection Saved',
-        message:
-          `Arrears Outstanding (Before): ${Number(breakdown.arrears_outstanding_before || 0).toFixed(2)}\n` +
-          `Arrears Deducted: ${Number(breakdown.arrears_deducted || 0).toFixed(2)}\n` +
-          `Arrears Outstanding (After): ${Number(breakdown.arrears_outstanding_after || 0).toFixed(2)}\n` +
-          `Capital Collection: ${Number(breakdown.capital_amount || 0).toFixed(2)}\n` +
-          `Interest Collection: ${Number(breakdown.interest_amount || 0).toFixed(2)}\n` +
-          `Penalty Collection: ${Number(breakdown.penalty_amount || 0).toFixed(2)}\n` +
-          `Penalty Rate: ${Number(breakdown.penalty_rate || 0).toFixed(2)}% | Grace Days: ${Number(breakdown.grace_days || 0)} | Late Days: ${Number(breakdown.late_days || 0)}\n` +
-          `Profit (Interest + Penalty): ${Number(breakdown.profit_amount || 0).toFixed(2)}\n` +
-          `Business Fund (Capital): ${Number(breakdown.business_fund_amount || 0).toFixed(2)}\n` +
-          `Outstanding Principal: ${Number(breakdown.outstanding_principal_after || 0).toFixed(2)}`,
+        message: modalLines.join('\n'),
       });
     } catch (error: any) {
       const message = error?.response?.data?.message || 'Failed to save collection.';
@@ -922,20 +1052,24 @@ export default function CollectionManagementPage() {
           };
 
   const cards = [
-    {
-      id: 'center' as const,
-      title: 'Center Collection',
-      subtitle: 'Collect installments center-wise',
-      color: 'from-emerald-500 to-teal-500',
-      bg: 'from-emerald-50 to-teal-50',
-    },
-    {
-      id: 'route' as const,
-      title: 'Route Collection',
-      subtitle: 'Collect installments route-wise',
-      color: 'from-blue-500 to-cyan-500',
-      bg: 'from-blue-50 to-cyan-50',
-    },
+    ...(canViewCenterRouteCollections
+      ? [
+          {
+            id: 'center' as const,
+            title: 'Center Collection',
+            subtitle: 'Collect installments center-wise',
+            color: 'from-emerald-500 to-teal-500',
+            bg: 'from-emerald-50 to-teal-50',
+          },
+          {
+            id: 'route' as const,
+            title: 'Route Collection',
+            subtitle: 'Collect installments route-wise',
+            color: 'from-blue-500 to-cyan-500',
+            bg: 'from-blue-50 to-cyan-50',
+          },
+        ]
+      : []),
     ...(isFieldOfficer
       ? [
           {
@@ -954,15 +1088,30 @@ export default function CollectionManagementPage() {
           },
         ]
       : [
-          {
-            id: 'office' as const,
-            title: 'Office Collection',
-            subtitle: 'Collect direct/office installments',
-            color: 'from-amber-500 to-orange-500',
-            bg: 'from-amber-50 to-orange-50',
-          },
+          ...(canViewOfficeCollection && !isCollectionOfficer
+            ? [
+                {
+                  id: 'office' as const,
+                  title: 'Office Collection',
+                  subtitle: 'Collect direct/office installments',
+                  color: 'from-amber-500 to-orange-500',
+                  bg: 'from-amber-50 to-orange-50',
+                },
+              ]
+            : []),
         ]),
   ];
+
+  useEffect(() => {
+    const isOfficeModeBlocked = activeMode === 'office' && (!canViewOfficeCollection || isCollectionOfficer);
+    const isCenterRouteModeBlocked =
+      (activeMode === 'center' || activeMode === 'route') && !canViewCenterRouteCollections;
+
+    if (isOfficeModeBlocked || isCenterRouteModeBlocked) {
+      const fallbackMode = cards[0]?.id || 'today';
+      setActiveMode(fallbackMode);
+    }
+  }, [activeMode, canViewOfficeCollection, canViewCenterRouteCollections, isCollectionOfficer, cards]);
 
   if (!token || loading) {
     return (
@@ -1226,6 +1375,50 @@ export default function CollectionManagementPage() {
               </div>
             )}
             <div className="relative min-w-[260px]">
+              <div className="mb-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <select
+                  className="px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-black focus:outline-none focus:ring-2 focus:ring-cyan-200"
+                  value={loanOfficerFilter}
+                  onChange={(e) => setLoanOfficerFilter(e.target.value)}
+                >
+                  <option value="all">All Collection Officers</option>
+                  {loanOfficerOptions.map((officer) => (
+                    <option key={officer} value={officer.toLowerCase()}>
+                      {officer}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-black focus:outline-none focus:ring-2 focus:ring-cyan-200"
+                  value={loanRouteFilter}
+                  onChange={(e) => {
+                    setLoanRouteFilter(e.target.value);
+                    setLoanCenterFilter('all');
+                  }}
+                >
+                  <option value="all">All Routes</option>
+                  {loanRouteOptions.map((route) => (
+                    <option key={route.id} value={String(route.id)}>
+                      {route.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-black focus:outline-none focus:ring-2 focus:ring-cyan-200"
+                  value={loanCenterFilter}
+                  onChange={(e) => setLoanCenterFilter(e.target.value)}
+                >
+                  <option value="all">All Centers</option>
+                  {loanCenterOptions.map((center) => (
+                    <option key={center.id} value={String(center.id)}>
+                      {center.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <input
                 className="w-full pl-9 pr-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-black focus:outline-none focus:ring-2 focus:ring-cyan-200"
                 placeholder={
@@ -1335,9 +1528,9 @@ export default function CollectionManagementPage() {
                               className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
                             >
                               <td className="px-3 py-2 font-semibold text-slate-900">
-                                <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.customer_no}</span>
+                                <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
                               </td>
-                              <td className="px-3 py-2">{loan.customer_code || '-'}</td>
+                              <td className="px-3 py-2">{loan.customer_no || '-'}</td>
                               <td className="px-3 py-2">{loan.customer_name}</td>
                               <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
                               <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
@@ -1437,9 +1630,9 @@ export default function CollectionManagementPage() {
                               className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
                             >
                               <td className="px-3 py-2 font-semibold text-slate-900">
-                                <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.customer_no}</span>
+                                <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
                               </td>
-                              <td className="px-3 py-2">{loan.customer_code || '-'}</td>
+                              <td className="px-3 py-2">{loan.customer_no || '-'}</td>
                               <td className="px-3 py-2">{loan.customer_name}</td>
                               <td className="px-3 py-2">{loan.center?.name || '-'}</td>
                               <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
@@ -1509,9 +1702,9 @@ export default function CollectionManagementPage() {
                           className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
                         >
                           <td className="px-3 py-2 font-semibold text-slate-900">
-                            <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.customer_no}</span>
+                            <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
                           </td>
-                          <td className="px-3 py-2">{loan.customer_code || '-'}</td>
+                          <td className="px-3 py-2">{loan.customer_no || '-'}</td>
                           <td className="px-3 py-2">{loan.customer_name}</td>
                           <td className="px-3 py-2">{loan.route?.name || loan.route_name || '-'}</td>
                           <td className="px-3 py-2">{loan.center?.name || '-'}</td>

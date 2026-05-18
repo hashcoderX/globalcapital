@@ -2,7 +2,7 @@
 
 import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -64,11 +64,14 @@ const API_BASE = 'http://localhost:8000/api';
 
 export default function BlacklistedCustomerReportPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [token, setToken] = useState('');
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<BlacklistedReportRow[]>([]);
   const [riskFilter, setRiskFilter] = useState<'all' | 'high' | 'medium' | 'low'>('all');
+
+  const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
   const designationName = String(authUser?.designation?.name || '').toLowerCase();
   const isFieldOfficer = designationName.includes('field') && designationName.includes('officer');
@@ -99,9 +102,11 @@ export default function BlacklistedCustomerReportPage() {
       setLoading(true);
       try {
         const customerParams =
-          isFieldOfficer && authUser?.branch_id
-            ? { per_page: 1000, branch_id: authUser.branch_id }
-            : { per_page: 1000 };
+          branchId
+            ? { per_page: 1000, branch_id: branchId }
+            : isFieldOfficer && authUser?.branch_id
+              ? { per_page: 1000, branch_id: authUser.branch_id }
+              : { per_page: 1000 };
 
         const [customerRes, loanRes, collectionRes] = await Promise.all([
           axios.get(`${API_BASE}/customers`, {
@@ -116,11 +121,17 @@ export default function BlacklistedCustomerReportPage() {
               Authorization: `Bearer ${token}`,
               Accept: 'application/json',
             },
+            params: {
+              branch_id: branchId,
+            },
           }),
           axios.get(`${API_BASE}/microfinance/collections`, {
             headers: {
               Authorization: `Bearer ${token}`,
               Accept: 'application/json',
+            },
+            params: {
+              branch_id: branchId,
             },
           }),
         ]);
@@ -224,7 +235,7 @@ export default function BlacklistedCustomerReportPage() {
     };
 
     loadReport();
-  }, [token, isFieldOfficer, authUser?.branch_id]);
+  }, [token, isFieldOfficer, authUser?.branch_id, branchId]);
 
   const filteredRows = useMemo(() => {
     return rows.filter((row) => (riskFilter === 'all' ? true : row.riskLevel === riskFilter));
@@ -404,7 +415,7 @@ export default function BlacklistedCustomerReportPage() {
               <p className="text-sm text-slate-600 mt-1">Analyze blacklisted customers with linked loan exposure and arrears risk profile.</p>
             </div>
             <button
-              onClick={() => router.push('/dashboard/microfinance')}
+              onClick={() => router.back()}
               className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
             >
               Back

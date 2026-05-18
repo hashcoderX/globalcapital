@@ -1,0 +1,134 @@
+01.HRM
+  Employee
+     Add New Employee - /dashboard/hrm/employees  -  Add New Employee Modal
+     Edit Employee Details - /dashboard/hrm/employees - Edit Employee Modal  
+     Add Education -  /dashboard/hrm/employees - Education Modal
+     Add Experience - /dashboard/hrm/employees - Experience Modal
+     Add Documents - /dashboard/hrm/employees - Documents Modal
+     Add Allowances - /dashboard/hrm/employees - Allowances & Deductions Modal
+     Leave Management - /dashboard/hrm/employees - Leave Management Modal
+     Delete Employee - /dashboard/hrm/employees - Delete Function
+
+  Department 
+     Add Department - /dashboard/hrm/departments
+     Edit Department - /dashboard/hrm/departments - Edit Department Modal
+     Delete Department - /dashboard/hrm/departments - 
+ 
+  Designation
+     Designation Management (View/Delete) - /dashboard/hrm/designations
+
+  Attendance
+     Attendance Management - /dashboard/hrm/attendance
+     
+  Leave
+     New Leave Request  - /dashboard/hrm/leaves 
+     Approve Leave  - /dashboard/hrm/leaves  - New Leave Request
+     Reject Leave - /dashboard/hrm/leaves 
+     Manage Leave Types - /dashboard/hrm/leaves
+     Delete Leave - /dashboard/hrm/leaves
+     Edit Leave - /dashboard/hrm/leaves
+
+  Roles(Designation) & Privileges
+     Add New Role - /dashboard/hrm/roles
+     Delete Role - /dashboard/hrm/roles
+     Edit Role - /dashboard/hrm/roles
+
+  Payroll Management
+     Generate Payroll - /dashboard/hrm/payroll
+
+  Candidates
+     Add Candidate - /dashboard/hrm/candidates
+     View Candidate - /dashboard/hrm/candidates
+     Edit Candidate - /dashboard/hrm/candidates
+     Delete Candidate - /dashboard/hrm/candidates
+
+
+02.Credit
+     Loan Management - /dashboard/loan
+         New Loan Request - /dashboard/loan/request
+         Loan Request View - /dashboard/loan/requests
+         Request Queue - /dashboard/loan/requests
+         Credit Module - /dashboard/credit
+  
+     Finance Management - /dashboard/finance
+         Issue Finance - /dashboard/finance/issue
+         Approvals - /dashboard/finance/approvals
+         Finance Customer Handling - /dashboard/finance/customers
+         Finance Reports - /dashboard/finance/reports
+         Finance Collection - /dashboard/finance/collections
+     
+     Microfinance  - /dashboard/microfinance
+         Loan Management - /dashboard/microfinance/loans
+             Request Loan - /dashboard/microfinance/loans/request
+             Loan Approvals - /dashboard/microfinance/loans/approvals
+             View Related Loans - /dashboard/microfinance/loans/released
+
+         Collection Management - /dashboard/microfinance/collections
+             Center Collection -  /dashboard/microfinance/collections
+             Route Collection - /dashboard/microfinance/collections
+             Office Collection - /dashboard/microfinance/collections
+         
+         Payments View - /dashboard/microfinance/payments
+         
+         Microfinance Customers - /dashboard/microfinance/customers
+
+          Summary Report Workspace - /dashboard/microfinance
+             Summary Report Total Outstanding Amount - /dashboard/microfinance
+             Summary Report Today Collection - /dashboard/microfinance
+             Summary Report Asset Value Total - /dashboard/microfinance
+             Summary Report Month Collection - /dashboard/microfinance
+             Summary Report Imagine Profit - /dashboard/microfinance
+             Summary Report Today Profit - /dashboard/microfinance
+             Summary Report Month Profit - /dashboard/microfinance
+ 
+         Settings Workspace - /dashboard/microfinance/settings
+             Create Route - Create Route function
+             Create Center - Create Center function
+             Create Group - Create Group function
+             Mark Holiday - Mark Holiday function
+             Add Initial Penalty Rate - Add Initial Penalty Rate function
+             Loan Hold / Close Control - Loan Hold / Close Control
+             
+      Mortgage Management - /dashboard/mortgages
+             Create Mortgage - /dashboard/mortgages/create
+             Mortgage Approvals - /dashboard/mortgages/approvals
+             Mortgage Portfolio - /dashboard/mortgages/portfolio
+             Collection Management - /dashboard/mortgages/collections
+             Mortgage Reports - /dashboard/mortgages/reports
+         
+03. Savings & Deposits - /dashboard/savings-deposits
+      Manage Accounts  - /dashboard/savings-deposits/accounts
+
+04. Branch Management - /dashboard/branches
+05. Reports
+      Micro Finance Related Reports
+         Collection Report - /dashboard/microfinance/reports/collection
+         Field Officer Collection Report - /dashboard/microfinance/reports/field-officer-collection
+         Arrears Report - /dashboard/microfinance/reports/arrears
+         Active Member Report - /dashboard/microfinance/reports/active-members
+         Blacklisted Customer Report - /dashboard/microfinance/reports/blacklisted-customers
+         Re-Payment Report - /dashboard/microfinance/reports/repayment
+         Recovery Report - /dashboard/microfinance/reports/recovery
+
+      Mortgage Management Related Reports 
+         Mortgage Collection Report - /dashboard/mortgages/reports/collection
+         Mortgage Arrears Report - /dashboard/mortgages/reports/arrears
+         Mortgage Portfolio Report - /dashboard/mortgages/reports/portfolio
+      
+      Savings and Deposit Related Reports
+         Savings Ledger Report - /dashboard/savings-deposits/reports/ledger
+         Deposit Growth Report - /dashboard/savings-deposits/reports/deposit-growth
+         Maturity Report - /dashboard/savings-deposits/reports/maturity
+  
+      Finance Management Related Reports
+         Income and Expense Report - /dashboard/finance/reports/income-expense
+         Cash Flow Report - /dashboard/mortgages/reports/arrears
+         General Ledger Snapshot - /dashboard/finance/reports/general-ledger
+
+      Branch Management Related Reports
+         Branch Performance Report 
+         Branch Collection Report
+         Branch Staff Productivity Report
+
+06.Company Settings
+  

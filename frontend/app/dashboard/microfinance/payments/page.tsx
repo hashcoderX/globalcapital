@@ -11,6 +11,7 @@ type AuthUser = {
   branch_id?: number | null;
   designation?: { id: number; name: string } | null;
   employee?: { id: number; first_name?: string; last_name?: string; email?: string } | null;
+  roles?: Array<{ id?: number; name?: string }>;
 };
 
 type LoanRow = {
@@ -18,6 +19,7 @@ type LoanRow = {
   branch_id?: number | string | null;
   field_officer?: string | null;
   field_officer_id?: number | string | null;
+  loan_code?: string | null;
   next_payment_date?: string | null;
   customer_no?: string | null;
   customer_name?: string | null;
@@ -30,6 +32,7 @@ type LoanRow = {
 
 type LoanLookupRow = {
   id: number;
+  loan_code: string;
   customer_no: string;
   customer_name: string;
   customer_nic: string;
@@ -59,6 +62,7 @@ type PaymentRow = {
     customer_name?: string;
   } | null;
   customer_no?: string;
+  loan_code?: string;
   customer_name?: string;
   customer_nic?: string;
   field_officer?: string;
@@ -88,6 +92,8 @@ export default function MicrofinancePaymentsPage() {
   const [customerNoFilter, setCustomerNoFilter] = useState('');
   const [customerNicFilter, setCustomerNicFilter] = useState('');
   const [customerNameFilter, setCustomerNameFilter] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [selectedLoanId, setSelectedLoanId] = useState<number | null>(null);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [deletingInvoiceId, setDeletingInvoiceId] = useState<number | null>(null);
@@ -101,8 +107,29 @@ export default function MicrofinancePaymentsPage() {
     message: '',
   });
 
-  const designationName = String(authUser?.designation?.name || '').toLowerCase();
-  const isFieldOfficer = designationName.includes('field') && designationName.includes('officer');
+  const normalizeText = (value: string) =>
+    String(value || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const designationName = normalizeText(String(authUser?.designation?.name || ''));
+  const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+
+  const isAdmin =
+    normalizeText(String(authUser?.email || '')) === 'superadmin softcodelk com' ||
+    designationName.includes('admin') ||
+    roleNames.some((name) => name.includes('admin'));
+
+  const isManager =
+    designationName.includes('manager') ||
+    roleNames.some((name) => name.includes('manager'));
+
+  const isCollectionOfficer =
+    designationName.includes('collection officer') ||
+    roleNames.some((name) => name.includes('collection officer'));
 
   const headers = useMemo(
     () => ({
@@ -118,7 +145,7 @@ export default function MicrofinancePaymentsPage() {
       .trim();
 
     return [authUser?.name, fullName, authUser?.email, authUser?.employee?.email]
-      .map((v) => String(v || '').trim().toLowerCase())
+        .map((v) => normalizeText(String(v || '')))
       .filter((v, i, arr) => v !== '' && arr.indexOf(v) === i);
   }, [authUser]);
 
@@ -159,11 +186,12 @@ export default function MicrofinancePaymentsPage() {
         const allLoans: LoanRow[] = Array.isArray(loanRes.data) ? loanRes.data : [];
         const rawPayments: PaymentRow[] = Array.isArray(paymentRes.data) ? paymentRes.data : [];
 
-        const loanMetaMap = new Map<number, { customer_no: string; customer_name: string; customer_nic: string }>();
+        const loanMetaMap = new Map<number, { loan_code: string; customer_no: string; customer_name: string; customer_nic: string }>();
         const loanOfficerMap = new Map<number, { field_officer: string; field_officer_id: number }>();
         allLoans.forEach((loan) => {
           const loanId = Number(loan.id);
           loanMetaMap.set(Number(loan.id), {
+            loan_code: String(loan.loan_code || ''),
             customer_no: String(loan.customer_no || ''),
             customer_name: String(loan.customer_name || ''),
             customer_nic: String(loan.nic || ''),
@@ -183,12 +211,14 @@ export default function MicrofinancePaymentsPage() {
 
           const customerNo =
             String(row.customer_no || relationMeta?.customer_no || mapMeta?.customer_no || '').trim();
+          const loanCode = String(row.loan_code || mapMeta?.loan_code || '').trim();
           const customerName =
             String(row.customer_name || relationMeta?.customer_name || mapMeta?.customer_name || '').trim();
           const customerNic = String(row.customer_nic || mapMeta?.customer_nic || '').trim();
 
           return {
             ...row,
+            loan_code: loanCode || '-',
             customer_no: customerNo || '-',
             customer_name: customerName || '-',
             customer_nic: customerNic || '-',
@@ -201,46 +231,38 @@ export default function MicrofinancePaymentsPage() {
           };
         });
 
-        if (!isFieldOfficer) {
-          setPayments(allPayments);
-          const catalog = allLoans.map((loan) => ({
-            id: Number(loan.id),
-            customer_no: String(loan.customer_no || '-'),
-            customer_name: String(loan.customer_name || '-'),
-            customer_nic: String(loan.nic || '-'),
-            field_officer: String(loan.field_officer || 'Unassigned'),
-            issue_amount: Number(loan.net_disbursed_amount || loan.loan_amount || 0),
-            issue_date: String(loan.loan_request_date || loan.created_at || ''),
-          }));
-          setLoansCatalog(catalog);
-          return;
-        }
-
         const branchId = Number(authUser?.branch_id || 0);
         const authOfficerId = Number(authUser?.employee?.id || 0);
 
-        const scopedLoanIds = new Set(
-          allLoans
-            .filter((loan) => {
-              const loanBranchId = Number(loan.branch_id || 0);
-              const loanOfficerId = Number(loan.field_officer_id || 0);
-              const loanOfficer = String(loan.field_officer || '').trim().toLowerCase();
+        const scopedLoans = allLoans.filter((loan) => {
+          const loanBranchId = Number(loan.branch_id || 0);
+          const loanOfficerId = Number(loan.field_officer_id || 0);
+          const loanOfficer = normalizeText(String(loan.field_officer || '').trim());
 
-              const isBranchMatch = branchId > 0 ? loanBranchId === branchId : true;
-              const isOfficerIdMatch = authOfficerId > 0 && loanOfficerId > 0 ? loanOfficerId === authOfficerId : false;
-              const isOfficerNameMatch = loanOfficer !== '' ? officerNameCandidates.includes(loanOfficer) : false;
+          if (isAdmin) {
+            return true;
+          }
 
-              return isBranchMatch && (isOfficerIdMatch || isOfficerNameMatch);
-            })
-            .map((loan) => Number(loan.id))
-        );
+          if (isManager) {
+            return branchId > 0 && loanBranchId === branchId;
+          }
 
+          if (isCollectionOfficer) {
+            const isOfficerIdMatch = authOfficerId > 0 && loanOfficerId > 0 ? loanOfficerId === authOfficerId : false;
+            const isOfficerNameMatch = loanOfficer !== '' ? officerNameCandidates.includes(loanOfficer) : false;
+            const isBranchMatch = branchId > 0 ? loanBranchId === branchId : true;
+            return isBranchMatch && (isOfficerIdMatch || isOfficerNameMatch);
+          }
+
+          return branchId > 0 ? loanBranchId === branchId : false;
+        });
+
+        const scopedLoanIds = new Set(scopedLoans.map((loan) => Number(loan.id)));
         setPayments(allPayments.filter((row) => scopedLoanIds.has(Number(row.mf_loan_request_id || 0))));
 
-        const scopedCatalog = allLoans
-          .filter((loan) => scopedLoanIds.has(Number(loan.id || 0)))
-          .map((loan) => ({
+        const catalog = scopedLoans.map((loan) => ({
             id: Number(loan.id),
+          loan_code: String(loan.loan_code || '-'),
             customer_no: String(loan.customer_no || '-'),
             customer_name: String(loan.customer_name || '-'),
             customer_nic: String(loan.nic || '-'),
@@ -248,8 +270,7 @@ export default function MicrofinancePaymentsPage() {
             issue_amount: Number(loan.net_disbursed_amount || loan.loan_amount || 0),
             issue_date: String(loan.loan_request_date || loan.created_at || ''),
           }));
-
-        setLoansCatalog(scopedCatalog);
+        setLoansCatalog(catalog);
       } catch {
         setPayments([]);
         setLoansCatalog([]);
@@ -259,7 +280,7 @@ export default function MicrofinancePaymentsPage() {
     };
 
     loadPayments();
-  }, [token, headers, isFieldOfficer, authUser?.branch_id, authUser?.employee?.id, officerNameCandidates, reloadCounter]);
+  }, [token, headers, isAdmin, isManager, isCollectionOfficer, authUser?.branch_id, authUser?.employee?.id, officerNameCandidates, reloadCounter]);
 
   const openDeleteConfirm = (invoiceId: number) => {
     setPendingDeleteInvoiceId(invoiceId);
@@ -426,6 +447,10 @@ export default function MicrofinancePaymentsPage() {
     [loansCatalog, selectedLoanId]
   );
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query, fromDate, toDate, fieldOfficerFilter, loanIdFilter, customerNoFilter, customerNicFilter, customerNameFilter, pageSize]);
+
   const selectedLoanPayments = useMemo(() => {
     if (!selectedLoanId) return [];
 
@@ -563,6 +588,11 @@ export default function MicrofinancePaymentsPage() {
     };
   }, [filteredPayments]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredPayments.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  const paginatedPayments = filteredPayments.slice(startIndex, startIndex + pageSize);
+
   const formatDisplayDateTime = (collectionDate?: string | null, createdAt?: string | null) => {
     const dateText = String(collectionDate || '').trim();
     const createdText = String(createdAt || '').trim();
@@ -609,68 +639,69 @@ export default function MicrofinancePaymentsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
+    <div className="min-h-screen bg-gradient-to-br from-slate-100 via-cyan-50 to-emerald-100 p-6 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-55">
+        <div className="absolute -top-24 left-10 h-80 w-80 rounded-full bg-sky-300/80 blur-3xl"></div>
+        <div className="absolute top-16 right-8 h-[26rem] w-[26rem] rounded-full bg-cyan-300/70 blur-3xl"></div>
+        <div className="absolute -bottom-8 left-1/3 h-80 w-80 rounded-full bg-emerald-300/65 blur-3xl"></div>
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.55),transparent_45%),radial-gradient(circle_at_bottom_right,rgba(20,184,166,0.12),transparent_40%)]"></div>
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
+        <div className="bg-white/78 backdrop-blur-2xl rounded-3xl border border-cyan-100/80 shadow-[0_26px_70px_-34px_rgba(14,116,144,0.55)] p-6 md:p-7">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
-                Payments Desk
+              <span className="inline-flex rounded-full bg-white/90 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100 shadow-sm">
+                Finance Collections Studio
               </span>
               <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Microfinance Payments</h1>
-              <p className="text-sm text-slate-600 mt-1">Track received payments, methods, and transaction references.</p>
+              <p className="text-sm text-slate-600 mt-1 max-w-2xl">Track received payments, methods, and transaction references with a richer real-time operations view.</p>
             </div>
             <button
               onClick={() => router.push('/dashboard/microfinance')}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-white to-cyan-50 hover:from-white hover:to-sky-50 text-slate-700 text-sm font-semibold border border-cyan-200 shadow-sm"
             >
               Back
             </button>
           </div>
 
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-slate-50 border border-white shadow-[0_12px_28px_-20px_rgba(15,23,42,0.45)] p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Payments</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{totals.count}</p>
+              <p className="text-xl font-bold text-slate-900 mt-1">{totals.count}</p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-cyan-50 border border-cyan-100 shadow-[0_12px_28px_-20px_rgba(6,182,212,0.35)] p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Total Collection</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+              <p className="text-lg md:text-xl font-bold text-slate-900 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalAmount)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-sky-50 border border-sky-100 shadow-[0_12px_28px_-20px_rgba(14,165,233,0.35)] p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Total Capital</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+              <p className="text-lg md:text-xl font-bold text-slate-900 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalCapital)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-indigo-50 border border-indigo-100 shadow-[0_12px_28px_-20px_rgba(99,102,241,0.3)] p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Total Interest</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+              <p className="text-lg md:text-xl font-bold text-slate-900 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalInterest)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-emerald-50 border border-emerald-100 shadow-[0_12px_28px_-20px_rgba(16,185,129,0.4)] p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Today Collected</p>
-              <p className="text-2xl font-extrabold text-emerald-700 mt-1">
+              <p className="text-lg md:text-xl font-bold text-emerald-700 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.todayAmount)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-amber-50 border border-amber-100 shadow-[0_12px_28px_-20px_rgba(245,158,11,0.35)] p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Cash / Bank</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{totals.cashCount} / {totals.bankCount}</p>
+              <p className="text-xl font-bold text-slate-900 mt-1">{totals.cashCount} / {totals.bankCount}</p>
             </div>
           </div>
         </div>
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+        <div className="bg-white/88 backdrop-blur-2xl rounded-3xl border border-cyan-100 shadow-[0_20px_46px_-26px_rgba(14,116,144,0.5)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">
               {selectedLoan
@@ -679,7 +710,7 @@ export default function MicrofinancePaymentsPage() {
             </h2>
             <div className="relative min-w-[280px]">
               <input
-                className="w-full pl-9 pr-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-black focus:outline-none focus:ring-2 focus:ring-cyan-200"
+                className="w-full pl-9 pr-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-black shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-200"
                 placeholder="Search by loan, customer, field officer, type, reference"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -688,14 +719,14 @@ export default function MicrofinancePaymentsPage() {
             </div>
           </div>
 
-          <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50/60 to-sky-50/50 p-3">
             <div>
               <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">From Date</label>
               <input
                 type="date"
                 value={fromDate}
                 onChange={(e) => setFromDate(e.target.value)}
-                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 shadow-sm"
               />
             </div>
             <div>
@@ -704,7 +735,7 @@ export default function MicrofinancePaymentsPage() {
                 type="date"
                 value={toDate}
                 onChange={(e) => setToDate(e.target.value)}
-                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 shadow-sm"
               />
             </div>
             <div>
@@ -712,7 +743,7 @@ export default function MicrofinancePaymentsPage() {
               <select
                 value={fieldOfficerFilter}
                 onChange={(e) => setFieldOfficerFilter(e.target.value)}
-                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 shadow-sm"
               >
                 <option value="all">All Officers</option>
                 {officerOptions.map((officer) => (
@@ -737,14 +768,14 @@ export default function MicrofinancePaymentsPage() {
                   setIsHistoryModalOpen(false);
                   setQuery('');
                 }}
-                className="w-full px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold"
+                className="w-full px-3 py-2 rounded-xl bg-gradient-to-r from-slate-100 to-cyan-50 hover:from-slate-200 hover:to-cyan-100 text-slate-700 text-sm font-semibold border border-slate-200"
               >
                 Reset Filters
               </button>
             </div>
           </div>
 
-          <div className="mt-2 grid grid-cols-1 md:grid-cols-4 gap-2">
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-white/70 p-3">
             <div>
               <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Loan ID</label>
               <input
@@ -754,7 +785,7 @@ export default function MicrofinancePaymentsPage() {
                   setIsHistoryModalOpen(false);
                   setLoanIdFilter(e.target.value);
                 }}
-                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 shadow-sm"
                 placeholder="e.g. 120"
               />
             </div>
@@ -767,7 +798,7 @@ export default function MicrofinancePaymentsPage() {
                   setIsHistoryModalOpen(false);
                   setCustomerNoFilter(e.target.value);
                 }}
-                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 shadow-sm"
                 placeholder="e.g. RL-001"
               />
             </div>
@@ -780,7 +811,7 @@ export default function MicrofinancePaymentsPage() {
                   setIsHistoryModalOpen(false);
                   setCustomerNicFilter(e.target.value);
                 }}
-                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 shadow-sm"
                 placeholder="NIC / passport"
               />
             </div>
@@ -793,7 +824,7 @@ export default function MicrofinancePaymentsPage() {
                   setIsHistoryModalOpen(false);
                   setCustomerNameFilter(e.target.value);
                 }}
-                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                className="mt-1 w-full px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 shadow-sm"
                 placeholder="Customer name"
               />
             </div>
@@ -824,7 +855,7 @@ export default function MicrofinancePaymentsPage() {
                           : 'border-cyan-100 bg-white/80 hover:bg-white text-slate-700'
                       }`}
                     >
-                      <p className="text-sm font-semibold">Loan #{loan.id} | {loan.customer_no}</p>
+                      <p className="text-sm font-semibold">{loan.loan_code || '-'} | {loan.customer_no}</p>
                       <p className="text-xs text-slate-600">{loan.customer_name} | NIC: {loan.customer_nic}</p>
                     </button>
                   ))}
@@ -838,55 +869,101 @@ export default function MicrofinancePaymentsPage() {
               No payment records found.
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
-              <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70 text-slate-700">
-                  <tr>
-                    <th className="px-3 py-2 font-semibold">Date & Time</th>
-                    <th className="px-3 py-2 font-semibold">Loan Code</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Customer NIC</th>
-                    <th className="px-3 py-2 font-semibold">Field Officer</th>
-                    <th className="px-3 py-2 font-semibold">Type</th>
-                    <th className="px-3 py-2 font-semibold">Reference</th>
-                    <th className="px-3 py-2 font-semibold">Collected</th>
-                    <th className="px-3 py-2 font-semibold">Capital</th>
-                    <th className="px-3 py-2 font-semibold">Interest</th>
-                    <th className="px-3 py-2 font-semibold">Penalty</th>
-                    <th className="px-3 py-2 font-semibold">Note</th>
-                    <th className="px-3 py-2 font-semibold">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPayments.map((row) => (
-                    <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                      <td className="px-3 py-2">{formatDisplayDateTime(row.collection_date, row.created_at)}</td>
-                      <td className="px-3 py-2 font-semibold text-slate-900">{row.loanRequest?.customer_no || row.customer_no || '-'}</td>
-                      <td className="px-3 py-2">{row.loanRequest?.customer_name || row.customer_name || '-'}</td>
-                      <td className="px-3 py-2">{row.customer_nic || '-'}</td>
-                      <td className="px-3 py-2">{row.field_officer || '-'}</td>
-                      <td className="px-3 py-2 capitalize">{String(row.payment_type || '-').replace('_', ' ')}</td>
-                      <td className="px-3 py-2">{row.payment_reference || '-'}</td>
-                      <td className="px-3 py-2 font-semibold text-emerald-700">{Number(row.collected_amount || 0).toFixed(2)}</td>
-                      <td className="px-3 py-2">{Number(row.capital_amount || 0).toFixed(2)}</td>
-                      <td className="px-3 py-2">{Number(row.interest_amount || 0).toFixed(2)}</td>
-                      <td className="px-3 py-2">{Number(row.penalty_amount || 0).toFixed(2)}</td>
-                      <td className="px-3 py-2">{row.note || '-'}</td>
-                      <td className="px-3 py-2">
-                        <button
-                          type="button"
-                          onClick={() => openDeleteConfirm(row.id)}
-                          disabled={deletingInvoiceId === row.id}
-                          className="rounded-lg bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {deletingInvoiceId === row.id ? 'Deleting...' : 'Delete'}
-                        </button>
-                      </td>
+            <>
+              <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 shadow-[0_16px_30px_-24px_rgba(8,47,73,0.45)]">
+                <table className="min-w-full text-sm text-left text-slate-700 bg-white">
+                  <thead className="bg-gradient-to-r from-cyan-50 to-sky-50 text-slate-700">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Date & Time</th>
+                      <th className="px-3 py-2 font-semibold">Loan Code</th>
+                      <th className="px-3 py-2 font-semibold">Customer No</th>
+                      <th className="px-3 py-2 font-semibold">Customer</th>
+                      <th className="px-3 py-2 font-semibold">Customer NIC</th>
+                      <th className="px-3 py-2 font-semibold">Field Officer</th>
+                      <th className="px-3 py-2 font-semibold">Type</th>
+                      <th className="px-3 py-2 font-semibold">Reference</th>
+                      <th className="px-3 py-2 font-semibold">Collected</th>
+                      <th className="px-3 py-2 font-semibold">Capital</th>
+                      <th className="px-3 py-2 font-semibold">Interest</th>
+                      <th className="px-3 py-2 font-semibold">Penalty</th>
+                      <th className="px-3 py-2 font-semibold">Note</th>
+                      <th className="px-3 py-2 font-semibold">Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {paginatedPayments.map((row) => (
+                      <tr key={row.id} className="border-b border-cyan-100/90 last:border-b-0 odd:bg-white even:bg-cyan-50/25 hover:bg-cyan-50/55 transition-colors">
+                        <td className="px-3 py-2">{formatDisplayDateTime(row.collection_date, row.created_at)}</td>
+                        <td className="px-3 py-2 font-semibold text-slate-900">{row.loan_code || '-'}</td>
+                        <td className="px-3 py-2">{row.loanRequest?.customer_no || row.customer_no || '-'}</td>
+                        <td className="px-3 py-2">{row.loanRequest?.customer_name || row.customer_name || '-'}</td>
+                        <td className="px-3 py-2">{row.customer_nic || '-'}</td>
+                        <td className="px-3 py-2">{row.field_officer || '-'}</td>
+                        <td className="px-3 py-2 capitalize">{String(row.payment_type || '-').replace('_', ' ')}</td>
+                        <td className="px-3 py-2">{row.payment_reference || '-'}</td>
+                        <td className="px-3 py-2 font-semibold text-emerald-700">{Number(row.collected_amount || 0).toFixed(2)}</td>
+                        <td className="px-3 py-2">{Number(row.capital_amount || 0).toFixed(2)}</td>
+                        <td className="px-3 py-2">{Number(row.interest_amount || 0).toFixed(2)}</td>
+                        <td className="px-3 py-2">{Number(row.penalty_amount || 0).toFixed(2)}</td>
+                        <td className="px-3 py-2">{row.note || '-'}</td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => openDeleteConfirm(row.id)}
+                            disabled={deletingInvoiceId === row.id}
+                            className="rounded-lg bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {deletingInvoiceId === row.id ? 'Deleting...' : 'Delete'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-slate-600">
+                  Showing {filteredPayments.length === 0 ? 0 : startIndex + 1}-{Math.min(startIndex + pageSize, filteredPayments.length)} of {filteredPayments.length}
+                </p>
+
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-slate-600">Rows:</label>
+                  <select
+                    className="px-2 py-1 rounded-lg border border-cyan-100 bg-white text-sm text-slate-800"
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                  >
+                    <option value={5}>5</option>
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                    <option value={50}>50</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                    disabled={safePage === 1}
+                    className="px-3 py-1.5 rounded-lg border border-cyan-100 bg-white text-sm text-slate-700 disabled:opacity-50"
+                  >
+                    Prev
+                  </button>
+                  <span className="px-3 py-1.5 rounded-lg border border-cyan-100 bg-white text-sm text-slate-700">
+                    Page {safePage} of {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                    disabled={safePage === totalPages}
+                    className="px-3 py-1.5 rounded-lg border border-cyan-100 bg-white text-sm text-slate-700 disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -911,7 +988,7 @@ export default function MicrofinancePaymentsPage() {
                     Loan Payment History
                   </p>
                   <h3 className="text-xl font-extrabold text-slate-900 mt-3">
-                  Loan #{selectedLoan.id} | {selectedLoan.customer_no}
+                  {selectedLoan.loan_code || '-'} | {selectedLoan.customer_no}
                   </h3>
                   <p className="text-sm text-slate-700 mt-1.5">
                     {selectedLoan.customer_name} | NIC: {selectedLoan.customer_nic}
@@ -926,26 +1003,26 @@ export default function MicrofinancePaymentsPage() {
                 </button>
               </div>
 
-              <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2.5">
-                <div className="rounded-xl border border-white/80 bg-white/70 px-3 py-2.5">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Payments</p>
-                  <p className="text-lg font-extrabold text-slate-900">{selectedLoanHistoryStats.count}</p>
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                <div className="rounded-xl border border-white/80 bg-white/75 px-3 py-3 sm:px-4 sm:py-3.5 min-h-[84px] flex flex-col justify-between">
+                  <p className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-500">Payments</p>
+                  <p className="text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words">{selectedLoanHistoryStats.count}</p>
                 </div>
-                <div className="rounded-xl border border-white/80 bg-white/70 px-3 py-2.5">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Collected</p>
-                  <p className="text-lg font-extrabold text-emerald-700">
+                <div className="rounded-xl border border-white/80 bg-white/75 px-3 py-3 sm:px-4 sm:py-3.5 min-h-[84px] flex flex-col justify-between">
+                  <p className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-500">Collected</p>
+                  <p className="text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-emerald-700 break-words [overflow-wrap:anywhere]">
                     {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.collected)}
                   </p>
                 </div>
-                <div className="rounded-xl border border-white/80 bg-white/70 px-3 py-2.5">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Capital</p>
-                  <p className="text-lg font-extrabold text-slate-900">
+                <div className="rounded-xl border border-white/80 bg-white/75 px-3 py-3 sm:px-4 sm:py-3.5 min-h-[84px] flex flex-col justify-between">
+                  <p className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-500">Capital</p>
+                  <p className="text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words [overflow-wrap:anywhere]">
                     {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.capital)}
                   </p>
                 </div>
-                <div className="rounded-xl border border-white/80 bg-white/70 px-3 py-2.5">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Interest</p>
-                  <p className="text-lg font-extrabold text-slate-900">
+                <div className="rounded-xl border border-white/80 bg-white/75 px-3 py-3 sm:px-4 sm:py-3.5 min-h-[84px] flex flex-col justify-between">
+                  <p className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-500">Interest</p>
+                  <p className="text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words [overflow-wrap:anywhere]">
                     {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.interest)}
                   </p>
                 </div>

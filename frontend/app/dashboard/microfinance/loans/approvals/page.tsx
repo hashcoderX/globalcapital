@@ -8,6 +8,9 @@ type LoanRequest = {
   id: number;
   customer_no: string;
   customer_name: string;
+  manager_name?: string | null;
+  field_officer?: string | null;
+  branch_id?: number | null;
   loan_scope: 'route_loan' | 'center_loan' | 'direct_loan';
   loan_amount: string | number;
   refundable_amount: string | number;
@@ -18,12 +21,28 @@ type LoanRequest = {
   refund_option: 'day' | 'week' | 'month';
   status: string;
   route?: { id: number; name: string; code: string } | null;
+  branch?: { id: number; name: string } | null;
   center?: { id: number; name: string; code: string } | null;
   group?: { id: number; name: string; code: string } | null;
   loan_request_date: string;
   documents_requested?: boolean;
   document_request_note?: string | null;
   document_requested_at?: string | null;
+};
+
+type AuthRole = {
+  id?: number;
+  name?: string;
+};
+
+type AuthUser = {
+  id?: number;
+  name?: string;
+  email?: string;
+  branch_id?: number | null;
+  designation?: { id?: number; name?: string } | null;
+  employee?: { id?: number; first_name?: string; last_name?: string; email?: string } | null;
+  roles?: AuthRole[];
 };
 
 const API_BASE = 'http://localhost:8000/api';
@@ -53,9 +72,18 @@ const shiftDateByRefundOption = (refundOption: LoanRequest['refund_option'], ste
   return toInputDate(base);
 };
 
+const getResponsibleRoles = (loanAmount: number): string[] => {
+  if (loanAmount < 10000) {
+    return ['Assistant Manager', 'Loan Approver', 'Finance Manager', 'Branch Manager', 'Admin'];
+  }
+
+  return ['Loan Approver', 'Finance Manager', 'Branch Manager', 'Admin'];
+};
+
 export default function LoanApprovalsPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [requests, setRequests] = useState<LoanRequest[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [approvingId, setApprovingId] = useState<number | null>(null);
@@ -93,6 +121,78 @@ export default function LoanApprovalsPage() {
     [token]
   );
 
+  const normalizeText = (value: string) =>
+    String(value || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const isCollectionOfficer = useMemo(() => {
+    const designationName = normalizeText(String(authUser?.designation?.name || ''));
+    const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+
+    if (designationName.includes('collection officer')) {
+      return true;
+    }
+
+    return roleNames.some((name) => name.includes('collection officer'));
+  }, [authUser]);
+
+  const officerNameCandidates = useMemo(() => {
+    const employeeFullName = [authUser?.employee?.first_name || '', authUser?.employee?.last_name || '']
+      .join(' ')
+      .trim();
+
+    return [
+      String(authUser?.name || '').trim(),
+      employeeFullName,
+      String(authUser?.employee?.email || '').trim(),
+      String(authUser?.email || '').trim(),
+    ]
+      .map((value) => normalizeText(value))
+      .filter((value, index, arr) => value !== '' && arr.indexOf(value) === index);
+  }, [authUser]);
+
+  const preferredOfficerName = useMemo(() => {
+    const rawCandidates = [
+      String(authUser?.name || '').trim(),
+      [authUser?.employee?.first_name || '', authUser?.employee?.last_name || ''].join(' ').trim(),
+      String(authUser?.employee?.email || '').trim(),
+      String(authUser?.email || '').trim(),
+    ].filter((value, index, arr) => value !== '' && arr.indexOf(value) === index);
+
+    return rawCandidates[0] || '';
+  }, [authUser]);
+
+  const canApproveOrReject = useMemo(() => {
+    const normalize = (value: string) =>
+      String(value || '')
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const allowedRoleKeywords = ['loan approver', 'finance manager', 'branch manager', 'admin'];
+
+    const email = normalize(String(authUser?.email || ''));
+    if (email === 'superadmin softcodelk com') {
+      return true;
+    }
+
+    const roleNames = (authUser?.roles || []).map((role) => normalize(String(role?.name || '')));
+    const designationName = normalize(String(authUser?.designation?.name || ''));
+
+    const hasAllowedRole = roleNames.some((roleName) =>
+      allowedRoleKeywords.some((keyword) => roleName.includes(keyword))
+    );
+    const hasAllowedDesignation = allowedRoleKeywords.some((keyword) => designationName.includes(keyword));
+
+    return hasAllowedRole || hasAllowedDesignation;
+  }, [authUser]);
+
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
@@ -100,12 +200,26 @@ export default function LoanApprovalsPage() {
       return;
     }
     setToken(storedToken);
+
+    const storedUser = localStorage.getItem('auth_user');
+    if (storedUser) {
+      try {
+        setAuthUser(JSON.parse(storedUser));
+      } catch {
+        setAuthUser(null);
+      }
+    } else {
+      setAuthUser(null);
+    }
   }, [router]);
 
   const loadRequests = async (authHeaders: { Authorization: string; Accept: string }) => {
     const response = await axios.get(`${API_BASE}/microfinance/loan-requests`, {
       headers: authHeaders,
-      params: { status: 'requested' },
+      params: {
+        status: 'requested',
+        ...(isCollectionOfficer && preferredOfficerName ? { field_officer: preferredOfficerName } : {}),
+      },
     });
     const rows: LoanRequest[] = Array.isArray(response.data) ? response.data : [];
     setRequests(rows);
@@ -126,29 +240,45 @@ export default function LoanApprovalsPage() {
     };
 
     run();
-  }, [token, headers]);
+  }, [token, headers, isCollectionOfficer, preferredOfficerName]);
+
+  const scopedRequests = useMemo(() => {
+    if (!isCollectionOfficer) {
+      return requests;
+    }
+
+    if (officerNameCandidates.length === 0) {
+      return [];
+    }
+
+    return requests.filter((loan) => {
+      const loanOfficerName = normalizeText(String(loan.field_officer || ''));
+      if (!loanOfficerName) return false;
+      return officerNameCandidates.includes(loanOfficerName);
+    });
+  }, [requests, isCollectionOfficer, officerNameCandidates]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [requests.length, pageSize, query, scopeFilter, routeFilter, fromDate, toDate]);
+  }, [scopedRequests.length, pageSize, query, scopeFilter, routeFilter, fromDate, toDate]);
 
   const routeOptions = useMemo(() => {
     const routeMap = new Map<number, string>();
 
-    requests.forEach((loan) => {
+    scopedRequests.forEach((loan) => {
       if (loan.route?.id && loan.route?.name) {
         routeMap.set(loan.route.id, loan.route.name);
       }
     });
 
     return Array.from(routeMap.entries()).map(([id, name]) => ({ id, name }));
-  }, [requests]);
+  }, [scopedRequests]);
 
   const filteredRequests = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     const selectedRouteId = routeFilter === 'all' ? null : Number(routeFilter);
 
-    return requests.filter((loan) => {
+    return scopedRequests.filter((loan) => {
       if (scopeFilter !== 'all' && loan.loan_scope !== scopeFilter) return false;
       if (selectedRouteId && loan.route?.id !== selectedRouteId) return false;
       if (fromDate && loan.loan_request_date < fromDate) return false;
@@ -168,7 +298,7 @@ export default function LoanApprovalsPage() {
 
       return haystack.includes(keyword);
     });
-  }, [requests, query, scopeFilter, routeFilter, fromDate, toDate]);
+  }, [scopedRequests, query, scopeFilter, routeFilter, fromDate, toDate]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRequests.length / pageSize));
   const safePage = Math.min(currentPage, totalPages);
@@ -177,6 +307,10 @@ export default function LoanApprovalsPage() {
 
   const handleApprove = async (loanId: number) => {
     if (!token) return;
+    if (!canApproveOrReject) {
+      openModal('Only Loan Approver, Finance Manager, Branch Manager, and Admin can accept loans.', 'Access Denied');
+      return;
+    }
 
     setApprovingId(loanId);
     try {
@@ -197,6 +331,10 @@ export default function LoanApprovalsPage() {
 
   const handleReject = async (loanId: number) => {
     if (!token) return;
+    if (!canApproveOrReject) {
+      openModal('Only Loan Approver, Finance Manager, Branch Manager, and Admin can reject loans.', 'Access Denied');
+      return;
+    }
 
     setRejectingId(loanId);
     try {
@@ -420,6 +558,34 @@ export default function LoanApprovalsPage() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mt-4">
+                  <div className="rounded-lg bg-amber-50 border border-amber-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Branch</p>
+                    <p className="text-sm font-bold text-gray-900">{loan.branch?.name || '-'}</p>
+                  </div>
+                  <div className="rounded-lg bg-amber-50 border border-amber-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Manager</p>
+                    <p className="text-sm font-bold text-gray-900">{loan.manager_name || '-'}</p>
+                  </div>
+                  <div className="rounded-lg bg-amber-50 border border-amber-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Collection Officer</p>
+                    <p className="text-sm font-bold text-gray-900">{loan.field_officer || '-'}</p>
+                  </div>
+                  <div className="rounded-lg bg-amber-50 border border-amber-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Responsible Roles</p>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {getResponsibleRoles(Number(loan.loan_amount || 0)).map((role) => (
+                        <span
+                          key={`${loan.id}-${role}`}
+                          className="inline-flex rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-amber-800"
+                        >
+                          {role}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs uppercase tracking-wide text-gray-600 mb-1">Approval Date</label>
@@ -463,31 +629,35 @@ export default function LoanApprovalsPage() {
                     >
                       {downloadingId === loan.id ? 'Processing...' : 'Download Agreement'}
                     </button>
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        handleReject(loan.id);
-                      }}
-                      disabled={rejectingId === loan.id}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-rose-500 to-red-500 text-white font-semibold shadow disabled:opacity-70"
-                    >
-                      {rejectingId === loan.id ? 'Processing...' : 'Reject'}
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        handleApprove(loan.id);
-                      }}
-                      disabled={approvingId === loan.id}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold shadow disabled:opacity-70"
-                    >
-                      {approvingId === loan.id && (
-                        <span className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin"></span>
-                      )}
-                      {approvingId === loan.id ? 'Accepting...' : 'Accept'}
-                    </button>
+                    {canApproveOrReject && (
+                      <>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleReject(loan.id);
+                          }}
+                          disabled={rejectingId === loan.id}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-rose-500 to-red-500 text-white font-semibold shadow disabled:opacity-70"
+                        >
+                          {rejectingId === loan.id ? 'Processing...' : 'Reject'}
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleApprove(loan.id);
+                          }}
+                          disabled={approvingId === loan.id}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold shadow disabled:opacity-70"
+                        >
+                          {approvingId === loan.id && (
+                            <span className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin"></span>
+                          )}
+                          {approvingId === loan.id ? 'Accepting...' : 'Accept'}
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

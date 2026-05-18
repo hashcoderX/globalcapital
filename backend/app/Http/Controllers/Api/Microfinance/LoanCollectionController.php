@@ -10,6 +10,47 @@ use Illuminate\Support\Facades\DB;
 
 class LoanCollectionController extends Controller
 {
+    private function isAdminUser(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isSystemAdmin') && $user->isSystemAdmin()) {
+            return true;
+        }
+
+        $designationName = strtolower(trim((string) optional($user->designation)->name));
+        if ($designationName !== '' && str_contains($designationName, 'admin')) {
+            return true;
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        foreach ($user->roles()->pluck('name') as $roleName) {
+            $normalized = strtolower(trim((string) $roleName));
+            if ($normalized !== '' && str_contains($normalized, 'admin')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function scopedBranchId(Request $request): ?int
+    {
+        $requestedBranchId = (int) ($request->get('branch_id', 0));
+
+        if ($this->isAdminUser($request->user())) {
+            return $requestedBranchId > 0 ? $requestedBranchId : null;
+        }
+
+        $branchId = (int) ($request->user()?->branch_id ?? 0);
+        return $branchId > 0 ? $branchId : null;
+    }
+
     private function shiftDateByRefundOption(\DateTimeImmutable $date, string $refundOption, int $steps = 1): \DateTimeImmutable
     {
         if ($steps === 0) {
@@ -47,6 +88,13 @@ class LoanCollectionController extends Controller
             $query->where('mf_loan_request_id', (int)$request->get('loan_request_id'));
         }
 
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $query->whereHas('loanRequest', function ($loanQuery) use ($branchId) {
+                $loanQuery->where('branch_id', $branchId);
+            });
+        }
+
         return response()->json($query->get());
     }
 
@@ -62,6 +110,13 @@ class LoanCollectionController extends Controller
         ]);
 
         $loanRequest = MicrofinanceLoanRequest::findOrFail((int)$validated['loan_request_id']);
+
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null && (int) ($loanRequest->branch_id ?? 0) !== $branchId) {
+            return response()->json([
+                'message' => 'You can collect payments only for loans in your branch.'
+            ], 403);
+        }
 
         if (!in_array($loanRequest->status, ['approved', 'released'], true)) {
             return response()->json([
@@ -84,11 +139,23 @@ class LoanCollectionController extends Controller
             : $collectionDate;
         $refundOption = (string)($loanRequest->refund_option ?: 'month');
 
+        $accrualCapDate = $collectionDate;
+        if (!empty($loanRequest->loan_end_date)) {
+            try {
+                $loanEndDate = new \DateTimeImmutable((string) $loanRequest->loan_end_date);
+                if ($loanEndDate < $accrualCapDate) {
+                    $accrualCapDate = $loanEndDate;
+                }
+            } catch (\Throwable) {
+                // Ignore invalid loan_end_date
+            }
+        }
+
         $arrearsBalanceBefore = (float)($loanRequest->arrears_balance ?? 0);
         $accruedInstallmentCount = 0;
 
         // Accrue expected installments for all due cycles reached by collection date.
-        while ($dueCursor <= $collectionDate) {
+        while ($dueCursor <= $accrualCapDate) {
             $arrearsBalanceBefore += $installmentAmount;
             $dueCursor = $this->shiftDateByRefundOption($dueCursor, $refundOption);
             $accruedInstallmentCount++;
@@ -223,6 +290,13 @@ class LoanCollectionController extends Controller
             ], 404);
         }
 
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null && (int) ($loanRequest->branch_id ?? 0) !== $branchId) {
+            return response()->json([
+                'message' => 'You can delete invoices only for loans in your branch.'
+            ], 403);
+        }
+
         DB::transaction(function () use ($request, $collection, $validated, $loanRequest): void {
             $collection->deleted_by = optional($request->user())->id;
             $collection->deletion_reason = $validated['deletion_reason'] ?? null;
@@ -244,6 +318,15 @@ class LoanCollectionController extends Controller
         $installmentAmount = (float) $loanRequest->installment_amount;
         $refundOption = (string) ($loanRequest->refund_option ?: 'month');
 
+        $loanEndDate = null;
+        if (!empty($loanRequest->loan_end_date)) {
+            try {
+                $loanEndDate = new \DateTimeImmutable((string) $loanRequest->loan_end_date);
+            } catch (\Throwable) {
+                $loanEndDate = null;
+            }
+        }
+
         $firstDueDate = $this->resolveFirstDueDate($loanRequest, $refundOption, $termCount);
         $dueCursor = $firstDueDate;
         $nextPaymentDate = $firstDueDate;
@@ -259,9 +342,13 @@ class LoanCollectionController extends Controller
 
         foreach ($collections as $row) {
             $collectionDate = new \DateTimeImmutable((string) $row->collection_date);
+            $accrualCapDate = $collectionDate;
+            if ($loanEndDate instanceof \DateTimeImmutable && $loanEndDate < $accrualCapDate) {
+                $accrualCapDate = $loanEndDate;
+            }
             $collectedAmount = (float) $row->collected_amount;
 
-            while ($dueCursor <= $collectionDate) {
+            while ($dueCursor <= $accrualCapDate) {
                 $arrearsBalance += $installmentAmount;
                 $dueCursor = $this->shiftDateByRefundOption($dueCursor, $refundOption);
             }

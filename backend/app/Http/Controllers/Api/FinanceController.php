@@ -21,12 +21,77 @@ class FinanceController extends Controller
     {
     }
 
+    private function isAdminUser(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isSystemAdmin') && $user->isSystemAdmin()) {
+            return true;
+        }
+
+        $designationName = strtolower(trim((string) optional($user->designation)->name));
+        if ($designationName !== '' && str_contains($designationName, 'admin')) {
+            return true;
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        foreach ($user->roles()->pluck('name') as $roleName) {
+            $normalized = strtolower(trim((string) $roleName));
+            if ($normalized !== '' && str_contains($normalized, 'admin')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function scopedBranchId(Request $request): ?int
+    {
+        $requestedBranchId = (int) ($request->get('branch_id', 0));
+
+        if ($this->isAdminUser($request->user())) {
+            return $requestedBranchId > 0 ? $requestedBranchId : null;
+        }
+
+        $branchId = (int) ($request->user()?->branch_id ?? 0);
+        return $branchId > 0 ? $branchId : null;
+    }
+
+    private function applyFinanceBranchScope($query, Request $request, string $column = 'branch_id')
+    {
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $query->where($column, $branchId);
+        }
+
+        return $query;
+    }
+
+    private function resolveFinanceOrFail(Request $request, int $id, array $with = []): Finance
+    {
+        $query = Finance::query();
+        if (!empty($with)) {
+            $query->with($with);
+        }
+
+        $this->applyFinanceBranchScope($query, $request);
+
+        return $query->findOrFail($id);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $perPage = (int) ($request->get('per_page', 20));
 
         $query = Finance::with(['customer', 'documents'])
             ->orderBy('id', 'desc');
+
+        $this->applyFinanceBranchScope($query, $request);
 
         if ($request->filled('customer_id')) {
             $query->where('customer_id', (int) $request->get('customer_id'));
@@ -40,11 +105,11 @@ class FinanceController extends Controller
         return response()->json($data);
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
-        $finance = Finance::with(['customer', 'documents', 'collections' => function ($query) {
+        $finance = $this->resolveFinanceOrFail($request, $id, ['customer', 'documents', 'collections' => function ($query) {
             $query->orderByDesc('payment_date')->orderByDesc('id');
-        }])->findOrFail($id);
+        }]);
         return response()->json($finance);
     }
 
@@ -67,6 +132,12 @@ class FinanceController extends Controller
             ->join('finances', 'finances.id', '=', 'finance_collections.finance_id');
 
         $disbursementsBase = Finance::query();
+
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $collectionsBase->where('finances.branch_id', $branchId);
+            $disbursementsBase->where('finances.branch_id', $branchId);
+        }
 
         if (!empty($validated['from_date'])) {
             $collectionsBase->whereDate('finance_collections.payment_date', '>=', $validated['from_date']);
@@ -195,6 +266,12 @@ class FinanceController extends Controller
             ->join('finances', 'finances.id', '=', 'finance_collections.finance_id');
 
         $disbursementsBase = Finance::query();
+
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $collectionsBase->where('finances.branch_id', $branchId);
+            $disbursementsBase->where('finances.branch_id', $branchId);
+        }
 
         if (!empty($validated['from_date'])) {
             $collectionsBase->whereDate('finance_collections.payment_date', '>=', $validated['from_date']);
@@ -343,6 +420,12 @@ class FinanceController extends Controller
             ->join('finances', 'finances.id', '=', 'finance_collections.finance_id');
 
         $financesBase = Finance::query();
+
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $collectionsBase->where('finances.branch_id', $branchId);
+            $financesBase->where('finances.branch_id', $branchId);
+        }
 
         if (!empty($validated['product_type'])) {
             $productType = strtolower(trim((string) $validated['product_type']));
@@ -507,6 +590,13 @@ class FinanceController extends Controller
             return response()->json([
                 'message' => 'customer_id or customer_no is required.',
             ], 422);
+        }
+
+        $scopedBranchId = $this->scopedBranchId($request);
+        if ($scopedBranchId !== null && (int) ($customer->branch_id ?? 0) !== $scopedBranchId) {
+            return response()->json([
+                'message' => 'You can create finance records only for customers in your branch.',
+            ], 403);
         }
 
         $downPayment = (float) ($validated['down_payment'] ?? 0);
@@ -681,7 +771,7 @@ class FinanceController extends Controller
             'deduction_order.installment_rules.*.installment_amount' => ['nullable', 'numeric', 'min:0'],
         ]);
 
-        $finance = Finance::findOrFail($id);
+        $finance = $this->resolveFinanceOrFail($request, $id);
         $action = (string) $validated['action'];
         $wasActive = $finance->status === 'active';
 
@@ -913,9 +1003,9 @@ class FinanceController extends Controller
         return round(((float) $finance->financed_amount) / $tenureMonths, 2);
     }
 
-    public function collections(int $id): JsonResponse
+    public function collections(Request $request, int $id): JsonResponse
     {
-        $finance = Finance::findOrFail($id);
+        $finance = $this->resolveFinanceOrFail($request, $id);
 
         $collections = FinanceCollection::where('finance_id', $finance->id)
             ->orderByDesc('payment_date')
@@ -939,7 +1029,7 @@ class FinanceController extends Controller
             'cheque_bank' => ['nullable', 'required_if:pay_type,cheque', 'string', 'max:120'],
         ]);
 
-        $finance = Finance::findOrFail($id);
+        $finance = $this->resolveFinanceOrFail($request, $id);
         $user = $request->user();
 
         $latest = FinanceCollection::where('finance_id', $finance->id)
@@ -1163,9 +1253,10 @@ class FinanceController extends Controller
         ], 201);
     }
 
-    public function documents(int $id): JsonResponse
+    public function documents(Request $request, int $id): JsonResponse
     {
-        $documents = FinanceDocument::where('finance_id', $id)->get();
+        $finance = $this->resolveFinanceOrFail($request, $id);
+        $documents = FinanceDocument::where('finance_id', $finance->id)->get();
         return response()->json([
             'data' => $documents,
         ]);
@@ -1178,7 +1269,7 @@ class FinanceController extends Controller
             'file' => ['required', 'file', 'mimes:pdf,doc,docx,jpg,jpeg,png', 'max:10240'],
         ]);
 
-        $finance = Finance::findOrFail($id);
+        $finance = $this->resolveFinanceOrFail($request, $id);
         $user = $request->user();
 
         if (!$request->hasFile('file')) {

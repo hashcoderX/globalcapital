@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 
@@ -16,15 +16,48 @@ export default function Departments() {
   const [token, setToken] = useState('');
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingDeleteDepartmentId, setPendingDeleteDepartmentId] = useState<number | null>(null);
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  const [noticeTitle, setNoticeTitle] = useState('Notice');
+  const [noticeMessage, setNoticeMessage] = useState('');
   const router = useRouter();
 
   // Form fields
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+
+  const filteredDepartments = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+    if (!keyword) return departments;
+
+    return departments.filter((department) =>
+      department.name?.toLowerCase().includes(keyword) ||
+      String(department.description || '').toLowerCase().includes(keyword)
+    );
+  }, [departments, searchTerm]);
+
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(filteredDepartments.length / pageSize));
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, filteredDepartments.length);
+  const paginatedDepartments = filteredDepartments.slice(startIndex, startIndex + pageSize);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -46,6 +79,7 @@ export default function Departments() {
         headers: { Authorization: `Bearer ${tokenToUse}`, Accept: 'application/json' },
       });
       setDepartments(response.data.data || []);
+      setCurrentPage(1);
     } catch (error) {
       const err: any = error;
       console.error('Error fetching departments:', err?.response?.status, err?.response?.data || err?.message);
@@ -61,6 +95,18 @@ export default function Departments() {
     setName('');
     setDescription('');
     setEditingDepartment(null);
+  };
+
+  const openNotice = (title: string, message: string) => {
+    setNoticeTitle(title);
+    setNoticeMessage(message);
+    setNoticeOpen(true);
+  };
+
+  const closeNotice = () => {
+    setNoticeOpen(false);
+    setNoticeTitle('Notice');
+    setNoticeMessage('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -86,8 +132,14 @@ export default function Departments() {
       setShowForm(false);
       resetForm();
     } catch (error) {
-      console.error('Error saving department:', error);
-      alert('Failed to save department. Please try again.');
+      const err: any = error;
+      console.error('Error saving department:', err?.response?.status, err?.response?.data || err?.message);
+      openNotice(
+        'Save Failed',
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        'Failed to save department. Please try again.'
+      );
     } finally {
       setLoading(false);
     }
@@ -100,18 +152,32 @@ export default function Departments() {
     setShowForm(true);
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this department?')) return;
+  const handleDelete = (id: number) => {
+    setPendingDeleteDepartmentId(id);
+    setConfirmOpen(true);
+  };
+
+  const closeConfirm = () => {
+    setConfirmOpen(false);
+    setPendingDeleteDepartmentId(null);
+  };
+
+  const confirmDeleteDepartment = async () => {
+    if (!pendingDeleteDepartmentId) return;
 
     try {
-      await axios.delete(`${API_URL}/api/hr/departments/${id}`, {
+      await axios.delete(`${API_URL}/api/hr/departments/${pendingDeleteDepartmentId}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       fetchDepartments();
+      closeConfirm();
     } catch (error) {
       const err: any = error;
       console.error('Error deleting department:', err?.response?.status, err?.response?.data || err?.message);
-      alert('Failed to delete department. Please try again.');
+      openNotice(
+        'Delete Failed',
+        err?.response?.data?.message || err?.response?.data?.error || 'Failed to delete department. Please try again.'
+      );
     }
   };
 
@@ -136,8 +202,8 @@ export default function Departments() {
       {/* Modern Navigation */}
       <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
         <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center h-auto sm:h-16 py-3 gap-3">
+            <div className="flex items-center justify-between sm:justify-start gap-3">
               <button
                 onClick={() => router.push('/dashboard/hrm')}
                 className="flex items-center space-x-2 text-gray-700 hover:text-blue-600 transition-colors duration-300"
@@ -145,7 +211,7 @@ export default function Departments() {
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
-                <span className="font-medium">Back to HRM</span>
+                <span className="font-medium text-sm sm:text-base">Back to HRM</span>
               </button>
             </div>
             <div className="flex items-center">
@@ -156,7 +222,7 @@ export default function Departments() {
                 <span className="font-medium text-gray-900">Department Management</span>
               </div>
             </div>
-            <div className="flex items-center">
+            <div className="flex items-center justify-end">
               <button
                 onClick={handleLogout}
                 className="bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white px-6 py-2 rounded-full text-sm font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl"
@@ -174,36 +240,38 @@ export default function Departments() {
             {apiError}
           </div>
         )}
-        <div className="mb-8 flex justify-between items-center">
+        <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
           <div>
             <div className="flex items-center space-x-3 mb-4">
               <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center text-2xl shadow-lg">
                 🏢
               </div>
               <div>
-                <h2 className="text-3xl font-bold text-gray-900">Department Management</h2>
-                <p className="text-gray-600">Organize your company structure with modern controls</p>
+                <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-900">Department Management</h2>
+                <p className="text-sm sm:text-base md:text-lg text-gray-600">Organize your company structure with modern controls</p>
               </div>
             </div>
-            <div className="flex space-x-6">
+            <div className="flex flex-col sm:flex-row gap-4 sm:space-x-6 sm:gap-0 mt-2 sm:mt-4">
               <div className="text-center">
-                <div className="text-2xl font-bold text-blue-600">{departments.length}</div>
+                <div className="text-xl sm:text-2xl font-bold text-blue-600">{departments.length}</div>
                 <div className="text-sm text-gray-500">Total Departments</div>
               </div>
             </div>
           </div>
-          <button
-            onClick={() => {
-              resetForm();
-              setShowForm(true);
-            }}
-            className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-6 py-3 rounded-xl text-sm font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center space-x-2"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-            <span>Add Department</span>
-          </button>
+          <div className="md:flex-shrink-0">
+            <button
+              onClick={() => {
+                resetForm();
+                setShowForm(true);
+              }}
+              className="w-full md:w-auto bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-6 py-3 rounded-xl text-sm font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center justify-center space-x-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              </svg>
+              <span>Add Department</span>
+            </button>
+          </div>
         </div>
 
         {showForm && (
@@ -273,6 +341,53 @@ export default function Departments() {
           </div>
         )}
 
+        {confirmOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <div className="absolute inset-0 bg-black/40" onClick={closeConfirm} />
+            <div className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
+              <h3 className="text-lg font-semibold text-gray-900">Confirm Delete</h3>
+              <p className="mt-2 text-sm text-gray-700">
+                Are you sure you want to delete this department?
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeConfirm}
+                  className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteDepartment}
+                  className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {noticeOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <div className="absolute inset-0 bg-black/30" onClick={closeNotice} />
+            <div className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
+              <h3 className="text-lg font-semibold text-gray-900">{noticeTitle}</h3>
+              <p className="mt-2 text-sm text-gray-700">{noticeMessage}</p>
+              <div className="mt-5 flex justify-end">
+                <button
+                  type="button"
+                  onClick={closeNotice}
+                  className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-xl border border-white/20 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-cyan-50">
             <h3 className="text-lg font-semibold text-gray-900 flex items-center space-x-2">
@@ -282,6 +397,26 @@ export default function Departments() {
               <span>Department List</span>
             </h3>
           </div>
+
+          <div className="px-6 py-4 border-b border-gray-200 bg-white/70">
+            <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Filter by department name or description"
+                className="w-full sm:max-w-md px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500"
+              />
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="px-3 py-2 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-100"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gradient-to-r from-gray-50 to-gray-100">
@@ -301,7 +436,7 @@ export default function Departments() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {departments.map((department) => (
+                {paginatedDepartments.map((department) => (
                   <tr key={department.id} className="hover:bg-gray-50 transition-colors duration-200">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                       {department.name}
@@ -336,6 +471,37 @@ export default function Departments() {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          <div className="px-6 py-4 border-t border-gray-200 bg-white/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <p className="text-sm text-gray-600">
+              Showing {filteredDepartments.length === 0 ? 0 : startIndex + 1} to {endIndex} of {filteredDepartments.length} departments
+              {filteredDepartments.length !== departments.length ? ` (filtered from ${departments.length})` : ''}
+            </p>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+
+              <span className="text-sm text-gray-700 px-2">
+                Page {currentPage} of {totalPages}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
           </div>
         </div>
       </main>

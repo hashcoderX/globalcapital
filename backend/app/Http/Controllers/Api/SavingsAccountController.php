@@ -12,12 +12,77 @@ use Illuminate\Support\Facades\DB;
 
 class SavingsAccountController extends Controller
 {
+    private function isAdminUser(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isSystemAdmin') && $user->isSystemAdmin()) {
+            return true;
+        }
+
+        $designationName = strtolower(trim((string) optional($user->designation)->name));
+        if ($designationName !== '' && str_contains($designationName, 'admin')) {
+            return true;
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        foreach ($user->roles()->pluck('name') as $roleName) {
+            $normalized = strtolower(trim((string) $roleName));
+            if ($normalized !== '' && str_contains($normalized, 'admin')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function scopedBranchId(Request $request): ?int
+    {
+        $requestedBranchId = (int) ($request->get('branch_id', 0));
+
+        if ($this->isAdminUser($request->user())) {
+            return $requestedBranchId > 0 ? $requestedBranchId : null;
+        }
+
+        $branchId = (int) ($request->user()?->branch_id ?? 0);
+        return $branchId > 0 ? $branchId : null;
+    }
+
+    private function applySavingsBranchScope($query, Request $request, string $column = 'branch_id')
+    {
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $query->where($column, $branchId);
+        }
+
+        return $query;
+    }
+
+    private function resolveAccountOrFail(Request $request, int $id, array $with = []): SavingsAccount
+    {
+        $query = SavingsAccount::query();
+        if (!empty($with)) {
+            $query->with($with);
+        }
+
+        $this->applySavingsBranchScope($query, $request);
+
+        return $query->findOrFail($id);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $perPage = (int) ($request->get('per_page', 20));
 
         $query = SavingsAccount::with(['customer:id,customer_code,first_name,last_name,phone'])
             ->orderByDesc('id');
+
+        $this->applySavingsBranchScope($query, $request);
 
         if ($request->filled('customer_id')) {
             $query->where('customer_id', (int) $request->get('customer_id'));
@@ -82,6 +147,13 @@ class SavingsAccountController extends Controller
             ], 422);
         }
 
+        $scopedBranchId = $this->scopedBranchId($request);
+        if ($scopedBranchId !== null && (int) ($customer->branch_id ?? 0) !== $scopedBranchId) {
+            return response()->json([
+                'message' => 'You can open accounts only for customers in your branch.',
+            ], 403);
+        }
+
         $openingDeposit = round((float) ($validated['opening_deposit'] ?? 0), 2);
         $accountType = (string) $validated['account_type'];
 
@@ -102,20 +174,20 @@ class SavingsAccountController extends Controller
         return response()->json($account->load('customer:id,customer_code,first_name,last_name,phone'), 201);
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
-        $account = SavingsAccount::with([
+        $account = $this->resolveAccountOrFail($request, $id, [
             'customer:id,customer_code,first_name,last_name,phone',
             'transactions' => function ($query) {
                 $query->orderByDesc('transaction_date')->orderByDesc('id')->limit(30);
             },
-        ])->findOrFail($id);
+        ]);
         return response()->json($account);
     }
 
     public function transactions(Request $request, int $id): JsonResponse
     {
-        $account = SavingsAccount::findOrFail($id);
+        $account = $this->resolveAccountOrFail($request, $id);
         $perPage = (int) ($request->get('per_page', 20));
 
         $query = SavingsAccountTransaction::where('savings_account_id', $account->id)
@@ -150,6 +222,13 @@ class SavingsAccountController extends Controller
             ])
             ->orderByDesc('transaction_date')
             ->orderByDesc('id');
+
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $baseQuery->whereHas('savingsAccount', function ($query) use ($branchId) {
+                $query->where('branch_id', $branchId);
+            });
+        }
 
         if (!empty($validated['from_date'])) {
             $baseQuery->whereDate('transaction_date', '>=', $validated['from_date']);
@@ -242,6 +321,11 @@ class SavingsAccountController extends Controller
             ->join('savings_accounts', 'savings_accounts.id', '=', 'savings_account_transactions.savings_account_id')
             ->leftJoin('customers', 'customers.id', '=', 'savings_accounts.customer_id')
             ->where('savings_account_transactions.transaction_type', 'deposit');
+
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $baseQuery->where('savings_accounts.branch_id', $branchId);
+        }
 
         if (!empty($validated['from_date'])) {
             $baseQuery->whereDate('savings_account_transactions.transaction_date', '>=', $validated['from_date']);
@@ -380,6 +464,8 @@ class SavingsAccountController extends Controller
             ->selectRaw($maturityExpression . ' as estimated_maturity_date')
             ->selectRaw('DATEDIFF(' . $maturityExpression . ', CURDATE()) as days_to_maturity');
 
+        $this->applySavingsBranchScope($baseQuery, $request, 'savings_accounts.branch_id');
+
         if (!empty($validated['status'])) {
             $baseQuery->whereRaw('LOWER(savings_accounts.status) = ?', [strtolower(trim((string) $validated['status']))]);
         }
@@ -464,7 +550,7 @@ class SavingsAccountController extends Controller
             'note' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $account = SavingsAccount::findOrFail($id);
+        $account = $this->resolveAccountOrFail($request, $id);
 
         if ($account->status === 'closed') {
             return response()->json([
@@ -490,7 +576,7 @@ class SavingsAccountController extends Controller
                 'created_by' => $request->user()?->id,
             ]);
 
-            $account->balance = $after;
+            $account->setAttribute('balance', number_format($after, 2, '.', ''));
             $account->save();
 
             return $row;
@@ -512,7 +598,7 @@ class SavingsAccountController extends Controller
             'note' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $account = SavingsAccount::findOrFail($id);
+        $account = $this->resolveAccountOrFail($request, $id);
 
         if ($account->status === 'closed') {
             return response()->json([
@@ -544,7 +630,7 @@ class SavingsAccountController extends Controller
                 'created_by' => $request->user()?->id,
             ]);
 
-            $account->balance = $after;
+            $account->setAttribute('balance', number_format($after, 2, '.', ''));
             $account->save();
 
             return $row;

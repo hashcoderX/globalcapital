@@ -4,9 +4,174 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 
+type AuthPermission = {
+  id: number;
+  name: string;
+  module?: string | null;
+  description?: string | null;
+};
+
+type AuthRole = {
+  id: number;
+  name: string;
+  permissions?: AuthPermission[];
+};
+
+type AuthUser = {
+  id: number;
+  name?: string;
+  email: string;
+  role?: string;
+  roles?: AuthRole[];
+};
+
+type DashboardModule = {
+  name: string;
+  icon: string;
+  color: string;
+  bgColor: string;
+  path: string;
+  requiredModules: string[];
+  requiredPermissionKeywords?: string[];
+};
+
+type DashboardSetting = {
+  icon: string;
+  title: string;
+  desc: string;
+  color: string;
+  path: string;
+  requiredModules: string[];
+  requiredPermissionKeywords?: string[];
+};
+
 export default function Dashboard() {
   const [token, setToken] = useState('');
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [loadingPrivileges, setLoadingPrivileges] = useState(true);
   const router = useRouter();
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const normalizedApiBase = API_URL.replace(/\/+$/, '');
+  const withApiPrefix = normalizedApiBase.endsWith('/api')
+    ? normalizedApiBase
+    : `${normalizedApiBase}/api`;
+
+  const normalizeText = (value: string) =>
+    String(value || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const roleNames = (authUser?.roles || []).map((role) => normalizeText(role.name));
+
+  const displayName = String(authUser?.name || authUser?.email || 'User').trim();
+  const primaryRoleRaw =
+    authUser?.roles?.[0]?.name ||
+    authUser?.role ||
+    (roleNames.some((roleName) => roleName.includes('admin')) ? 'Super Admin' : 'User');
+  const primaryRoleName = String(primaryRoleRaw || 'User').trim();
+
+  const isSuperAdmin =
+    authUser?.email === 'superadmin@softcodelk.com' ||
+    roleNames.some((roleName) =>
+      ['super admin', 'superadmin', 'admin', 'system admin', 'md'].some((adminKey) => roleName.includes(adminKey))
+    );
+
+  const userPermissionNames = new Set(
+    (authUser?.roles || [])
+      .flatMap((role) => role.permissions || [])
+      .map((permission) => normalizeText(permission.name))
+  );
+
+  const userPermissionModules = new Set(
+    (authUser?.roles || [])
+      .flatMap((role) => role.permissions || [])
+      .map((permission) => permission.module || '')
+      .map((moduleName: string) => normalizeText(moduleName))
+      .filter((moduleName: string) => moduleName.length > 0)
+  );
+
+  const userPermissionTexts = (authUser?.roles || [])
+    .flatMap((role) => role.permissions || [])
+    .map((permission) =>
+      normalizeText(`${permission.name || ''} ${permission.module || ''} ${permission.description || ''}`)
+    )
+    .filter(Boolean);
+
+  const moduleAliases: Record<string, string[]> = {
+    hrm: ['hr', 'hrm', 'human resource management', 'employee', 'employees', 'department', 'designation', 'attendance', 'leave', 'payroll', 'candidate'],
+    credit: ['credit', 'finance', 'finances', 'finance product types', 'loan requests', 'loan request', 'microfinance', 'mortgages', 'mortgage', 'customers', 'customer'],
+    savings: ['savings', 'savings accounts', 'deposit', 'deposits'],
+    branches: ['branch', 'branches', 'company', 'companies'],
+    reports: ['report', 'reports', 'ledger', 'snapshot', 'arrears', 'portfolio'],
+  };
+
+  const moduleMatches = (requiredModule: string, assignedModule: string) => {
+    const required = normalizeText(requiredModule);
+    const assigned = normalizeText(assignedModule);
+    if (!required || !assigned) return false;
+
+    if (assigned === required || assigned.includes(required) || required.includes(assigned)) {
+      return true;
+    }
+
+    const aliasTokens = moduleAliases[required] || [];
+    if (aliasTokens.some((alias) => assigned.includes(alias))) {
+      return true;
+    }
+
+    return false;
+  };
+
+  const hasModuleAccess = (requiredModules: string[]) =>
+    requiredModules.some((moduleName) =>
+      Array.from(userPermissionModules).some((assignedModule) => moduleMatches(moduleName, assignedModule))
+    );
+
+  const hasPermissionKeywordAccess = (requiredKeywords: string[]) =>
+    requiredKeywords.some((keyword) => {
+      const normalizedKeyword = normalizeText(keyword);
+      const singularKeyword = normalizedKeyword.endsWith('s')
+        ? normalizedKeyword.slice(0, -1)
+        : normalizedKeyword;
+
+      return Array.from(userPermissionNames).some((permissionName) =>
+        permissionName.includes(normalizedKeyword) ||
+        permissionName.includes(singularKeyword)
+      );
+    });
+
+  const hasPermissionTokenAccess = (tokens: string[]) =>
+    tokens.some((token) => {
+      const normalizedToken = normalizeText(token);
+      if (!normalizedToken) return false;
+
+      const singularToken = normalizedToken.endsWith('s')
+        ? normalizedToken.slice(0, -1)
+        : normalizedToken;
+
+      return userPermissionTexts.some((text) =>
+        text.includes(normalizedToken) || text.includes(singularToken)
+      );
+    });
+
+  const canAccess = (requiredModules: string[], requiredPermissionKeywords: string[] = []) => {
+    if (isSuperAdmin) {
+      return true;
+    }
+
+    if (requiredModules.length === 0 && requiredPermissionKeywords.length === 0) {
+      return true;
+    }
+
+    return (
+      hasModuleAccess(requiredModules) ||
+      hasPermissionKeywordAccess(requiredPermissionKeywords) ||
+      hasPermissionTokenAccess([...requiredModules, ...requiredPermissionKeywords])
+    );
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -14,43 +179,125 @@ export default function Dashboard() {
       router.push('/');
     } else {
       setToken(storedToken);
+      fetchAuthUser(storedToken);
     }
   }, [router]);
+
+  const fetchAuthUser = async (authToken: string) => {
+    setLoadingPrivileges(true);
+    try {
+      const response = await axios.get(`${withApiPrefix}/user`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      setAuthUser(response.data || null);
+      localStorage.setItem('auth_user', JSON.stringify(response.data || null));
+    } catch (error) {
+      console.error('Failed to load user privileges:', error);
+      const stored = localStorage.getItem('auth_user');
+      const cached = stored ? JSON.parse(stored) : null;
+      setAuthUser(cached);
+
+      // Avoid stale/no-data cache causing false "No Module Access Assigned".
+      if (!cached) {
+        localStorage.removeItem('auth_user');
+      }
+    } finally {
+      setLoadingPrivileges(false);
+    }
+  };
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     router.push('/');
   };
 
-  const otherModules = [
-    { name: 'Credit', icon: '💳', color: 'from-emerald-500 to-cyan-500', bgColor: 'from-emerald-50 to-cyan-50' },
-    { name: 'HRM (Human Resource Management)', icon: '👥', color: 'from-red-500 to-pink-500', bgColor: 'from-red-50 to-pink-50' },
-    { name: 'Savings & Deposits', icon: '💸', color: 'from-yellow-500 to-orange-500', bgColor: 'from-yellow-50 to-orange-50' },
-    { name: 'Branch Management', icon: '🏢', color: 'from-teal-500 to-green-500', bgColor: 'from-teal-50 to-green-50' },
-    { name: 'Reports', icon: '📈', color: 'from-rose-500 to-red-500', bgColor: 'from-rose-50 to-red-50' },
+  const allModules: DashboardModule[] = [
+    {
+      name: 'Credit',
+      icon: '💳',
+      color: 'from-emerald-500 to-cyan-500',
+      bgColor: 'from-emerald-50 to-cyan-50',
+      path: '/dashboard/credit',
+      requiredModules: ['finances', 'finance product types', 'loan requests', 'microfinance', 'mortgages', 'customers'],
+      requiredPermissionKeywords: ['credit', 'finance', 'loan_requests', 'loan request', 'microfinance', 'mortgages', 'customer', 'customers'],
+    },
+    {
+      name: 'HRM (Human Resource Management)',
+      icon: '👥',
+      color: 'from-red-500 to-pink-500',
+      bgColor: 'from-red-50 to-pink-50',
+      path: '/dashboard/hrm',
+      requiredModules: [
+        'hrm',
+        'hr',
+        'employee management',
+        'department management',
+        'attendance management',
+        'leave management',
+        'payroll management',
+        'candidate management',
+        'roles',
+        'permissions',
+        'role management',
+        'permission management',
+        'users',
+        'user management',
+      ],
+      requiredPermissionKeywords: ['hrm', 'employee', 'employees', 'department', 'departments', 'attendance', 'leave', 'leaves', 'payroll', 'candidate', 'candidates', 'roles', 'permissions'],
+    },
+    {
+      name: 'Savings & Deposits',
+      icon: '💸',
+      color: 'from-yellow-500 to-orange-500',
+      bgColor: 'from-yellow-50 to-orange-50',
+      path: '/dashboard/savings-deposits',
+      requiredModules: ['savings accounts'],
+      requiredPermissionKeywords: ['savings', 'savings_accounts', 'deposit', 'withdraw'],
+    },
+    {
+      name: 'Branch Management',
+      icon: '🏢',
+      color: 'from-teal-500 to-green-500',
+      bgColor: 'from-teal-50 to-green-50',
+      path: '/dashboard/branches',
+      requiredModules: ['branches'],
+      requiredPermissionKeywords: ['branch', 'branches', 'company', 'companies'],
+    },
+    {
+      name: 'Reports',
+      icon: '📈',
+      color: 'from-rose-500 to-red-500',
+      bgColor: 'from-rose-50 to-red-50',
+      path: '/dashboard/reports',
+      requiredModules: ['reports'],
+      requiredPermissionKeywords: ['report', 'reports', 'ledger', 'snapshot'],
+    },
   ];
 
+  const otherModules = allModules.filter((module) =>
+    canAccess(module.requiredModules, module.requiredPermissionKeywords || [])
+  );
+
+  const settings: DashboardSetting[] = [
+    {
+      icon: '🏢',
+      title: 'Company Settings',
+      desc: 'Manage company information',
+      color: 'from-blue-500 to-cyan-500',
+      path: '/dashboard/company-settings',
+      requiredModules: ['branches', 'companies'],
+      requiredPermissionKeywords: ['view_branches', 'edit_branches', 'view_companies', 'edit_companies', 'document_templates'],
+    },
+  ].filter((setting) => canAccess(setting.requiredModules, setting.requiredPermissionKeywords || []));
+
   const handleModuleClick = (moduleName: string) => {
-    if (moduleName === 'Credit') {
-      router.push('/dashboard/credit');
-    } else if (moduleName === 'HRM (Human Resource Management)') {
-      router.push('/dashboard/hrm');
-    } else if (moduleName === 'Finance Management') {
-      router.push('/dashboard/finance');
-    } else if (moduleName === 'Branch Management') {
-      router.push('/dashboard/branches');
-    } else if (moduleName === 'Mortgage Management') {
-      router.push('/dashboard/mortgages');
-    } else if (moduleName === 'Microfinance (Micro Loans)') {
-      router.push('/dashboard/microfinance');
-    } else if (moduleName === 'Savings & Deposits') {
-      router.push('/dashboard/savings-deposits');
-    } else if (moduleName === 'Reports') {
-      router.push('/dashboard/reports');
+    const module = allModules.find((item) => item.name === moduleName);
+    if (module) {
+      router.push(module.path);
     }
   };
 
-  if (!token) {
+  if (!token || loadingPrivileges) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-red-50 via-pink-50 to-purple-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
@@ -85,6 +332,12 @@ export default function Dashboard() {
               <div className="hidden sm:flex items-center space-x-2 text-xs sm:text-sm text-gray-600">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                 <span>System Online</span>
+              </div>
+              <div className="hidden sm:flex items-center rounded-full border border-red-100 bg-white/80 px-3 py-1.5 text-left">
+                <div className="leading-tight">
+                  <p className="text-xs font-semibold text-slate-900">{displayName}</p>
+                  <p className="text-[11px] font-medium text-slate-500">{primaryRoleName}</p>
+                </div>
               </div>
               <button
                 onClick={handleLogout}
@@ -173,6 +426,15 @@ export default function Dashboard() {
           ))}
         </div>
 
+        {otherModules.length === 0 && (
+          <div className="mb-16 rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center">
+            <h3 className="text-lg font-semibold text-amber-800">No Module Access Assigned</h3>
+            <p className="text-amber-700 mt-2">
+              Your account currently has no dashboard module privileges. Please contact an administrator to assign permissions.
+            </p>
+          </div>
+        )}
+
         {/* Settings & Configuration Section */}
         <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 overflow-hidden">
           <div className="bg-gradient-to-r from-red-500 to-pink-500 p-6">
@@ -189,10 +451,7 @@ export default function Dashboard() {
 
           <div className="p-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                { icon: '🏢', title: 'Company Settings', desc: 'Manage company information', color: 'from-blue-500 to-cyan-500', path: '/dashboard/company-settings' },
-               
-              ].map((setting, index) => (
+              {settings.map((setting, index) => (
                 <div
                   key={index}
                   onClick={() => {

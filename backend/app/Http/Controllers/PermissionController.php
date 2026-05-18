@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 
 class PermissionController extends Controller
@@ -214,6 +215,21 @@ class PermissionController extends Controller
             'created' => $created,
             'existing' => $existing,
             'total_synced' => count(array_unique($syncedPermissions)),
+        ]);
+    }
+
+    public function permissionFileTemplates(): JsonResponse
+    {
+        $filePath = public_path('permission_file.txt');
+
+        if (!File::exists($filePath)) {
+            return response()->json([
+                'message' => 'permission_file.txt not found in backend/public.',
+            ], 404);
+        }
+
+        return response()->json([
+            'content' => File::get($filePath),
         ]);
     }
 }

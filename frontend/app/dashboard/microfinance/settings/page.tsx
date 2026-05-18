@@ -313,9 +313,16 @@ export default function MicrofinanceSettingsPage() {
     if (!deleteConfirm.type || !deleteConfirm.id) return;
 
     try {
-      await axios.delete(`${API_BASE}/${deleteConfirm.type}/${deleteConfirm.id}`, { headers });
+      const response = await axios.delete(`${API_BASE}/${deleteConfirm.type}/${deleteConfirm.id}`, { headers });
       await loadAll();
       closeDeleteConfirm();
+
+      const successMessage =
+        response?.data?.message ||
+        (deleteConfirm.type === 'holidays'
+          ? 'Holiday deleted successfully. Related loan dates were recovered.'
+          : 'Item deleted successfully.');
+      openModal(successMessage, 'Delete Success');
     } catch {
       openModal('Delete failed. Item may have dependent records.', 'Error');
     }
@@ -761,7 +768,7 @@ export default function MicrofinanceSettingsPage() {
                     <div>
                       <p className="font-semibold text-slate-900">{item.name}</p>
                       <p className="text-xs text-slate-500">
-                        Date: {item.holiday_date} • {item.is_active ? 'Active' : 'Inactive'}
+                        Date: {formatDate(item.holiday_date)} • {item.is_active ? 'Active' : 'Inactive'}
                         {item.note ? ` • ${item.note}` : ''}
                       </p>
                     </div>
@@ -770,7 +777,7 @@ export default function MicrofinanceSettingsPage() {
                         onClick={() =>
                           setHolidayForm({
                             id: item.id,
-                            holiday_date: item.holiday_date,
+                            holiday_date: String(item.holiday_date || '').slice(0, 10),
                             name: item.name,
                             note: item.note || '',
                             is_active: item.is_active,

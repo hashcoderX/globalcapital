@@ -2,12 +2,13 @@
 
 import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 type LoanRow = {
   id: number;
+  loan_code?: string | null;
   customer_no?: string | null;
   customer_name?: string | null;
   field_officer?: string | null;
@@ -29,7 +30,7 @@ type CollectionRow = {
 type ReportRow = {
   id: number;
   date: string;
-  loanId: number;
+  loanCode: string;
   customerNo: string;
   customerName: string;
   fieldOfficer: string;
@@ -45,11 +46,16 @@ const API_BASE = 'http://localhost:8000/api';
 
 export default function CollectionReportPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ReportRow[]>([]);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+
+  const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
+
+  const handleBack = () => router.back();
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -73,11 +79,17 @@ export default function CollectionReportPage() {
               Authorization: `Bearer ${token}`,
               Accept: 'application/json',
             },
+            params: {
+              branch_id: branchId,
+            },
           }),
           axios.get(`${API_BASE}/microfinance/collections`, {
             headers: {
               Authorization: `Bearer ${token}`,
               Accept: 'application/json',
+            },
+            params: {
+              branch_id: branchId,
             },
           }),
         ]);
@@ -98,7 +110,7 @@ export default function CollectionReportPage() {
             return {
               id: Number(collection.id),
               date: String(collection.collection_date || collection.created_at || ''),
-              loanId,
+              loanCode: String(loan?.loan_code || `LR-${loanId || 0}`),
               customerNo: String(loan?.customer_no || '-'),
               customerName: String(loan?.customer_name || '-'),
               fieldOfficer: String(loan?.field_officer || 'Unassigned'),
@@ -125,7 +137,7 @@ export default function CollectionReportPage() {
     };
 
     loadReport();
-  }, [token]);
+  }, [token, branchId]);
 
   const filteredRows = useMemo(() => {
     const from = fromDate ? new Date(`${fromDate}T00:00:00`) : null;
@@ -207,8 +219,8 @@ export default function CollectionReportPage() {
   const handleDownloadCsv = () => {
     const headers = [
       'Date & Time',
-      'Loan ID',
       'Loan Code',
+      'Customer No',
       'Customer',
       'Field Officer',
       'Payment Type',
@@ -229,7 +241,7 @@ export default function CollectionReportPage() {
 
     const body = filteredRows.map((row) => [
       formatDateTime(row.date),
-      row.loanId || '-',
+      row.loanCode,
       row.customerNo,
       row.customerName,
       row.fieldOfficer,
@@ -276,8 +288,8 @@ export default function CollectionReportPage() {
       startY: 72,
       head: [[
         'Date & Time',
-        'Loan ID',
         'Loan Code',
+        'Customer No',
         'Customer',
         'Field Officer',
         'Payment Type',
@@ -289,7 +301,7 @@ export default function CollectionReportPage() {
       ]],
       body: filteredRows.map((row) => [
         formatDateTime(row.date),
-        row.loanId || '-',
+        row.loanCode,
         row.customerNo,
         row.customerName,
         row.fieldOfficer,
@@ -327,63 +339,67 @@ export default function CollectionReportPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-cyan-50 to-emerald-50 px-3 py-4 sm:px-4 sm:py-6 md:px-6 relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
+        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-sky-300 blur-3xl"></div>
         <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
+        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-emerald-300 blur-3xl"></div>
+      </div>
+      <div className="pointer-events-none absolute inset-0 opacity-20 [background-image:radial-gradient(circle_at_1px_1px,rgba(14,116,144,0.38)_1px,transparent_1px)] [background-size:24px_24px]">
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
         <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
+              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100 shadow-sm">
                 Reports Desk
               </span>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Collection Report</h1>
-              <p className="text-sm text-slate-600 mt-1">Period-wise collection performance with capital, interest, and penalty breakdown.</p>
+              <h1 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 mt-3 tracking-tight">Collection Report</h1>
+              <p className="text-sm sm:text-base text-slate-600 mt-2 max-w-2xl">Period-wise collection performance with capital, interest, and penalty breakdown.</p>
             </div>
             <button
-              onClick={() => router.push('/dashboard/microfinance')}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
+              onClick={handleBack}
+              className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm w-full sm:w-auto"
             >
               Back
             </button>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+          <div className="mt-5 h-1.5 w-40 rounded-full bg-gradient-to-r from-cyan-500 via-sky-500 to-emerald-500"></div>
+
+          <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-cyan-50/40 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Transactions</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.transactionCount}</p>
+              <p className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">{summary.transactionCount}</p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-emerald-50/50 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Total Collected</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+              <p className="text-base sm:text-lg lg:text-xl font-extrabold text-emerald-700 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCollected)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-sky-50/60 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Capital</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+              <p className="text-base sm:text-lg lg:text-xl font-extrabold text-slate-900 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCapital)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-cyan-50/60 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Interest</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+              <p className="text-base sm:text-lg lg:text-xl font-extrabold text-slate-900 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalInterest)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-rose-50/50 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Penalty</p>
-              <p className="text-2xl font-extrabold text-rose-700 mt-1">
+              <p className="text-base sm:text-lg lg:text-xl font-extrabold text-rose-700 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalPenalty)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-white to-teal-50/50 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Today / Officers</p>
-              <p className="text-lg font-extrabold text-cyan-800 mt-1">
+              <p className="text-base sm:text-lg font-extrabold text-cyan-800 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.todayCollected)} / {summary.officerCount}
               </p>
             </div>
@@ -393,50 +409,60 @@ export default function CollectionReportPage() {
         <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">Collection Transactions</h2>
-            <div className="flex items-end gap-2">
-              <button
-                type="button"
-                onClick={handleDownloadCsv}
-                className="px-3 py-2 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-sm font-semibold border border-emerald-200"
-              >
-                Download CSV
-              </button>
-              <button
-                type="button"
-                onClick={handleDownloadPdf}
-                className="px-3 py-2 rounded-xl bg-cyan-100 hover:bg-cyan-200 text-cyan-800 text-sm font-semibold border border-cyan-200"
-              >
-                Download PDF
-              </button>
-              <div>
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">From Date</label>
-                <input
-                  type="date"
-                  value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
-                />
+            <div className="flex flex-col sm:flex-row sm:items-end gap-2 w-full lg:w-auto lg:flex-wrap">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full lg:w-auto">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">From Date</label>
+                  <input
+                    type="date"
+                    value={fromDate}
+                    onChange={(e) => setFromDate(e.target.value)}
+                    className="mt-1 w-full px-3 py-2.5 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">To Date</label>
+                  <input
+                    type="date"
+                    value={toDate}
+                    onChange={(e) => setToDate(e.target.value)}
+                    className="mt-1 w-full px-3 py-2.5 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">To Date</label>
-                <input
-                  type="date"
-                  value={toDate}
-                  onChange={(e) => setToDate(e.target.value)}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
-                />
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFromDate('');
+                    setToDate('');
+                  }}
+                  className="px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold"
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadCsv}
+                  className="px-3 py-2.5 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-sm font-semibold border border-emerald-200"
+                >
+                  Download CSV
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadPdf}
+                  className="px-3 py-2.5 rounded-xl bg-cyan-100 hover:bg-cyan-200 text-cyan-800 text-sm font-semibold border border-cyan-200"
+                >
+                  Download PDF
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setFromDate('');
-                  setToDate('');
-                }}
-                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold"
-              >
-                Reset
-              </button>
             </div>
+          </div>
+
+          <div className="mt-3 rounded-xl border border-cyan-100 bg-gradient-to-r from-cyan-50/80 via-sky-50/70 to-emerald-50/70 px-3 py-2 text-xs sm:text-sm text-slate-600">
+            Showing <span className="font-bold text-slate-800">{filteredRows.length}</span> transaction(s)
+            {fromDate || toDate ? ` for ${fromDate || 'Start'} to ${toDate || 'End'}` : ' for all dates'}.
           </div>
 
           {filteredRows.length === 0 ? (
@@ -444,42 +470,102 @@ export default function CollectionReportPage() {
               No collection data found for selected period.
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
-              <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70 text-slate-700">
-                  <tr>
-                    <th className="px-3 py-2 font-semibold">Date & Time</th>
-                    <th className="px-3 py-2 font-semibold">Loan ID</th>
-                    <th className="px-3 py-2 font-semibold">Loan Code</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Field Officer</th>
-                    <th className="px-3 py-2 font-semibold">Payment Type</th>
-                    <th className="px-3 py-2 font-semibold">Reference</th>
-                    <th className="px-3 py-2 font-semibold">Collected</th>
-                    <th className="px-3 py-2 font-semibold">Capital</th>
-                    <th className="px-3 py-2 font-semibold">Interest</th>
-                    <th className="px-3 py-2 font-semibold">Penalty</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRows.map((row) => (
-                    <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                      <td className="px-3 py-2">{formatDateTime(row.date)}</td>
-                      <td className="px-3 py-2">{row.loanId || '-'}</td>
-                      <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
-                      <td className="px-3 py-2">{row.customerName}</td>
-                      <td className="px-3 py-2">{row.fieldOfficer}</td>
-                      <td className="px-3 py-2 capitalize">{row.paymentType}</td>
-                      <td className="px-3 py-2">{row.reference}</td>
-                      <td className="px-3 py-2 font-semibold text-emerald-700">{formatMoney(row.collected)}</td>
-                      <td className="px-3 py-2">{formatMoney(row.capital)}</td>
-                      <td className="px-3 py-2">{formatMoney(row.interest)}</td>
-                      <td className="px-3 py-2">{formatMoney(row.penalty)}</td>
+            <>
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 lg:hidden">
+                {filteredRows.map((row) => (
+                  <div
+                    key={row.id}
+                    className="rounded-2xl border border-cyan-100 bg-white/90 p-4 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-slate-500">Date & Time</p>
+                        <p className="text-sm font-semibold text-slate-900">{formatDateTime(row.date)}</p>
+                      </div>
+                      <span className="rounded-full bg-cyan-50 border border-cyan-100 px-2 py-0.5 text-[11px] font-semibold text-cyan-700">
+                        {row.loanCode}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+                      <p className="text-slate-500">Loan Code</p>
+                      <p className="font-semibold text-slate-900 text-right">{row.loanCode}</p>
+
+                      <p className="text-slate-500">Customer No</p>
+                      <p className="font-semibold text-slate-900 text-right">{row.customerNo}</p>
+
+                      <p className="text-slate-500">Customer</p>
+                      <p className="font-semibold text-slate-900 text-right">{row.customerName}</p>
+
+                      <p className="text-slate-500">Officer</p>
+                      <p className="text-slate-800 text-right">{row.fieldOfficer}</p>
+
+                      <p className="text-slate-500">Payment</p>
+                      <p className="capitalize text-slate-800 text-right">{row.paymentType}</p>
+
+                      <p className="text-slate-500">Reference</p>
+                      <p className="text-slate-800 text-right break-words [overflow-wrap:anywhere]">{row.reference}</p>
+                    </div>
+
+                    <div className="mt-3 rounded-xl border border-cyan-100 bg-cyan-50/40 p-3 grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <p className="text-[11px] uppercase tracking-wide text-slate-500">Collected</p>
+                        <p className="font-bold text-emerald-700">{formatMoney(row.collected)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] uppercase tracking-wide text-slate-500">Capital</p>
+                        <p className="font-semibold text-slate-900">{formatMoney(row.capital)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] uppercase tracking-wide text-slate-500">Interest</p>
+                        <p className="font-semibold text-slate-900">{formatMoney(row.interest)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] uppercase tracking-wide text-slate-500">Penalty</p>
+                        <p className="font-semibold text-rose-700">{formatMoney(row.penalty)}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 hidden lg:block">
+                <table className="min-w-full text-sm text-left text-slate-700 bg-white">
+                  <thead className="bg-cyan-50/70 text-slate-700 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Date & Time</th>
+                      <th className="px-3 py-2 font-semibold">Loan Code</th>
+                      <th className="px-3 py-2 font-semibold">Customer No</th>
+                      <th className="px-3 py-2 font-semibold">Customer</th>
+                      <th className="px-3 py-2 font-semibold">Field Officer</th>
+                      <th className="px-3 py-2 font-semibold">Payment Type</th>
+                      <th className="px-3 py-2 font-semibold">Reference</th>
+                      <th className="px-3 py-2 font-semibold">Collected</th>
+                      <th className="px-3 py-2 font-semibold">Capital</th>
+                      <th className="px-3 py-2 font-semibold">Interest</th>
+                      <th className="px-3 py-2 font-semibold">Penalty</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {filteredRows.map((row) => (
+                      <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
+                        <td className="px-3 py-2">{formatDateTime(row.date)}</td>
+                        <td className="px-3 py-2 font-semibold text-slate-900">{row.loanCode}</td>
+                        <td className="px-3 py-2">{row.customerNo}</td>
+                        <td className="px-3 py-2">{row.customerName}</td>
+                        <td className="px-3 py-2">{row.fieldOfficer}</td>
+                        <td className="px-3 py-2 capitalize">{row.paymentType}</td>
+                        <td className="px-3 py-2">{row.reference}</td>
+                        <td className="px-3 py-2 font-semibold text-emerald-700">{formatMoney(row.collected)}</td>
+                        <td className="px-3 py-2">{formatMoney(row.capital)}</td>
+                        <td className="px-3 py-2">{formatMoney(row.interest)}</td>
+                        <td className="px-3 py-2">{formatMoney(row.penalty)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </div>

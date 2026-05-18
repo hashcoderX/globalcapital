@@ -28,6 +28,8 @@ class AuthController extends Controller
             'branch:id,name',
             'designation:id,name',
             'employee:id,first_name,last_name,email,branch_id,designation_id',
+            'roles:id,name,description',
+            'roles.permissions:id,name,module,description',
         ]);
     }
 
@@ -88,5 +90,36 @@ class AuthController extends Controller
         $request->user()->currentAccessToken()->delete();
 
         return response()->json(['message' => 'Logged out']);
+    }
+
+    public function forgotPassword(Request $request)
+    {
+        $validated = $request->validate([
+            'email' => ['required', 'string', 'email', 'max:255'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+        ]);
+
+        $email = strtolower(trim((string) $validated['email']));
+        $user = User::query()
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->first();
+
+        if (!$user) {
+            throw ValidationException::withMessages([
+                'email' => ['No account found for this email address.'],
+            ]);
+        }
+
+        $user->password = Hash::make((string) $validated['password']);
+        $user->save();
+
+        DB::table('personal_access_tokens')
+            ->where('tokenable_type', User::class)
+            ->where('tokenable_id', (int) $user->id)
+            ->delete();
+
+        return response()->json([
+            'message' => 'Password reset successful. You can now sign in with your new password.',
+        ]);
     }
 }

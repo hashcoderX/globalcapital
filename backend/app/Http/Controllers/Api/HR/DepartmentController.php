@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Department;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Database\QueryException;
 
 class DepartmentController extends Controller
 {
@@ -86,7 +87,21 @@ class DepartmentController extends Controller
      */
     public function destroy(Department $department): JsonResponse
     {
-        $department->delete();
+        $employeeCount = $department->employees()->count();
+        if ($employeeCount > 0) {
+            return response()->json([
+                'message' => 'Cannot delete this department because employees are assigned to it.',
+                'employees_count' => $employeeCount,
+            ], 409);
+        }
+
+        try {
+            $department->delete();
+        } catch (QueryException $exception) {
+            return response()->json([
+                'message' => 'Cannot delete this department because it is linked to other records.',
+            ], 409);
+        }
 
         return response()->json(['message' => 'Department deleted successfully']);
     }

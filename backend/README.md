@@ -57,3 +57,20 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
+## Scheduler
+
+This project uses Laravel's scheduler for time-based automation.
+
+Scheduled commands are defined in `routes/console.php`.
+
+- `savings:apply-monthly-interest` — runs daily at 23:55
+- `microfinance:recalculate-arrears` — runs daily at 00:10 (accrues `mf_loan_requests.arrears_balance` automatically)
+
+To run scheduled tasks in development, use:
+
+- `php artisan schedule:work`
+
+In production, configure a cron job to run every minute:
+
+- `* * * * * php /path/to/artisan schedule:run >> /dev/null 2>&1`

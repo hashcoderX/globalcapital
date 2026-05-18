@@ -12,3 +12,8 @@ Schedule::command('savings:apply-monthly-interest')
     ->dailyAt('23:55')
     ->withoutOverlapping()
     ->name('savings-monthly-interest');
+
+Schedule::command('microfinance:recalculate-arrears')
+    ->dailyAt('00:10')
+    ->withoutOverlapping()
+    ->name('microfinance-recalculate-arrears');

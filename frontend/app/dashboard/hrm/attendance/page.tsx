@@ -30,6 +30,8 @@ interface AttendanceRecord {
 }
 
 export default function AttendancePage() {
+  type NoticeTone = 'success' | 'error' | 'info';
+
   const [token, setToken] = useState('');
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
@@ -51,7 +53,12 @@ export default function AttendancePage() {
   const [markingOutAttendance, setMarkingOutAttendance] = useState<AttendanceRecord | null>(null);
   const [markOutTimeInput, setMarkOutTimeInput] = useState('');
   const [markOutNotes, setMarkOutNotes] = useState('');
+  const [noticeModal, setNoticeModal] = useState<{ title: string; message: string; tone: NoticeTone } | null>(null);
   const router = useRouter();
+
+  const openNoticeModal = (tone: NoticeTone, title: string, message: string) => {
+    setNoticeModal({ tone, title, message });
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -71,9 +78,16 @@ export default function AttendancePage() {
       const response = await axios.get('http://localhost:8000/api/hr/employees', {
         headers: { Authorization: `Bearer ${tokenToUse}` },
       });
-      setEmployees(response.data.data || []);
+      const rows = Array.isArray(response.data)
+        ? response.data
+        : Array.isArray(response.data?.data)
+          ? response.data.data
+          : [];
+
+      setEmployees(rows);
     } catch (error) {
       console.error('Error fetching employees:', error);
+      setEmployees([]);
     }
   };
 
@@ -114,12 +128,12 @@ export default function AttendancePage() {
       if (outTime) payload.out_time = outTime;
       if (notes) payload.notes = notes;
 
-      const response = await axios.post(
+      await axios.post(
         'http://localhost:8000/api/hr/attendance/mark',
         payload,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      alert(`Marked ${status} successfully!`);
+      openNoticeModal('success', 'Attendance Marked', `Marked ${status} successfully.`);
       // Refresh today's attendance data
       fetchTodayAttendance();
       // Close modal if open
@@ -140,7 +154,7 @@ export default function AttendancePage() {
         errorMessage = error.response?.data?.message || error.response?.data?.error || errorMessage;
       }
       
-      alert(`Error: ${errorMessage}`);
+      openNoticeModal('error', 'Attendance Error', errorMessage);
     } finally {
       setLoading(false);
     }
@@ -179,28 +193,30 @@ export default function AttendancePage() {
       const payload: any = { 
         employee_id: markingOutAttendance?.employee_id,
         out_time: outTime,
-        date: markingOutAttendance?.date ? new Date(markingOutAttendance.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+        date: markingOutAttendance?.date
+          ? String(markingOutAttendance.date).split('T')[0]
+          : new Date().toISOString().split('T')[0]
       };
       
       if (notes) payload.notes = notes;
 
-      const response = await axios.post(
+      await axios.post(
         'http://localhost:8000/api/hr/attendance/mark-out',
         payload,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      alert('Marked out successfully!');
+      openNoticeModal('success', 'Marked Out', 'Marked out successfully.');
       // Refresh today's attendance data
       fetchTodayAttendance();
       setShowMarkOutModal(false);
     } catch (error: any) {
       console.error('Error marking out:', error);
       if (error.response?.status === 409) {
-        alert(error.response.data.message);
+        openNoticeModal('error', 'Mark Out Error', error.response.data.message || 'Attendance is already marked out.');
       } else if (error.response?.status === 404) {
-        alert(error.response.data.message);
+        openNoticeModal('error', 'Mark Out Error', error.response.data.message || 'Attendance record not found.');
       } else {
-        alert('Failed to mark out.');
+        openNoticeModal('error', 'Mark Out Error', 'Failed to mark out.');
       }
     } finally {
       setLoading(false);
@@ -215,7 +231,7 @@ export default function AttendancePage() {
 
   const handleCsvUpload = async () => {
     if (!csvFile) {
-      alert('Please select a CSV file first.');
+      openNoticeModal('info', 'CSV Required', 'Please select a CSV file first.');
       return;
     }
     setLoading(true);
@@ -234,10 +250,15 @@ export default function AttendancePage() {
         }
       );
       setUploadResult(response.data);
-      alert(`Upload processed! Created ${response.data.created_records} records.`);
+      openNoticeModal(
+        'success',
+        'Upload Completed',
+        `Upload processed. Created ${response.data.created_records || 0}, Updated ${response.data.updated_records || 0}.`
+      );
+      fetchTodayAttendance();
     } catch (error: any) {
       console.error('Error uploading CSV:', error);
-      alert('Failed to upload CSV: ' + (error.response?.data?.error || error.message));
+      openNoticeModal('error', 'Upload Failed', 'Failed to upload CSV: ' + (error.response?.data?.error || error.message));
     } finally {
       setLoading(false);
     }
@@ -258,7 +279,7 @@ export default function AttendancePage() {
       setAttendanceHistory(response.data.attendance);
     } catch (error) {
       console.error('Error fetching attendance history:', error);
-      alert('Failed to fetch attendance history.');
+      openNoticeModal('error', 'History Error', 'Failed to fetch attendance history.');
     } finally {
       setLoading(false);
     }
@@ -294,8 +315,8 @@ export default function AttendancePage() {
       {/* Navigation */}
       <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center h-auto sm:h-16 py-3 sm:py-0 gap-3 sm:gap-0">
+            <div className="flex items-center justify-between sm:justify-start">
               <button onClick={() => router.push('/dashboard/hrm')} className="flex items-center space-x-2 text-gray-700 hover:text-orange-600 transition-colors duration-300">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -303,11 +324,11 @@ export default function AttendancePage() {
                 <span className="font-medium">Back to HRM</span>
               </button>
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center justify-between sm:justify-end space-x-2">
               <div className="w-8 h-8 bg-gradient-to-r from-orange-500 to-red-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
                 AT
               </div>
-              <span className="font-medium text-gray-900">Attendance</span>
+              <span className="font-medium text-gray-900 text-sm sm:text-base">Attendance</span>
             </div>
           </div>
         </div>
@@ -321,17 +342,17 @@ export default function AttendancePage() {
               <span className="text-4xl">📅</span>
             </div>
           </div>
-          <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-3">
+          <h2 className="text-3xl md:text-5xl font-bold text-gray-900 mb-3">
             Attendance <span className="bg-gradient-to-r from-orange-600 to-red-600 bg-clip-text text-transparent">Manager</span>
           </h2>
-          <p className="text-lg text-gray-600 max-w-3xl mx-auto leading-relaxed">
+          <p className="text-base sm:text-lg text-gray-600 max-w-3xl mx-auto leading-relaxed px-1">
             Manage employee attendance with quick marking, CSV uploads, and history tracking.
           </p>
         </div>
 
         {/* Tabs */}
         <div className="mb-6 flex justify-center">
-          <div className="bg-white/70 backdrop-blur-sm rounded-full p-1 shadow-lg">
+          <div className="bg-white/70 backdrop-blur-sm rounded-full p-1 shadow-lg inline-flex max-w-full overflow-x-auto">
             <button
               onClick={() => setActiveTab('mark')}
               className={`px-6 py-2 rounded-full font-medium transition-all duration-300 ${
@@ -514,8 +535,12 @@ export default function AttendancePage() {
           <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-8">
             <h3 className="text-2xl font-bold text-gray-900 mb-4">Upload Attendance CSV</h3>
             <p className="text-gray-600 mb-6">
-              Upload a CSV file from your fingerprint machine. Expected columns: employee_code, date, in_time, out_time, status, notes
+              Upload a CSV from your fingerprint machine. Supported headers include both legacy format and fingerprint format.
             </p>
+            <div className="mb-6 p-4 rounded-xl bg-orange-50 border border-orange-200 text-sm text-gray-700">
+              <p className="font-semibold text-orange-800 mb-2">Fingerprint sample format:</p>
+              <p>Employee_ID, Employee_Name, Date, Check_In, Check_Out, Total_Hours, Status, Device_ID</p>
+            </div>
             <div className="mb-6">
               <input
                 type="file"
@@ -534,7 +559,11 @@ export default function AttendancePage() {
             {uploadResult && (
               <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg">
                 <h4 className="font-semibold text-green-800">Upload Result</h4>
-                <p className="text-green-700">Created {uploadResult.created_records} records</p>
+                <p className="text-green-700">Created {uploadResult.created_records || 0} records</p>
+                <p className="text-green-700">Updated {uploadResult.updated_records || 0} records</p>
+                {typeof uploadResult.skipped_rows === 'number' && (
+                  <p className="text-amber-700">Skipped empty rows: {uploadResult.skipped_rows}</p>
+                )}
                 {uploadResult.errors.length > 0 && (
                   <div className="mt-2">
                     <p className="text-red-700 font-semibold">Errors:</p>
@@ -632,6 +661,38 @@ export default function AttendancePage() {
         )}
       </main>
 
+      {/* Feedback Modal */}
+      {noticeModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-lg font-bold ${
+                  noticeModal.tone === 'success'
+                    ? 'bg-green-500'
+                    : noticeModal.tone === 'error'
+                      ? 'bg-red-500'
+                      : 'bg-orange-500'
+                }`}>
+                  {noticeModal.tone === 'success' ? '✓' : noticeModal.tone === 'error' ? '!' : 'i'}
+                </div>
+                <h3 className="text-xl font-bold text-gray-900">{noticeModal.title}</h3>
+              </div>
+              <p className="text-gray-700 leading-relaxed">{noticeModal.message}</p>
+              <div className="flex justify-end mt-6">
+                <button
+                  type="button"
+                  onClick={() => setNoticeModal(null)}
+                  className="px-5 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-lg hover:from-orange-600 hover:to-red-600 transition-colors"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Attendance Marking Modal */}
       {showMarkModal && markingEmployee && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -649,7 +710,7 @@ export default function AttendancePage() {
                     <select
                       value={markStatus}
                       onChange={(e) => setMarkStatus(e.target.value as 'present' | 'absent' | 'late' | 'half_day')}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                       required
                     >
                       <option value="present">Present</option>
@@ -666,7 +727,7 @@ export default function AttendancePage() {
                       type="time"
                       value={markInTime}
                       onChange={(e) => setMarkInTime(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                     />
                   </div>
                   <div>
@@ -677,7 +738,7 @@ export default function AttendancePage() {
                       value={markNotes}
                       onChange={(e) => setMarkNotes(e.target.value)}
                       rows={3}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder:text-gray-500 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                       placeholder="Add any additional notes..."
                     />
                   </div>
@@ -730,7 +791,7 @@ export default function AttendancePage() {
                       type="time"
                       value={markOutTimeInput}
                       onChange={(e) => setMarkOutTimeInput(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                       required
                     />
                   </div>
@@ -742,7 +803,7 @@ export default function AttendancePage() {
                       value={markOutNotes}
                       onChange={(e) => setMarkOutNotes(e.target.value)}
                       rows={3}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder:text-gray-500 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                       placeholder="Add any additional notes..."
                     />
                   </div>

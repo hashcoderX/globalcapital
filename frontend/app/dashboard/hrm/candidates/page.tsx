@@ -810,8 +810,8 @@ export default function Candidates() {
       {/* Modern Navigation */}
       <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center h-auto sm:h-16 py-3 gap-3">
+            <div className="flex items-center justify-between sm:justify-start gap-3">
               <button
                 onClick={() => router.push('/dashboard/hrm')}
                 className="flex items-center space-x-2 text-gray-700 hover:text-blue-600 transition-colors duration-300"
@@ -819,10 +819,10 @@ export default function Candidates() {
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
-                <span className="font-medium">Back to HRM</span>
+                <span className="font-medium text-sm sm:text-base">Back to HRM</span>
               </button>
             </div>
-            <div className="flex items-center space-x-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
               <div className="hidden md:flex items-center space-x-2 text-sm text-gray-600">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                 <span>Candidate System Active</span>
@@ -854,10 +854,10 @@ export default function Candidates() {
           </div>
         )}
         {/* Hero Section */}
-        <div className="mb-8 flex items-center justify-between">
+        <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Candidates</h1>
-            <p className="text-gray-600">Manage applicants, interviews and conversions</p>
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-900">Candidates</h1>
+            <p className="text-sm sm:text-base md:text-lg text-gray-600">Manage applicants, interviews and conversions</p>
           </div>
           <div className="flex items-center gap-3">
             <button

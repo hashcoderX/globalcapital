@@ -868,13 +868,122 @@ class LoanRequestController extends Controller
             return false;
         }
 
-        if ((string)$user->email === 'superadmin@softcodelk.com') {
+        return $this->hasLoanApprovalAccess($user);
+    }
+
+    private function hasLoanApprovalAccess(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isSystemAdmin') && $user->isSystemAdmin()) {
             return true;
         }
 
-        $designationName = strtolower((string)optional($user->designation)->name);
+        $allowedKeywords = ['loan approver', 'finance manager', 'branch manager', 'admin'];
 
-        return str_contains($designationName, 'manager');
+        $designationName = strtolower((string) optional($user->designation)->name);
+        foreach ($allowedKeywords as $keyword) {
+            if ($designationName !== '' && str_contains($designationName, $keyword)) {
+                return true;
+            }
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        $roleNames = $user->roles()->pluck('name')->map(function ($name) {
+            return strtolower((string) $name);
+        });
+
+        foreach ($roleNames as $roleName) {
+            foreach ($allowedKeywords as $keyword) {
+                if ($roleName !== '' && str_contains($roleName, $keyword)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function hasReleasedLoanActionAccess(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isSystemAdmin') && $user->isSystemAdmin()) {
+            return true;
+        }
+
+        $allowedKeywords = ['finance manager', 'branch manager', 'admin'];
+
+        $designationName = strtolower((string) optional($user->designation)->name);
+        foreach ($allowedKeywords as $keyword) {
+            if ($designationName !== '' && str_contains($designationName, $keyword)) {
+                return true;
+            }
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        $roleNames = $user->roles()->pluck('name')->map(function ($name) {
+            return strtolower((string) $name);
+        });
+
+        foreach ($roleNames as $roleName) {
+            foreach ($allowedKeywords as $keyword) {
+                if ($roleName !== '' && str_contains($roleName, $keyword)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function isAdminUser(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isSystemAdmin') && $user->isSystemAdmin()) {
+            return true;
+        }
+
+        $designationName = strtolower(trim((string) optional($user->designation)->name));
+        if ($designationName !== '' && str_contains($designationName, 'admin')) {
+            return true;
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        foreach ($user->roles()->pluck('name') as $roleName) {
+            $normalized = strtolower(trim((string) $roleName));
+            if ($normalized !== '' && str_contains($normalized, 'admin')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function scopedBranchId(Request $request): ?int
+    {
+        if ($this->isAdminUser($request->user())) {
+            return null;
+        }
+
+        $branchId = (int) ($request->user()?->branch_id ?? 0);
+        return $branchId > 0 ? $branchId : null;
     }
 
     public function index(Request $request)
@@ -884,6 +993,7 @@ class LoanRequestController extends Controller
         $fieldOfficer = trim((string)$request->get('field_officer', ''));
 
         $query = MicrofinanceLoanRequest::with([
+            'branch:id,name',
             'route:id,name,code',
             'center:id,name,code',
             'group:id,name,code',
@@ -895,7 +1005,10 @@ class LoanRequestController extends Controller
             $query->where('status', $status);
         }
 
-        if ($branchId > 0) {
+        $scopedBranchId = $this->scopedBranchId($request);
+        if ($scopedBranchId !== null) {
+            $query->where('branch_id', $scopedBranchId);
+        } elseif ($branchId > 0) {
             $query->where('branch_id', $branchId);
         }
 
@@ -934,6 +1047,11 @@ class LoanRequestController extends Controller
 
         $query = MicrofinanceLoanRequest::query()->where('loan_scope', $scope);
         $codePrefix = 'DL';
+
+        $scopedBranchId = $this->scopedBranchId($request);
+        if ($scopedBranchId !== null) {
+            $query->where('branch_id', $scopedBranchId);
+        }
 
         if ($scope === 'route_loan') {
             $route = MicrofinanceRoute::find($routeId);
@@ -986,7 +1104,7 @@ class LoanRequestController extends Controller
             'group_leader' => 'nullable|string|max:255',
             'loan_code' => 'nullable|string|max:100',
             'customer_no' => 'nullable|string|max:100',
-            'customer_code' => 'required|string|max:60|unique:mf_loan_requests,customer_no',
+            'customer_code' => 'required|string|max:60',
             'customer_name' => 'required|string|max:255',
             'nick_name' => 'nullable|string|max:255',
             'nic' => 'required|string|max:100',
@@ -1202,6 +1320,12 @@ class LoanRequestController extends Controller
 
     public function update(Request $request, MicrofinanceLoanRequest $loanRequest)
     {
+        if (!$this->hasReleasedLoanActionAccess($request->user())) {
+            return response()->json([
+                'message' => 'Only Finance Manager, Branch Manager, and Admin can edit loan details.'
+            ], 403);
+        }
+
         $validated = $request->validate([
             'loan_scope' => 'required|in:route_loan,center_loan,direct_loan',
             'mf_route_id' => 'nullable|exists:mf_routes,id|required_if:loan_scope,route_loan,center_loan',
@@ -1458,27 +1582,9 @@ class LoanRequestController extends Controller
             ], 422);
         }
 
-        $user = $request->user();
-        $designationName = strtolower((string)optional($user->designation)->name);
-        $loanAmount = (float)$loanRequest->loan_amount;
-
-        $canApprove = false;
-
-        // Assistant manager: must be strictly under 10000.
-        if (str_contains($designationName, 'assistant manager')) {
-            $canApprove = $loanAmount < 10000;
-        } elseif (str_contains($designationName, 'manager')) {
-            // Manager: can approve up to and including 10000.
-            $canApprove = $loanAmount <= 10000;
-        }
-
-        if ((string)$user->email === 'superadmin@softcodelk.com') {
-            $canApprove = true;
-        }
-
-        if (!$canApprove) {
+        if (!$this->hasLoanApprovalAccess($request->user())) {
             return response()->json([
-                'message' => 'You are not allowed to approve this loan amount.'
+                'message' => 'Only Loan Approver, Finance Manager, Branch Manager, and Admin can approve loans.'
             ], 403);
         }
 
@@ -1541,7 +1647,7 @@ class LoanRequestController extends Controller
 
         if (!$this->canReviewLoan($request->user())) {
             return response()->json([
-                'message' => 'You are not allowed to reject this loan.'
+                'message' => 'Only Loan Approver, Finance Manager, Branch Manager, and Admin can reject loans.'
             ], 403);
         }
 
@@ -1716,16 +1822,34 @@ class LoanRequestController extends Controller
 
     public function downloadAgreement(Request $request, MicrofinanceLoanRequest $loanRequest)
     {
+        if (!$this->hasReleasedLoanActionAccess($request->user())) {
+            return response()->json([
+                'message' => 'Only Finance Manager, Branch Manager, and Admin can download agreements.'
+            ], 403);
+        }
+
         return $this->downloadLoanDocumentByTemplate($loanRequest, 'loan_agreement', 'loan_agreement');
     }
 
     public function downloadReminderLetter(Request $request, MicrofinanceLoanRequest $loanRequest)
     {
+        if (!$this->hasReleasedLoanActionAccess($request->user())) {
+            return response()->json([
+                'message' => 'Only Finance Manager, Branch Manager, and Admin can download reminder letters.'
+            ], 403);
+        }
+
         return $this->downloadLoanDocumentByTemplate($loanRequest, 'reminder_letter', 'reminder_letter');
     }
 
     public function downloadLegalLetter(Request $request, MicrofinanceLoanRequest $loanRequest)
     {
+        if (!$this->hasReleasedLoanActionAccess($request->user())) {
+            return response()->json([
+                'message' => 'Only Finance Manager, Branch Manager, and Admin can download legal letters.'
+            ], 403);
+        }
+
         return $this->downloadLoanDocumentByTemplate($loanRequest, 'arrears_letter', 'legal_letter');
     }
 }

@@ -11,8 +11,21 @@ interface Company {
   address: string;
   phone: string;
   website: string;
+  manager_user_id?: number | null;
+  opening_asset?: string | number | null;
+  manager?: {
+    id: number;
+    name: string;
+    email: string;
+  } | null;
   created_at: string;
   updated_at: string;
+}
+
+interface UserOption {
+  id: number;
+  name: string;
+  email: string;
 }
 
 export default function Branches() {
@@ -21,6 +34,7 @@ export default function Branches() {
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
+  const [users, setUsers] = useState<UserOption[]>([]);
   const router = useRouter();
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
@@ -31,6 +45,8 @@ export default function Branches() {
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   const [website, setWebsite] = useState('');
+  const [managerUserId, setManagerUserId] = useState('');
+  const [openingAsset, setOpeningAsset] = useState('0');
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -39,8 +55,29 @@ export default function Branches() {
     } else {
       setToken(storedToken);
       fetchCompanies(storedToken);
+      fetchUsers(storedToken);
     }
   }, [router]);
+
+  const fetchUsers = async (authToken?: string) => {
+    const tokenToUse = authToken || token;
+    if (!tokenToUse) return;
+
+    try {
+      const response = await axios.get(`${API_URL}/api/manager-candidates`, {
+        headers: { Authorization: `Bearer ${tokenToUse}` },
+      });
+      const rows = Array.isArray(response.data) ? response.data : [];
+      setUsers(rows.map((user: any) => ({
+        id: Number(user.id),
+        name: String(user.name || 'Unknown User'),
+        email: String(user.email || ''),
+      })));
+    } catch (error) {
+      console.error('Error fetching users for manager list:', error);
+      setUsers([]);
+    }
+  };
 
   const fetchCompanies = async (authToken?: string) => {
     const tokenToUse = authToken || token;
@@ -62,6 +99,8 @@ export default function Branches() {
     setAddress('');
     setPhone('');
     setWebsite('');
+    setManagerUserId('');
+    setOpeningAsset('0');
     setEditingCompany(null);
   };
 
@@ -75,6 +114,8 @@ export default function Branches() {
       address,
       phone,
       website,
+      manager_user_id: managerUserId ? Number(managerUserId) : null,
+      opening_asset: openingAsset ? Number(openingAsset) : 0,
     };
 
     try {
@@ -105,6 +146,8 @@ export default function Branches() {
     setAddress(company.address || '');
     setPhone(company.phone || '');
     setWebsite(company.website || '');
+    setManagerUserId(company.manager_user_id ? String(company.manager_user_id) : '');
+    setOpeningAsset(String(company.opening_asset ?? 0));
     setShowForm(true);
   };
 
@@ -197,7 +240,16 @@ export default function Branches() {
           {companies.map((company) => (
             <div
               key={company.id}
-              className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 border border-white/20 overflow-hidden transform hover:-translate-y-2 hover:scale-105"
+              role="button"
+              tabIndex={0}
+              onClick={() => router.push(`/dashboard/branches/${company.id}`)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  router.push(`/dashboard/branches/${company.id}`);
+                }
+              }}
+              className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 border border-white/20 overflow-hidden transform hover:-translate-y-2 hover:scale-105 cursor-pointer"
             >
               <div className="p-6">
                 <div className="flex items-start justify-between mb-4">
@@ -206,7 +258,10 @@ export default function Branches() {
                   </div>
                   <div className="flex space-x-2">
                     <button
-                      onClick={() => handleEdit(company)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleEdit(company);
+                      }}
                       className="w-8 h-8 bg-blue-100 hover:bg-blue-200 rounded-lg flex items-center justify-center text-blue-600 transition-colors duration-200"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -214,7 +269,10 @@ export default function Branches() {
                       </svg>
                     </button>
                     <button
-                      onClick={() => handleDelete(company)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(company);
+                      }}
                       className="w-8 h-8 bg-red-100 hover:bg-red-200 rounded-lg flex items-center justify-center text-red-600 transition-colors duration-200"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -259,6 +317,20 @@ export default function Branches() {
                       </a>
                     </div>
                   )}
+
+                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.121 17.804A9.953 9.953 0 0112 15c2.18 0 4.196.699 5.879 1.884M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    Manager: {company.manager?.name || 'Not assigned'}
+                  </div>
+
+                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-2.21 0-4 .896-4 2s1.79 2 4 2 4 .896 4 2-1.79 2-4 2m0-10V6m0 12v-2" />
+                    </svg>
+                    Opening Asset: {Number(company.opening_asset || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
                 </div>
               </div>
             </div>
@@ -328,6 +400,34 @@ export default function Branches() {
                     type="url"
                     value={website}
                     onChange={(e) => setWebsite(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-black"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Branch Manager</label>
+                  <select
+                    value={managerUserId}
+                    onChange={(e) => setManagerUserId(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-black"
+                  >
+                    <option value="">Not assigned</option>
+                    {users.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.name} ({user.email})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Opening Asset Value</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={openingAsset}
+                    onChange={(e) => setOpeningAsset(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-black"
                   />
                 </div>

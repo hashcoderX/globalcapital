@@ -2,7 +2,7 @@
 
 import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -44,11 +44,14 @@ const API_BASE = 'http://localhost:8000/api';
 
 export default function ActiveMemberReportPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ActiveMemberRow[]>([]);
   const [officerFilter, setOfficerFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'approved' | 'released'>('all');
+
+  const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -72,11 +75,17 @@ export default function ActiveMemberReportPage() {
               Authorization: `Bearer ${token}`,
               Accept: 'application/json',
             },
+            params: {
+              branch_id: branchId,
+            },
           }),
           axios.get(`${API_BASE}/microfinance/collections`, {
             headers: {
               Authorization: `Bearer ${token}`,
               Accept: 'application/json',
+            },
+            params: {
+              branch_id: branchId,
             },
           }),
         ]);
@@ -127,7 +136,7 @@ export default function ActiveMemberReportPage() {
     };
 
     loadReport();
-  }, [token]);
+  }, [token, branchId]);
 
   const officerOptions = useMemo(() => {
     return Array.from(new Set(rows.map((row) => row.fieldOfficer))).sort((a, b) => a.localeCompare(b));
@@ -326,7 +335,7 @@ export default function ActiveMemberReportPage() {
               <p className="text-sm text-slate-600 mt-1">View active members with loan exposure, collected amount, and pending balance profile.</p>
             </div>
             <button
-              onClick={() => router.push('/dashboard/microfinance')}
+              onClick={() => router.back()}
               className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
             >
               Back

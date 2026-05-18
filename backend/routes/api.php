@@ -36,15 +36,43 @@ use App\Http\Controllers\Api\SavingsAccountController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\PermissionController;
 use App\Models\User;
+use App\Models\Role;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/user', function (Request $request) {
-    return $request->user()?->load([
+    $user = $request->user()?->load([
         'branch:id,name',
         'designation:id,name',
         'employee:id,first_name,last_name,email,branch_id,designation_id',
+        'roles:id,name,description',
+        'roles.permissions:id,name,module,description',
     ]);
+
+    if (
+        $user &&
+        $user->roles->isEmpty() &&
+        $user->designation &&
+        !empty($user->designation->name)
+    ) {
+        $matchedRole = Role::where('name', $user->designation->name)->first();
+
+        if ($matchedRole) {
+            $user->roles()->syncWithoutDetaching([
+                $matchedRole->id => [
+                    'assigned_by' => $user->id,
+                    'assigned_at' => now(),
+                ],
+            ]);
+
+            $user->load([
+                'roles:id,name,description',
+                'roles.permissions:id,name,module,description',
+            ]);
+        }
+    }
+
+    return $user;
 })->middleware('auth:sanctum');
 
 Route::get('/users', function () {
@@ -58,12 +86,14 @@ Route::get('/reset-password', function () {
 
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
+Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
 
 Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     Route::get('system/status', [CompanyController::class, 'getSystemStatus']);
     Route::post('system/status', [CompanyController::class, 'updateSystemStatus']);
     Route::post('system/reset', [CompanyController::class, 'resetSystem']);
+    Route::get('manager-candidates', [CompanyController::class, 'managerCandidates']);
     Route::apiResource('companies', CompanyController::class);
     Route::get('companies/{company}/backup', [CompanyController::class, 'backup']);
     Route::get('companies/{company}/database-backup', [CompanyController::class, 'databaseBackup']);
@@ -144,6 +174,7 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     // Role and Permission Management Routes
     Route::get('roles', [RoleController::class, 'index']);
     Route::get('permissions', [PermissionController::class, 'index']);
+    Route::get('permissions/template-file', [PermissionController::class, 'permissionFileTemplates']);
     
     Route::middleware('permission:view_roles')->group(function () {
         Route::get('roles/{role}', [RoleController::class, 'show']);

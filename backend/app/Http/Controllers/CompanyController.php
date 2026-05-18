@@ -86,13 +86,32 @@ class CompanyController extends Controller
 
     public function index()
     {
-        $companies = Company::all();
+        $companies = Company::with('manager:id,name,email')->get();
         return response()->json($companies);
     }
 
     public function show(Company $company)
     {
-        return response()->json($company);
+        return response()->json($company->load('manager:id,name,email'));
+    }
+
+    public function managerCandidates()
+    {
+        $users = User::query()
+            ->select(['id', 'name', 'email', 'designation_id'])
+            ->with(['designation:id,name', 'roles:id,name'])
+            ->where(function ($query) {
+                $query->whereHas('designation', function ($designationQuery) {
+                    $designationQuery->where('name', 'like', '%manager%');
+                })->orWhereHas('roles', function ($roleQuery) {
+                    $roleQuery->where('name', 'like', '%manager%')
+                        ->orWhere('name', 'like', '%admin%');
+                });
+            })
+            ->orderBy('name')
+            ->get();
+
+        return response()->json($users);
     }
 
     public function store(Request $request)
@@ -105,11 +124,13 @@ class CompanyController extends Controller
             'website' => 'nullable|url',
             'country' => 'nullable|string|max:100',
             'currency' => 'nullable|string|max:10',
+            'manager_user_id' => 'nullable|exists:users,id',
+            'opening_asset' => 'nullable|numeric|min:0',
         ]);
 
         $company = Company::create($request->all());
 
-        return response()->json($company, 201);
+        return response()->json($company->load('manager:id,name,email'), 201);
     }
 
     public function update(Request $request, Company $company)
@@ -122,11 +143,13 @@ class CompanyController extends Controller
             'website' => 'nullable|url',
             'country' => 'nullable|string|max:100',
             'currency' => 'nullable|string|max:10',
+            'manager_user_id' => 'nullable|exists:users,id',
+            'opening_asset' => 'nullable|numeric|min:0',
         ]);
 
         $company->update($request->all());
 
-        return response()->json($company);
+        return response()->json($company->load('manager:id,name,email'));
     }
 
     public function destroy(Company $company)
@@ -455,13 +478,37 @@ class CompanyController extends Controller
         }
     }
 
+    private function filterColumns(string $table, array $payload): array
+    {
+        if (!Schema::hasTable($table)) {
+            return [];
+        }
+
+        $allowed = array_flip(Schema::getColumnListing($table));
+        return array_filter(
+            $payload,
+            static fn ($value, $key) => isset($allowed[$key]),
+            ARRAY_FILTER_USE_BOTH
+        );
+    }
+
     public function resetSystem(Request $request)
     {
+        $validated = $request->validate([
+            'password' => ['required', 'string', 'min:1'],
+        ]);
+
         $requestUser = $request->user();
         if (!$requestUser || $requestUser->email !== self::DEFAULT_SUPER_ADMIN_EMAIL) {
             return response()->json([
                 'message' => 'Only the Super Admin can reset the system.'
             ], 403);
+        }
+
+        if (!Hash::check((string) $validated['password'], (string) $requestUser->password)) {
+            return response()->json([
+                'message' => 'Invalid password. Reset cancelled.'
+            ], 422);
         }
 
         $superAdminEmail = trim((string) env('SYSTEM_SUPER_ADMIN_EMAIL', self::DEFAULT_SUPER_ADMIN_EMAIL));
@@ -474,10 +521,80 @@ class CompanyController extends Controller
         try {
             @set_time_limit(0);
 
+            $preservedDepartments = Department::query()->get()->map(function (Department $department): array {
+                return [
+                    'tenant_id' => $department->tenant_id,
+                    'branch_id' => $department->branch_id,
+                    'name' => $department->name,
+                    'description' => $department->description,
+                    'is_active' => (bool) $department->is_active,
+                    'created_at' => $department->created_at,
+                    'updated_at' => $department->updated_at,
+                ];
+            })->all();
+
+            $preservedDesignations = Designation::query()->get()->map(function (Designation $designation): array {
+                return [
+                    'tenant_id' => $designation->tenant_id,
+                    'branch_id' => $designation->branch_id,
+                    'name' => $designation->name,
+                    'description' => $designation->description,
+                    'salary_range_min' => $designation->salary_range_min,
+                    'salary_range_max' => $designation->salary_range_max,
+                    'is_active' => (bool) $designation->is_active,
+                    'created_at' => $designation->created_at,
+                    'updated_at' => $designation->updated_at,
+                ];
+            })->all();
+
+            $preservedSuperAdmin = User::query()
+                ->where('email', $superAdminEmail)
+                ->first();
+
             $this->clearPublicStorageData();
 
             Artisan::call('migrate:fresh', ['--force' => true]);
             Artisan::call('db:seed', ['--force' => true]);
+
+            foreach ($preservedDepartments as $departmentData) {
+                $payload = $this->filterColumns('departments', $departmentData);
+                if (empty($payload['tenant_id']) || empty($payload['name'])) {
+                    continue;
+                }
+
+                Department::query()->updateOrCreate(
+                    [
+                        'tenant_id' => $payload['tenant_id'],
+                        'name' => $payload['name'],
+                    ],
+                    [
+                        'branch_id' => $payload['branch_id'] ?? $payload['tenant_id'],
+                        'description' => $payload['description'] ?? null,
+                        'is_active' => $payload['is_active'] ?? true,
+                    ]
+                );
+            }
+
+            foreach ($preservedDesignations as $designationData) {
+                $payload = $this->filterColumns('designations', $designationData);
+                if (empty($payload['tenant_id']) || empty($payload['name'])) {
+                    continue;
+                }
+
+                Designation::query()->updateOrCreate(
+                    [
+                        'tenant_id' => $payload['tenant_id'],
+                        'name' => $payload['name'],
+                    ],
+                    [
+                        'branch_id' => $payload['branch_id'] ?? $payload['tenant_id'],
+                        'description' => $payload['description'] ?? null,
+                        'salary_range_min' => $payload['salary_range_min'] ?? null,
+                        'salary_range_max' => $payload['salary_range_max'] ?? null,
+                        'is_active' => $payload['is_active'] ?? true,
+                    ]
+                );
+            }
 
             $superAdmin = User::firstOrCreate(
                 ['email' => $superAdminEmail],
@@ -486,6 +603,18 @@ class CompanyController extends Controller
                     'password' => Hash::make($generatedPassword),
                 ]
             );
+
+            if ($preservedSuperAdmin) {
+                $preservedPayload = $this->filterColumns('users', $preservedSuperAdmin->toArray());
+                unset($preservedPayload['id']);
+                unset($preservedPayload['email']);
+                unset($preservedPayload['created_at']);
+                unset($preservedPayload['updated_at']);
+
+                if (!empty($preservedPayload)) {
+                    $superAdmin->fill($preservedPayload);
+                }
+            }
 
             $superAdmin->name = 'Super Admin';
             $superAdmin->password = Hash::make($generatedPassword);

@@ -5,8 +5,10 @@ namespace App\Http\Controllers\Api\HR;
 use App\Http\Controllers\Controller;
 use App\Models\Designation;
 use App\Models\Employee;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 
 class DesignationController extends Controller
 {
@@ -96,15 +98,60 @@ class DesignationController extends Controller
      */
     public function destroy(Designation $designation): JsonResponse
     {
-        // Prevent deleting a designation that is in use by employees
-        if ($designation->employees()->exists()) {
+        $tenantId = (int) $designation->tenant_id;
+        $branchId = (int) $designation->branch_id;
+
+        $employeesCount = Employee::where('designation_id', $designation->id)->count();
+        $usersCount = User::where('designation_id', $designation->id)->count();
+
+        try {
+            DB::transaction(function () use ($designation, $tenantId, $branchId, $employeesCount, $usersCount): void {
+            if ($employeesCount > 0 || $usersCount > 0) {
+                $fallbackDesignation = Designation::firstOrCreate(
+                    [
+                        'tenant_id' => $tenantId,
+                        'name' => 'Unassigned Designation',
+                    ],
+                    [
+                        'branch_id' => $branchId,
+                        'description' => 'Auto-generated fallback designation for reassignment during delete.',
+                        'is_active' => true,
+                    ]
+                );
+
+                if ((int) $fallbackDesignation->id === (int) $designation->id) {
+                    $alternative = Designation::where('tenant_id', $tenantId)
+                        ->where('id', '!=', $designation->id)
+                        ->orderBy('id')
+                        ->first();
+
+                    if (!$alternative) {
+                        throw new \RuntimeException('Cannot delete this designation because it is currently assigned and no alternative designation exists.');
+                    }
+
+                    $fallbackDesignation = $alternative;
+                }
+
+                Employee::where('designation_id', $designation->id)
+                    ->update(['designation_id' => $fallbackDesignation->id]);
+
+                User::where('designation_id', $designation->id)
+                    ->update(['designation_id' => $fallbackDesignation->id]);
+            }
+
+            $designation->delete();
+            });
+        } catch (\RuntimeException $exception) {
             return response()->json([
-                'message' => 'Cannot delete designation: it is assigned to one or more employees.'
+                'message' => $exception->getMessage(),
             ], 409);
         }
 
-        $designation->delete();
+        $message = 'Designation deleted successfully.';
+        if ($employeesCount > 0 || $usersCount > 0) {
+            $message .= ' Linked records were reassigned automatically.';
+        }
 
-        return response()->json(['message' => 'Designation deleted successfully']);
+        return response()->json(['message' => $message]);
     }
 }

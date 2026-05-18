@@ -13,6 +13,11 @@ class Employee extends Model
 {
     use SoftDeletes, Notifiable;
 
+    protected $appends = [
+        'phone',
+        'hire_date',
+    ];
+
     protected $fillable = [
         'tenant_id',
         'branch_id',
@@ -28,12 +33,22 @@ class Employee extends Model
         'gender',
         'department_id',
         'designation_id',
+        'reporting_person',
         'join_date',
         'basic_salary',
         'commission',
         'commission_base',
         'overtime_payment_per_hour',
         'deduction_late_hour',
+        'epf_employee_contribution',
+        'epf_employer_contribution',
+        'etf_employee_contribution',
+        'etf_employer_contribution',
+        'tin',
+        'tax_applicable',
+        'tax_relief_eligible',
+        'apit_tax_amount',
+        'apit_tax_rate',
         'employee_type',
         'status',
     ];
@@ -45,7 +60,31 @@ class Employee extends Model
         'commission' => 'decimal:2',
         'overtime_payment_per_hour' => 'decimal:2',
         'deduction_late_hour' => 'decimal:2',
+        'epf_employee_contribution' => 'decimal:2',
+        'epf_employer_contribution' => 'decimal:2',
+        'etf_employee_contribution' => 'decimal:2',
+        'etf_employer_contribution' => 'decimal:2',
+        'apit_tax_amount' => 'decimal:2',
+        'apit_tax_rate' => 'decimal:2',
+        'tax_applicable' => 'boolean',
+        'tax_relief_eligible' => 'boolean',
     ];
+
+    public function getPhoneAttribute(): ?string
+    {
+        return $this->mobile;
+    }
+
+    public function getHireDateAttribute(): ?string
+    {
+        if (!$this->join_date) {
+            return null;
+        }
+
+        return $this->join_date instanceof \DateTimeInterface
+            ? $this->join_date->format('Y-m-d')
+            : (string) $this->join_date;
+    }
 
     public function tenant(): BelongsTo
     {

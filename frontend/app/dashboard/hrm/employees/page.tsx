@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 
@@ -23,6 +23,7 @@ interface Employee {
   last_name: string;
   email: string;
   phone: string;
+  reporting_person?: string;
   address: string;
   date_of_birth: string;
   hire_date: string;
@@ -31,7 +32,17 @@ interface Employee {
   commission_base?: 'company_profit' | 'own_business';
   overtime_payment_per_hour?: number;
   deduction_late_hour?: number;
+  epf_employee_contribution?: number;
+  epf_employer_contribution?: number;
+  etf_employee_contribution?: number;
+  etf_employer_contribution?: number;
+  tin?: string;
+  tax_applicable?: boolean;
+  tax_relief_eligible?: boolean;
+  apit_tax_amount?: number;
+  apit_tax_rate?: number;
   status: 'active' | 'inactive';
+  user?: { role?: string };
   department: { id: number; name: string };
   designation: { id: number; name: string };
   branch: { id: number; name: string };
@@ -82,6 +93,12 @@ interface Department {
 interface Designation {
   id: number;
   name: string;
+  source?: 'designation' | 'role';
+}
+
+interface RoleOption {
+  id: number;
+  name: string;
 }
 
 interface Branch {
@@ -103,18 +120,37 @@ interface LeaveType {
 interface EmployeeLeaveBalance {
   leave_type_id: number;
   leave_type_name: string;
-  balance: number;
-  accrual_rate: number;
+  days: number;
+  paid: boolean;
+  approval: 'auto' | 'manager' | 'hr' | 'management';
 }
 
+const DEFAULT_LEAVE_TYPES: LeaveType[] = [
+  { id: -1, name: 'Annual Leave', code: 'annual', description: 'Annual leave', max_days_per_year: 14, requires_documentation: false, is_active: true },
+  { id: -2, name: 'Sick Leave', code: 'sick', description: 'Sick leave', max_days_per_year: 14, requires_documentation: true, is_active: true },
+  { id: -3, name: 'Casual Leave', code: 'casual', description: 'Casual leave', max_days_per_year: 7, requires_documentation: false, is_active: true },
+  { id: -4, name: 'Maternity Leave', code: 'maternity', description: 'Maternity leave', max_days_per_year: 84, requires_documentation: true, is_active: true },
+  { id: -5, name: 'Paternity Leave', code: 'paternity', description: 'Paternity leave', max_days_per_year: 7, requires_documentation: false, is_active: true },
+  { id: -6, name: 'Unpaid Leave', code: 'unpaid', description: 'Unpaid leave', max_days_per_year: 30, requires_documentation: false, is_active: true },
+  { id: -7, name: 'Religious/Festival Leave', code: 'religious_festival', description: 'Religious / festival leave', max_days_per_year: 5, requires_documentation: false, is_active: true },
+  { id: -8, name: 'Study Leave', code: 'study', description: 'Study leave', max_days_per_year: 10, requires_documentation: true, is_active: true },
+  { id: -9, name: 'Compensatory Leave', code: 'compensatory', description: 'Compensatory leave', max_days_per_year: 5, requires_documentation: false, is_active: true },
+  { id: -10, name: 'Medical / Hospitalization Leave', code: 'medical_hospitalization', description: 'Medical / hospitalization leave', max_days_per_year: 30, requires_documentation: true, is_active: true },
+];
+
 export default function Employees() {
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
   const [token, setToken] = useState('');
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [designations, setDesignations] = useState<Designation[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [departmentFilter, setDepartmentFilter] = useState('all');
+  const [designationFilter, setDesignationFilter] = useState('all');
+  const [branchFilter, setBranchFilter] = useState('all');
   const [showForm, setShowForm] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -127,11 +163,22 @@ export default function Employees() {
   const [profileLoading, setProfileLoading] = useState(false);
   const router = useRouter();
 
+  const toDateInputValue = (value: unknown): string => {
+    if (!value) return '';
+    const str = String(value);
+    // Common Laravel JSON date formats: "YYYY-MM-DD", "YYYY-MM-DD HH:mm:ss", ISO "YYYY-MM-DDTHH:mm:ss..."
+    if (str.length >= 10) {
+      return str.slice(0, 10);
+    }
+    return str;
+  };
+
   // Form fields
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [role, setRole] = useState('employee');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [photoPath, setPhotoPath] = useState('');
@@ -142,9 +189,17 @@ export default function Employees() {
   const [commissionBase, setCommissionBase] = useState<'company_profit' | 'own_business' | ''>('');
   const [overtimePaymentPerHour, setOvertimePaymentPerHour] = useState('');
   const [deductionLateHour, setDeductionLateHour] = useState('');
+  const [epfEmployeeContribution, setEpfEmployeeContribution] = useState('');
+  const [epfEmployerContribution, setEpfEmployerContribution] = useState('');
+  const [etfEmployeeContribution, setEtfEmployeeContribution] = useState('');
+  const [etfEmployerContribution, setEtfEmployerContribution] = useState('');
+  const [tin, setTin] = useState('');
+  const [taxApplicable, setTaxApplicable] = useState<'yes' | 'no'>('no');
+  const [taxReliefEligible, setTaxReliefEligible] = useState<'yes' | 'no'>('no');
   const [departmentId, setDepartmentId] = useState('');
   const [designationId, setDesignationId] = useState('');
   const [branchId, setBranchId] = useState('');
+  const [reportingPerson, setReportingPerson] = useState('');
   const [status, setStatus] = useState<'active' | 'inactive'>('active');
 
   // Documents state
@@ -186,13 +241,97 @@ export default function Employees() {
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
   const [employeeLeaveBalances, setEmployeeLeaveBalances] = useState<EmployeeLeaveBalance[]>([]);
   const [selectedLeaveType, setSelectedLeaveType] = useState('');
-  const [leaveBalance, setLeaveBalance] = useState('');
-  const [accrualRate, setAccrualRate] = useState('');
+  const [leaveDays, setLeaveDays] = useState('');
+  const [leavePaid, setLeavePaid] = useState<'yes' | 'no'>('yes');
+  const [leaveApproval, setLeaveApproval] = useState<'auto' | 'manager' | 'hr' | 'management'>('manager');
 
   // Actions menu state
   const [openMenuFor, setOpenMenuFor] = useState<number | null>(null);
   const [openAttendanceFor, setOpenAttendanceFor] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const filteredEmployees = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+
+    return employees.filter((employee) => {
+      const matchesKeyword =
+        !keyword ||
+        employee.employee_code?.toLowerCase().includes(keyword) ||
+        employee.first_name?.toLowerCase().includes(keyword) ||
+        employee.last_name?.toLowerCase().includes(keyword) ||
+        employee.email?.toLowerCase().includes(keyword) ||
+        employee.department?.name?.toLowerCase().includes(keyword) ||
+        employee.designation?.name?.toLowerCase().includes(keyword) ||
+        employee.branch?.name?.toLowerCase().includes(keyword);
+
+      const matchesStatus = statusFilter === 'all' || employee.status === statusFilter;
+      const matchesDepartment = departmentFilter === 'all' || String(employee.department?.id) === departmentFilter;
+      const matchesDesignation = designationFilter === 'all' || String(employee.designation?.id) === designationFilter;
+      const matchesBranch = branchFilter === 'all' || String(employee.branch?.id) === branchFilter;
+
+      return matchesKeyword && matchesStatus && matchesDepartment && matchesDesignation && matchesBranch;
+    });
+  }, [employees, searchTerm, statusFilter, departmentFilter, designationFilter, branchFilter]);
+
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(filteredEmployees.length / pageSize));
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, filteredEmployees.length);
+  const paginatedEmployees = filteredEmployees.slice(startIndex, startIndex + pageSize);
+
+  const calculateMonthlyApit = (monthlyIncome: number) => {
+    const slabs = [
+      { limit: 100000, rate: 0 },
+      { limit: 141667, rate: 0.06 },
+      { limit: 183333, rate: 0.12 },
+      { limit: 225000, rate: 0.18 },
+      { limit: 266667, rate: 0.24 },
+      { limit: 308333, rate: 0.30 },
+      { limit: Number.POSITIVE_INFINITY, rate: 0.36 },
+    ];
+
+    let remaining = Math.max(0, monthlyIncome);
+    let previousLimit = 0;
+    let taxAmount = 0;
+    let marginalRate = 0;
+
+    for (const slab of slabs) {
+      if (remaining <= 0) break;
+
+      const slabRange = Number.isFinite(slab.limit) ? Math.max(0, slab.limit - previousLimit) : remaining;
+      const taxable = Math.min(remaining, slabRange);
+
+      if (taxable > 0) {
+        taxAmount += taxable * slab.rate;
+        if (slab.rate > 0) {
+          marginalRate = slab.rate * 100;
+        }
+      }
+
+      remaining -= taxable;
+      previousLimit = slab.limit;
+    }
+
+    return {
+      taxAmount: Number(taxAmount.toFixed(2)),
+      marginalRate: Number(marginalRate.toFixed(2)),
+    };
+  };
+
+  const monthlySalary = Number.parseFloat(basicSalary || '0') || 0;
+  const apitPreview = taxApplicable === 'yes'
+    ? calculateMonthlyApit(monthlySalary)
+    : { taxAmount: 0, marginalRate: 0 };
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, departmentFilter, designationFilter, branchFilter]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -273,9 +412,24 @@ export default function Employees() {
       const response = await axios.get('http://localhost:8000/api/hr/employees', {
         headers: { Authorization: `Bearer ${tokenToUse}` },
       });
-      setEmployees(response.data.data || []);
+
+      const employeeData = Array.isArray(response.data)
+        ? response.data
+        : (response.data?.data || []);
+
+      const normalizedEmployees: Employee[] = employeeData.map((employee: any) => ({
+        ...employee,
+        phone: employee.phone ?? employee.mobile ?? '',
+        hire_date: toDateInputValue(employee.hire_date ?? employee.join_date ?? ''),
+        date_of_birth: toDateInputValue(employee.date_of_birth ?? ''),
+      }));
+
+      setEmployees(normalizedEmployees);
+      setCurrentPage(1);
     } catch (error) {
       console.error('Error fetching employees:', error);
+      setEmployees([]);
+      setCurrentPage(1);
     }
   };
 
@@ -298,10 +452,50 @@ export default function Employees() {
     if (!tokenToUse) return;
     
     try {
-      const response = await axios.get('http://localhost:8000/api/hr/designations', {
-        headers: { Authorization: `Bearer ${tokenToUse}` },
-      });
-      setDesignations(response.data.data || []);
+      const [designationRes, roleRes] = await Promise.all([
+        axios.get('http://localhost:8000/api/hr/designations', {
+          headers: { Authorization: `Bearer ${tokenToUse}` },
+        }),
+        axios.get('http://localhost:8000/api/roles', {
+          headers: { Authorization: `Bearer ${tokenToUse}` },
+          params: { per_page: 1000 },
+        }),
+      ]);
+
+      const designationRows = Array.isArray(designationRes.data)
+        ? designationRes.data
+        : (designationRes.data?.data || []);
+
+      const roleRows = Array.isArray(roleRes.data)
+        ? roleRes.data
+        : (roleRes.data?.data || []);
+
+      const normalizedDesignationRows: Designation[] = designationRows.map((row: any) => ({
+        id: Number(row.id),
+        name: String(row.name || ''),
+        source: 'designation',
+      }));
+
+      const usedNames = new Set(
+        normalizedDesignationRows
+          .map((row) => row.name.trim().toLowerCase())
+          .filter(Boolean)
+      );
+
+      const roleOnlyRows: Designation[] = (roleRows as RoleOption[])
+        .map((row) => ({
+          id: -Math.abs(Number(row.id) || 0),
+          name: String(row.name || ''),
+          source: 'role' as const,
+        }))
+        .filter((row) => {
+          const key = row.name.trim().toLowerCase();
+          if (!key || usedNames.has(key)) return false;
+          usedNames.add(key);
+          return true;
+        });
+
+      setDesignations([...normalizedDesignationRows, ...roleOnlyRows]);
     } catch (error) {
       console.error('Error fetching designations:', error);
     }
@@ -330,9 +524,23 @@ export default function Employees() {
         headers: { Authorization: `Bearer ${tokenToUse}` },
         params: { per_page: 1000 }
       });
-      setLeaveTypes(response.data.data || []);
+
+      const payload = response.data;
+      const apiRows = Array.isArray(payload)
+        ? payload
+        : (payload?.data?.data || payload?.data || []);
+
+      const normalized = (Array.isArray(apiRows) ? apiRows : []) as LeaveType[];
+      const apiCodes = new Set(normalized.map((row) => String(row.code || '').toLowerCase()).filter(Boolean));
+      const merged = [
+        ...normalized,
+        ...DEFAULT_LEAVE_TYPES.filter((row) => !apiCodes.has(String(row.code).toLowerCase())),
+      ];
+
+      setLeaveTypes(merged);
     } catch (error) {
       console.error('Error fetching leave types:', error);
+      setLeaveTypes(DEFAULT_LEAVE_TYPES);
     }
   };
 
@@ -341,6 +549,7 @@ export default function Employees() {
     setLastName('');
     setEmail('');
     setPassword('');
+    setRole('employee');
     setPhone('');
     setAddress('');
     setPhotoPath('');
@@ -351,14 +560,23 @@ export default function Employees() {
     setCommissionBase('');
     setOvertimePaymentPerHour('');
     setDeductionLateHour('');
+    setEpfEmployeeContribution('');
+    setEpfEmployerContribution('');
+    setEtfEmployeeContribution('');
+    setEtfEmployerContribution('');
+    setTin('');
+    setTaxApplicable('no');
+    setTaxReliefEligible('no');
     setDepartmentId('');
     setDesignationId('');
     setBranchId('');
+    setReportingPerson('');
     setStatus('active');
     setEmployeeLeaveBalances([]);
     setSelectedLeaveType('');
-    setLeaveBalance('');
-    setAccrualRate('');
+    setLeaveDays('');
+    setLeavePaid('yes');
+    setLeaveApproval('manager');
     setEditingEmployee(null);
   };
 
@@ -366,18 +584,16 @@ export default function Employees() {
     e.preventDefault();
     setLoading(true);
 
-    // Validation
-    if (!firstName || !lastName || !email || !password || !hireDate || !basicSalary || !departmentId || !designationId || !branchId) {
-      showNotice('Validation Error', 'Please fill in all required fields.', 'error');
-      setLoading(false);
-      return;
-    }
+    const selectedDesignation = designations.find((desig) => desig.id.toString() === designationId);
+    const parsedDesignationId = Number(designationId);
 
     const employeeData = {
       first_name: firstName,
       last_name: lastName,
       email,
-      password,
+      password: editingEmployee
+        ? (password.trim() ? password : undefined)
+        : password,
       phone,
       address,
       photo_path: photoPath || undefined,
@@ -388,9 +604,18 @@ export default function Employees() {
       commission_base: commissionBase || undefined,
       overtime_payment_per_hour: overtimePaymentPerHour ? parseFloat(overtimePaymentPerHour) : undefined,
       deduction_late_hour: deductionLateHour ? parseFloat(deductionLateHour) : undefined,
+      epf_employee_contribution: epfEmployeeContribution ? parseFloat(epfEmployeeContribution) : undefined,
+      epf_employer_contribution: epfEmployerContribution ? parseFloat(epfEmployerContribution) : undefined,
+      etf_employee_contribution: etfEmployeeContribution ? parseFloat(etfEmployeeContribution) : undefined,
+      etf_employer_contribution: etfEmployerContribution ? parseFloat(etfEmployerContribution) : undefined,
+      tin: tin || undefined,
+      tax_applicable: taxApplicable === 'yes',
+      tax_relief_eligible: taxReliefEligible === 'yes',
       department_id: parseInt(departmentId),
-      designation_id: parseInt(designationId),
+      designation_id: Number.isFinite(parsedDesignationId) && parsedDesignationId > 0 ? parsedDesignationId : undefined,
+      designation_name: selectedDesignation?.name || undefined,
       branch_id: parseInt(branchId),
+      reporting_person: reportingPerson.trim() ? reportingPerson.trim() : undefined,
       status,
       leave_balances: employeeLeaveBalances.length > 0 ? employeeLeaveBalances : undefined,
     };
@@ -410,54 +635,101 @@ export default function Employees() {
       resetForm();
     } catch (error: any) {
       console.error('Error saving employee:', error);
-      if (error.response?.status === 403) {
-        showNotice('Permission Denied', 'Your account does not have permission to create or edit employees.', 'error');
-      } else if (error.response && error.response.data && error.response.data.errors) {
-        const errorMessages = Object.values(error.response.data.errors).flat().join('\n');
-        showNotice('Validation Error', errorMessages, 'error');
-      } else {
-        showNotice('Error', 'Failed to save employee. Please try again.', 'error');
-      }
+      const backendMessage = error?.response?.data?.message
+        || error?.response?.data?.error
+        || (Array.isArray(error?.response?.data?.errors)
+          ? error.response.data.errors.join(', ')
+          : undefined)
+        || 'Failed to save employee. Please try again.';
+      showNotice('Error', backendMessage, 'error');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleEdit = (employee: Employee) => {
+  const handleEdit = async (employee: Employee) => {
+    // Always clear password in edit mode (password is hashed server-side and cannot be auto-filled).
+    setPassword('');
     setEditingEmployee(employee);
-    setFirstName(employee.first_name);
-    setLastName(employee.last_name);
-    setEmail(employee.email);
-    setPhone(employee.phone);
-    setAddress(employee.address);
+
+    // Quick fill from list row (then refresh from full show endpoint).
+    setFirstName(employee.first_name || '');
+    setLastName(employee.last_name || '');
+    setEmail(employee.email || '');
+    setPhone(employee.phone || '');
+    setRole(employee.user?.role || 'employee');
+    setAddress(employee.address || '');
     setPhotoPath((employee as any)?.photo_path || '');
-    setDateOfBirth(employee.date_of_birth);
-    setHireDate(employee.hire_date);
-    setBasicSalary(employee.basic_salary.toString());
-    setCommission(employee.commission ? employee.commission.toString() : '');
+    setDateOfBirth(toDateInputValue(employee.date_of_birth));
+    setHireDate(toDateInputValue(employee.hire_date));
+    setBasicSalary(employee.basic_salary?.toString?.() || '');
+    setCommission(employee.commission != null ? String(employee.commission) : '');
     setCommissionBase(employee.commission_base || '');
-    setOvertimePaymentPerHour(employee.overtime_payment_per_hour ? employee.overtime_payment_per_hour.toString() : '');
-    setDeductionLateHour(employee.deduction_late_hour ? employee.deduction_late_hour.toString() : '');
-    setDepartmentId(employee.department.id.toString());
-    setDesignationId(employee.designation.id.toString());
-    setBranchId(employee.branch.id.toString());
+    setOvertimePaymentPerHour(employee.overtime_payment_per_hour != null ? String(employee.overtime_payment_per_hour) : '');
+    setDeductionLateHour(employee.deduction_late_hour != null ? String(employee.deduction_late_hour) : '');
+    setEpfEmployeeContribution(employee.epf_employee_contribution != null ? String(employee.epf_employee_contribution) : '');
+    setEpfEmployerContribution(employee.epf_employer_contribution != null ? String(employee.epf_employer_contribution) : '');
+    setEtfEmployeeContribution(employee.etf_employee_contribution != null ? String(employee.etf_employee_contribution) : '');
+    setEtfEmployerContribution(employee.etf_employer_contribution != null ? String(employee.etf_employer_contribution) : '');
+    setTin(employee.tin || '');
+    setTaxApplicable(employee.tax_applicable ? 'yes' : 'no');
+    setTaxReliefEligible(employee.tax_relief_eligible ? 'yes' : 'no');
+    setDepartmentId(employee.department?.id?.toString?.() || '');
+    setDesignationId(employee.designation?.id?.toString?.() || '');
+    setBranchId(employee.branch?.id?.toString?.() || '');
+    setReportingPerson(employee.reporting_person || '');
     setStatus(employee.status);
     setShowForm(true);
+
+    if (!token) return;
+    try {
+      setLoading(true);
+      const response = await axios.get(`http://localhost:8000/api/hr/employees/${employee.id}` , {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const full = response.data as any;
+      setFirstName(full.first_name || '');
+      setLastName(full.last_name || '');
+      setEmail(full.email || '');
+      setPhone(full.phone ?? full.mobile ?? '');
+      setAddress(full.address || '');
+      setPhotoPath(full.photo_path || '');
+      setDateOfBirth(toDateInputValue(full.date_of_birth));
+      setHireDate(toDateInputValue(full.hire_date ?? full.join_date));
+      setBasicSalary(full.basic_salary != null ? String(full.basic_salary) : '');
+      setCommission(full.commission != null ? String(full.commission) : '');
+      setCommissionBase(full.commission_base || '');
+      setOvertimePaymentPerHour(full.overtime_payment_per_hour != null ? String(full.overtime_payment_per_hour) : '');
+      setDeductionLateHour(full.deduction_late_hour != null ? String(full.deduction_late_hour) : '');
+      setEpfEmployeeContribution(full.epf_employee_contribution != null ? String(full.epf_employee_contribution) : '');
+      setEpfEmployerContribution(full.epf_employer_contribution != null ? String(full.epf_employer_contribution) : '');
+      setEtfEmployeeContribution(full.etf_employee_contribution != null ? String(full.etf_employee_contribution) : '');
+      setEtfEmployerContribution(full.etf_employer_contribution != null ? String(full.etf_employer_contribution) : '');
+      setTin(full.tin || '');
+      setTaxApplicable(full.tax_applicable ? 'yes' : 'no');
+      setTaxReliefEligible(full.tax_relief_eligible ? 'yes' : 'no');
+      setDepartmentId(String(full.department?.id ?? full.department_id ?? ''));
+      setDesignationId(String(full.designation?.id ?? full.designation_id ?? ''));
+      setBranchId(String(full.branch?.id ?? full.branch_id ?? ''));
+      setReportingPerson(full.reporting_person || '');
+      setStatus(full.status || 'active');
+    } catch (error) {
+      console.error('Error loading employee for edit:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDelete = async (id: number) => {
     try {
-      await axios.delete(`${API_URL}/api/hr/employees/${id}`, {
+      await axios.delete(`http://localhost:8000/api/hr/employees/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       fetchEmployees();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error deleting employee:', error);
-      if (error?.response?.status === 403) {
-        showNotice('Permission Denied', error?.response?.data?.message || 'You do not have permission to delete employees.', 'error');
-      } else {
-        showNotice('Error', error?.response?.data?.message || 'Failed to delete employee. Please try again.', 'error');
-      }
+      showNotice('Error', 'Failed to delete employee. Please try again.', 'error');
     }
   };
 
@@ -491,22 +763,30 @@ export default function Employees() {
   };
 
   const addLeaveBalance = () => {
-    if (!selectedLeaveType || !leaveBalance) return;
+    if (!selectedLeaveType || !leaveDays) return;
 
     const leaveType = leaveTypes.find(lt => lt.id.toString() === selectedLeaveType);
     if (!leaveType) return;
 
+    const days = parseFloat(leaveDays);
+    if (Number.isNaN(days) || days <= 0) return;
+
+    const alreadyAdded = employeeLeaveBalances.some((item) => item.leave_type_id === leaveType.id);
+    if (alreadyAdded) return;
+
     const newBalance: EmployeeLeaveBalance = {
       leave_type_id: leaveType.id,
       leave_type_name: leaveType.name,
-      balance: parseFloat(leaveBalance),
-      accrual_rate: parseFloat(accrualRate) || 0,
+      days,
+      paid: leavePaid === 'yes',
+      approval: leaveApproval,
     };
 
     setEmployeeLeaveBalances([...employeeLeaveBalances, newBalance]);
     setSelectedLeaveType('');
-    setLeaveBalance('');
-    setAccrualRate('');
+    setLeaveDays('');
+    setLeavePaid('yes');
+    setLeaveApproval('manager');
   };
 
   const removeLeaveBalance = (index: number) => {
@@ -572,8 +852,9 @@ export default function Employees() {
     setShowLeaveModal(true);
     // Reset leave form fields
     setSelectedLeaveType('');
-    setLeaveBalance('');
-    setAccrualRate('');
+    setLeaveDays('');
+    setLeavePaid('yes');
+    setLeaveApproval('manager');
     setEmployeeLeaveBalances([]);
   };
 
@@ -834,8 +1115,8 @@ export default function Employees() {
       {/* Modern Navigation */}
       <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center h-auto sm:h-16 py-3 gap-3">
+            <div className="flex items-center justify-between sm:justify-start gap-3">
               <button
                 onClick={() => router.push('/dashboard/hrm')}
                 className="flex items-center space-x-2 text-gray-700 hover:text-blue-600 transition-colors duration-300"
@@ -843,10 +1124,10 @@ export default function Employees() {
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
-                <span className="font-medium">Back to HRM</span>
+                <span className="font-medium text-sm sm:text-base">Back to HRM</span>
               </button>
             </div>
-            <div className="flex items-center space-x-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
               <div className="hidden md:flex items-center space-x-2 text-sm text-gray-600">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                 <span>Employee System Active</span>
@@ -870,48 +1151,50 @@ export default function Employees() {
 
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         {/* Hero Section */}
-        <div className="mb-8 flex justify-between items-start">
+        <div className="mb-8 flex flex-col md:flex-row md:items-start md:justify-between gap-6 md:gap-8">
           <div>
             <div className="flex items-center space-x-3 mb-4">
               <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center text-2xl shadow-lg">
                 👥
               </div>
               <div>
-                <h2 className="text-3xl font-bold text-gray-900">Employee Management</h2>
-                <p className="text-gray-600">Manage your workforce efficiently with comprehensive employee tools</p>
+                <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-900">Employee Management</h2>
+                <p className="text-sm sm:text-base md:text-lg text-gray-600">Manage your workforce efficiently with comprehensive employee tools</p>
               </div>
             </div>
-            <div className="flex space-x-6">
+            <div className="flex flex-col sm:flex-row gap-4 sm:space-x-6 sm:gap-0 mt-2 sm:mt-4">
               <div className="text-center">
-                <div className="text-2xl font-bold text-blue-600">{employees.length}</div>
+                <div className="text-xl sm:text-2xl font-bold text-blue-600">{employees.length}</div>
                 <div className="text-sm text-gray-500">Total Employees</div>
               </div>
               <div className="text-center">
-                <div className="text-2xl font-bold text-green-600">{employees.filter(e => e.status === 'active').length}</div>
+                <div className="text-xl sm:text-2xl font-bold text-green-600">{employees.filter(e => e.status === 'active').length}</div>
                 <div className="text-sm text-gray-500">Active Employees</div>
               </div>
               <div className="text-center">
-                <div className="text-2xl font-bold text-purple-600">{departments.length}</div>
+                <div className="text-xl sm:text-2xl font-bold text-purple-600">{departments.length}</div>
                 <div className="text-sm text-gray-500">Departments</div>
               </div>
             </div>
           </div>
-          <button
-            onClick={() => {
-              resetForm();
-              setShowForm(true);
-            }}
-            className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-6 py-3 rounded-xl text-sm font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center space-x-2"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-            <span>Add Employee</span>
-          </button>
+          <div className="md:flex-shrink-0">
+            <button
+              onClick={() => {
+                resetForm();
+                setShowForm(true);
+              }}
+              className="w-full md:w-auto bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-6 py-3 rounded-xl text-sm font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center justify-center space-x-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              </svg>
+              <span>Add Employee</span>
+            </button>
+          </div>
         </div>
 
         {/* Employee List */}
-        <div className="bg-white/70 backdrop-blur-sm shadow-xl rounded-2xl border border-white/20 overflow-hidden">
+        <div className="bg-white/70 backdrop-blur-sm shadow-xl rounded-2xl border border-white/20 overflow-visible relative z-0 min-h-[700px] flex flex-col">
           <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-6">
             <div className="flex items-center space-x-3">
               <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">
@@ -924,7 +1207,78 @@ export default function Employees() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="px-6 py-4 border-b border-gray-200 bg-white/70">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search employee, code, email..."
+                className="xl:col-span-2 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500"
+              />
+
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500"
+              >
+                <option value="all">All Status</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+
+              <select
+                value={departmentFilter}
+                onChange={(e) => setDepartmentFilter(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500"
+              >
+                <option value="all">All Departments</option>
+                {departments.map((department) => (
+                  <option key={department.id} value={department.id}>{department.name}</option>
+                ))}
+              </select>
+
+              <select
+                value={designationFilter}
+                onChange={(e) => setDesignationFilter(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500"
+              >
+                <option value="all">All Designations</option>
+                {Array.from(new Map(employees.map((employee) => [employee.designation.id, employee.designation])).values()).map((designation) => (
+                  <option key={designation.id} value={designation.id}>{designation.name}</option>
+                ))}
+              </select>
+
+              <div className="flex gap-2">
+                <select
+                  value={branchFilter}
+                  onChange={(e) => setBranchFilter(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500"
+                >
+                  <option value="all">All Branches</option>
+                  {branches.map((branch) => (
+                    <option key={branch.id} value={branch.id}>{branch.name}</option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchTerm('');
+                    setStatusFilter('all');
+                    setDepartmentFilter('all');
+                    setDesignationFilter('all');
+                    setBranchFilter('all');
+                  }}
+                  className="px-3 py-2 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-100 whitespace-nowrap"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto overflow-y-visible flex-1">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
@@ -955,7 +1309,7 @@ export default function Employees() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {employees.map((employee) => (
+                {paginatedEmployees.map((employee) => (
                   <tr key={employee.id} className="hover:bg-gray-50 transition-colors duration-200">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
                       {employee.employee_code}
@@ -984,7 +1338,7 @@ export default function Employees() {
                         {employee.status}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium relative z-20">
                       <div className="relative" ref={openMenuFor === employee.id ? menuRef : undefined}>
                         <button
                           aria-haspopup="menu"
@@ -1007,7 +1361,7 @@ export default function Employees() {
                             id={`row-menu-${employee.id}`}
                             role="menu"
                             tabIndex={-1}
-                            className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-[99]"
+                            className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-[300]"
                           >
                             <button role="menuitem" onClick={() => { openProfile(employee); setOpenMenuFor(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-gray-700 hover:bg-gray-50">
                               <span className="w-4 h-4">👁️</span>
@@ -1053,7 +1407,7 @@ export default function Employees() {
                                 <svg className={`w-4 h-4 transform transition ${openAttendanceFor === employee.id ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor"><path d="M6 6l6 4-6 4V6z"/></svg>
                               </button>
                               {openAttendanceFor === employee.id && (
-                                <div role="menu" tabIndex={-1} className="absolute right-full top-0 mr-1 w-44 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-[99]">
+                                <div role="menu" tabIndex={-1} className="absolute right-full top-0 mr-1 w-44 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-[310]">
                                   <button role="menuitem" onClick={() => { markAttendance(employee, 'present'); setOpenMenuFor(null); setOpenAttendanceFor(null); }} className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-50">Mark Present</button>
                                   <button role="menuitem" onClick={() => { markAttendance(employee, 'absent'); setOpenMenuFor(null); setOpenAttendanceFor(null); }} className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-50">Mark Absent</button>
                                 </div>
@@ -1073,13 +1427,44 @@ export default function Employees() {
               </tbody>
             </table>
           </div>
+
+          <div className="px-6 py-4 border-t border-gray-200 bg-white/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <p className="text-sm text-gray-600">
+              Showing {filteredEmployees.length === 0 ? 0 : startIndex + 1} to {endIndex} of {filteredEmployees.length} employees
+              {filteredEmployees.length !== employees.length ? ` (filtered from ${employees.length})` : ''}
+            </p>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+
+              <span className="text-sm text-gray-700 px-2">
+                Page {currentPage} of {totalPages}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          </div>
         </div>
       </main>
 
       {/* Employee Form Modal */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-7xl w-full max-h-[90vh] overflow-y-auto">
             <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-3">
@@ -1108,6 +1493,11 @@ export default function Employees() {
 
             <form onSubmit={handleSubmit} className="p-6 space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="md:col-span-2 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+                  <h4 className="text-sm font-semibold text-blue-900">General Details</h4>
+                  <p className="text-xs text-blue-700 mt-1">Basic employee identity and contact information.</p>
+                </div>
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     First Name *
@@ -1149,17 +1539,40 @@ export default function Employees() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Password *
+                    Password {editingEmployee ? '' : '*'}
                   </label>
                   <input
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500"
-                    required
+                    required={!editingEmployee}
                     minLength={8}
-                    placeholder="Minimum 8 characters"
+                    placeholder={editingEmployee ? 'Leave blank to keep current password' : 'Minimum 8 characters'}
                   />
+                  {editingEmployee && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      For security, the current password can’t be shown. Enter a new password only if you want to change it.
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    System Role (auto from Designation)
+                  </label>
+                  <input
+                    type="text"
+                    value={(() => {
+                      const selected = designations.find(d => d.id.toString() === designationId);
+                      return selected?.name || 'Will use Designation as system role';
+                    })()}
+                    disabled
+                    className="w-full px-4 py-3 border border-gray-200 bg-gray-50 rounded-xl text-gray-700 cursor-not-allowed"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    When saving, the user account role will automatically match the selected Designation.
+                  </p>
                 </div>
 
                 <div>
@@ -1172,6 +1585,32 @@ export default function Employees() {
                     onChange={(e) => setPhone(e.target.value)}
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Reporting Person
+                  </label>
+                  <input
+                    type="text"
+                    list="reporting-person-options"
+                    value={reportingPerson}
+                    onChange={(e) => setReportingPerson(e.target.value)}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500"
+                    placeholder="Supervisor / manager name or email"
+                  />
+                  <datalist id="reporting-person-options">
+                    {employees
+                      .filter((row) => !editingEmployee || row.id !== editingEmployee.id)
+                      .map((row) => {
+                        const label = `${row.employee_code} - ${row.first_name} ${row.last_name} (${row.email})`;
+                        // Store a stable unique value (email) in the backend string field
+                        return <option key={row.id} value={row.email} label={label} />;
+                      })}
+                  </datalist>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Used for monitoring/reporting hierarchy.
+                  </p>
                 </div>
 
                 <div className="md:col-span-2">
@@ -1188,15 +1627,23 @@ export default function Employees() {
 
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Profile Image Path
+                    Profile Image
                   </label>
                   <input
-                    type="text"
-                    value={photoPath}
-                    onChange={(e) => setPhotoPath(e.target.value)}
-                    placeholder="e.g., uploads/employees/photo.jpg or full URL"
-                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500"
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setPhotoPath(file.name);
+                    }}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 file:mr-4 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-blue-700 hover:file:bg-blue-100"
                   />
+                  {photoPath && (
+                    <p className="mt-2 text-xs text-gray-600">
+                      Selected image: {photoPath}
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -1222,6 +1669,11 @@ export default function Employees() {
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500"
                     required
                   />
+                </div>
+
+                <div className="md:col-span-2 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
+                  <h4 className="text-sm font-semibold text-indigo-900">Other Details</h4>
+                  <p className="text-xs text-indigo-700 mt-1">Compensation, statutory contributions, tax setup, and organizational assignment.</p>
                 </div>
 
                 <div>
@@ -1297,6 +1749,144 @@ export default function Employees() {
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500"
                     placeholder="e.g., 5.00"
                   />
+                </div>
+
+                <div className="md:col-span-2 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <div className="rounded-xl border border-cyan-200 bg-cyan-50/70 p-4">
+                    <h4 className="text-sm font-semibold text-cyan-900 mb-3">EPF / ETF Contributions</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          EPF Employee Contribution (%)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={epfEmployeeContribution}
+                          onChange={(e) => setEpfEmployeeContribution(e.target.value)}
+                          className="w-full px-4 py-3 border border-cyan-200 rounded-xl focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500 bg-white"
+                          placeholder="e.g., 8.00"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          EPF Employer Contribution (%)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={epfEmployerContribution}
+                          onChange={(e) => setEpfEmployerContribution(e.target.value)}
+                          className="w-full px-4 py-3 border border-cyan-200 rounded-xl focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500 bg-white"
+                          placeholder="e.g., 12.00"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          ETF Employee Contribution (%)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={etfEmployeeContribution}
+                          onChange={(e) => setEtfEmployeeContribution(e.target.value)}
+                          className="w-full px-4 py-3 border border-cyan-200 rounded-xl focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500 bg-white"
+                          placeholder="e.g., 0.00"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          ETF Employer Contribution (%)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={etfEmployerContribution}
+                          onChange={(e) => setEtfEmployerContribution(e.target.value)}
+                          className="w-full px-4 py-3 border border-cyan-200 rounded-xl focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500 bg-white"
+                          placeholder="e.g., 3.00"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    <h4 className="text-sm font-semibold text-amber-900 mb-3">Tax (PAYE / APIT)</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Tax Identification Number (TIN)
+                        </label>
+                        <input
+                          type="text"
+                          value={tin}
+                          onChange={(e) => setTin(e.target.value)}
+                          className="w-full px-4 py-3 border border-amber-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500 bg-white"
+                          placeholder="Enter TIN"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Tax Applicable
+                        </label>
+                        <select
+                          value={taxApplicable}
+                          onChange={(e) => setTaxApplicable(e.target.value as 'yes' | 'no')}
+                          className="w-full px-4 py-3 border border-amber-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all duration-200 text-gray-900 bg-white"
+                        >
+                          <option value="no">No</option>
+                          <option value="yes">Yes</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Tax Relief Eligible
+                        </label>
+                        <select
+                          value={taxReliefEligible}
+                          onChange={(e) => setTaxReliefEligible(e.target.value as 'yes' | 'no')}
+                          className="w-full px-4 py-3 border border-amber-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all duration-200 text-gray-900 bg-white"
+                        >
+                          <option value="no">No</option>
+                          <option value="yes">Yes</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 bg-white border border-amber-100 rounded-lg p-3">
+                      <h5 className="text-xs font-semibold text-amber-900 mb-2">PAYE / APIT Monthly Estimate</h5>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+                        <div>
+                          <div className="text-gray-600">Salary</div>
+                          <div className="font-semibold text-gray-900">LKR {monthlySalary.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-600">Marginal Rate</div>
+                          <div className="font-semibold text-gray-900">{apitPreview.marginalRate.toFixed(2)}%</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-600">Estimated APIT</div>
+                          <div className="font-semibold text-amber-700">LKR {apitPreview.taxAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                        </div>
+                      </div>
+                      <p className="text-xs text-amber-800 mt-2">
+                        Calculated with Sri Lanka monthly progressive slabs. Final APIT amount is recomputed and saved on backend.
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
                 <div>
@@ -1405,36 +1995,52 @@ export default function Employees() {
                       </select>
                     </div>
 
-                    {/* Initial Balance - Small width */}
-                    <div className="w-full sm:w-32">
+                    {/* Days - Small width */}
+                    <div className="w-full sm:w-28">
                       <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Initial Balance
+                        Days
                       </label>
                       <input
                         type="number"
                         step="0.5"
                         min="0"
-                        value={leaveBalance}
-                        onChange={(e) => setLeaveBalance(e.target.value)}
+                        value={leaveDays}
+                        onChange={(e) => setLeaveDays(e.target.value)}
                         className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors duration-200 text-gray-900 bg-white placeholder-gray-400"
-                        placeholder="15.5"
+                        placeholder="12"
                       />
                     </div>
 
-                    {/* Monthly Accrual - Small width */}
+                    {/* Paid - Small width */}
                     <div className="w-full sm:w-32">
                       <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Monthly Accrual
+                        Paid
                       </label>
-                      <input
-                        type="number"
-                        step="0.25"
-                        min="0"
-                        value={accrualRate}
-                        onChange={(e) => setAccrualRate(e.target.value)}
-                        className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors duration-200 text-gray-900 bg-white placeholder-gray-400"
-                        placeholder="1.25"
-                      />
+                      <select
+                        value={leavePaid}
+                        onChange={(e) => setLeavePaid(e.target.value as 'yes' | 'no')}
+                        className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors duration-200 text-gray-900 bg-white"
+                      >
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                      </select>
+                    </div>
+
+                    {/* Approval - Medium width */}
+                    <div className="w-full sm:w-40">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Approval
+                      </label>
+                      <select
+                        value={leaveApproval}
+                        onChange={(e) => setLeaveApproval(e.target.value as 'auto' | 'manager' | 'hr' | 'management')}
+                        className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors duration-200 text-gray-900 bg-white"
+                      >
+                        <option value="auto">Auto</option>
+                        <option value="manager">Manager</option>
+                        <option value="hr">HR</option>
+                        <option value="management">Management</option>
+                      </select>
                     </div>
 
                     {/* Add Balance Button - Compact but prominent */}
@@ -1442,10 +2048,10 @@ export default function Employees() {
                       <button
                         type="button"
                         onClick={addLeaveBalance}
-                        disabled={!selectedLeaveType || !leaveBalance}
+                        disabled={!selectedLeaveType || !leaveDays}
                         className="w-full sm:w-auto px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
                       >
-                        Add Balance
+                        Add Leave
                       </button>
                     </div>
                   </div>
@@ -1464,10 +2070,9 @@ export default function Employees() {
                               <div className="min-w-0">
                                 <p className="text-sm font-medium text-gray-900 truncate">{balance.leave_type_name}</p>
                                 <p className="text-xs text-gray-600">
-                                  {balance.balance} days
-                                  {balance.accrual_rate > 0 && (
-                                    <span className="ml-2 text-emerald-600">• +{balance.accrual_rate}/month</span>
-                                  )}
+                                  {balance.days} days
+                                  <span className="ml-2">• Paid: <span className={balance.paid ? 'text-emerald-600' : 'text-amber-600'}>{balance.paid ? 'Yes' : 'No'}</span></span>
+                                  <span className="ml-2">• Approval: <span className="text-blue-600 capitalize">{balance.approval}</span></span>
                                 </p>
                               </div>
                             </div>
@@ -1519,7 +2124,7 @@ export default function Employees() {
 
       {/* Employee Profile Modal */}
       {showProfileModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowProfileModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto text-black">
             <div className="flex items-start justify-between mb-6">
@@ -1545,7 +2150,16 @@ export default function Employees() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div><strong>Email:</strong> {profileEmployee.email}</div>
                     <div><strong>Phone:</strong> {profileEmployee.phone || 'N/A'}</div>
-                    <div><strong>Date of Birth:</strong> {profileEmployee.date_of_birth || 'N/A'}</div>
+                    <div><strong>Reporting Person:</strong> {(() => {
+                      const value = (profileEmployee as any)?.reporting_person as string | undefined;
+                      if (!value) return 'N/A';
+                      const match = employees.find((row) => row.email?.toLowerCase?.() === value.toLowerCase());
+                      if (match) {
+                        return `${match.first_name} ${match.last_name} (${match.employee_code})`;
+                      }
+                      return value;
+                    })()}</div>
+                    <div><strong>Date of Birth:</strong> {toDateInputValue(profileEmployee.date_of_birth) || 'N/A'}</div>
                     <div><strong>Hire Date:</strong> {profileEmployee.hire_date}</div>
                     <div><strong>Department:</strong> {profileEmployee.department.name}</div>
                     <div><strong>Designation:</strong> {profileEmployee.designation.name}</div>
@@ -1555,8 +2169,17 @@ export default function Employees() {
                         {profileEmployee.status}
                       </span>
                     </div>
-                    <div><strong>Basic Salary:</strong> ${profileEmployee.basic_salary.toLocaleString()}</div>
+                    <div><strong>Basic Salary:</strong> LKR {profileEmployee.basic_salary.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                     {profileEmployee.commission && <div><strong>Commission:</strong> {profileEmployee.commission}% ({profileEmployee.commission_base})</div>}
+                    <div><strong>EPF Employee (%):</strong> {profileEmployee.epf_employee_contribution ?? 0}%</div>
+                    <div><strong>EPF Employer (%):</strong> {profileEmployee.epf_employer_contribution ?? 0}%</div>
+                    <div><strong>ETF Employee (%):</strong> {profileEmployee.etf_employee_contribution ?? 0}%</div>
+                    <div><strong>ETF Employer (%):</strong> {profileEmployee.etf_employer_contribution ?? 0}%</div>
+                    <div><strong>TIN:</strong> {profileEmployee.tin || 'N/A'}</div>
+                    <div><strong>Tax Applicable:</strong> {profileEmployee.tax_applicable ? 'Yes' : 'No'}</div>
+                    <div><strong>Tax Relief Eligible:</strong> {profileEmployee.tax_relief_eligible ? 'Yes' : 'No'}</div>
+                    <div><strong>PAYE/APIT Rate:</strong> {(profileEmployee.apit_tax_rate ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%</div>
+                    <div><strong>PAYE/APIT Amount:</strong> LKR {(profileEmployee.apit_tax_amount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                   </div>
                   {profileEmployee.address && <div className="mt-4"><strong>Address:</strong> {profileEmployee.address}</div>}
                 </div>
@@ -1641,9 +2264,9 @@ export default function Employees() {
 
       {/* Documents Modal */}
       {showDocsModal && activeEmployee && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowDocsModal(false)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6">
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-xl font-bold text-gray-900">Documents - {activeEmployee.first_name} {activeEmployee.last_name}</h3>
               <button onClick={() => setShowDocsModal(false)} className="absolute top-4 right-4 bg-gradient-to-r from-red-500 to-red-600 text-white p-2 rounded-full shadow-lg hover:shadow-xl transform hover:scale-110 transition-all duration-200 hover:from-red-600 hover:to-red-700">✕</button>
@@ -1730,9 +2353,9 @@ export default function Employees() {
 
       {/* Education Modal */}
       {showEduModal && activeEmployee && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowEduModal(false)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6">
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-xl font-bold text-gray-900">Education - {activeEmployee.first_name} {activeEmployee.last_name}</h3>
               <button onClick={() => setShowEduModal(false)} className="absolute top-4 right-4 bg-gradient-to-r from-red-500 to-red-600 text-white p-2 rounded-full shadow-lg hover:shadow-xl transform hover:scale-110 transition-all duration-200 hover:from-red-600 hover:to-red-700">✕</button>
@@ -1852,9 +2475,9 @@ export default function Employees() {
 
       {/* Experience Modal */}
       {showExpModal && activeEmployee && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowExpModal(false)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6">
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-xl font-bold text-gray-900">Experience - {activeEmployee.first_name} {activeEmployee.last_name}</h3>
               <button onClick={() => setShowExpModal(false)} className="absolute top-4 right-4 bg-gradient-to-r from-red-500 to-red-600 text-white p-2 rounded-full shadow-lg hover:shadow-xl transform hover:scale-110 transition-all duration-200 hover:from-red-600 hover:to-red-700">✕</button>
@@ -1975,7 +2598,7 @@ export default function Employees() {
 
       {/* Allowances and Deductions Modal */}
       {showAllowancesModal && activeEmployee && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowAllowancesModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
@@ -2127,7 +2750,7 @@ export default function Employees() {
 
       {/* Leave Management Modal */}
       {showLeaveModal && activeEmployee && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowLeaveModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
@@ -2167,36 +2790,52 @@ export default function Employees() {
                     </select>
                   </div>
 
-                  {/* Initial Balance - Small width */}
-                  <div className="w-full sm:w-32">
+                  {/* Days - Small width */}
+                  <div className="w-full sm:w-28">
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Initial Balance
+                      Days
                     </label>
                     <input
                       type="number"
                       step="0.5"
                       min="0"
-                      value={leaveBalance}
-                      onChange={(e) => setLeaveBalance(e.target.value)}
+                      value={leaveDays}
+                      onChange={(e) => setLeaveDays(e.target.value)}
                       className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors duration-200 text-gray-900 bg-white placeholder-gray-400"
-                      placeholder="15.5"
+                      placeholder="12"
                     />
                   </div>
 
-                  {/* Monthly Accrual - Small width */}
+                  {/* Paid - Small width */}
                   <div className="w-full sm:w-32">
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Monthly Accrual
+                      Paid
                     </label>
-                    <input
-                      type="number"
-                      step="0.25"
-                      min="0"
-                      value={accrualRate}
-                      onChange={(e) => setAccrualRate(e.target.value)}
-                      className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors duration-200 text-gray-900 bg-white placeholder-gray-400"
-                      placeholder="1.25"
-                    />
+                    <select
+                      value={leavePaid}
+                      onChange={(e) => setLeavePaid(e.target.value as 'yes' | 'no')}
+                      className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors duration-200 text-gray-900 bg-white"
+                    >
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </div>
+
+                  {/* Approval - Medium width */}
+                  <div className="w-full sm:w-40">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Approval
+                    </label>
+                    <select
+                      value={leaveApproval}
+                      onChange={(e) => setLeaveApproval(e.target.value as 'auto' | 'manager' | 'hr' | 'management')}
+                      className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-colors duration-200 text-gray-900 bg-white"
+                    >
+                      <option value="auto">Auto</option>
+                      <option value="manager">Manager</option>
+                      <option value="hr">HR</option>
+                      <option value="management">Management</option>
+                    </select>
                   </div>
 
                   {/* Add Balance Button - Compact but prominent */}
@@ -2204,10 +2843,10 @@ export default function Employees() {
                     <button
                       type="button"
                       onClick={addLeaveBalance}
-                      disabled={!selectedLeaveType || !leaveBalance}
+                      disabled={!selectedLeaveType || !leaveDays}
                       className="w-full sm:w-auto px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
                     >
-                      Add Balance
+                      Add Leave
                     </button>
                   </div>
                 </div>
@@ -2226,10 +2865,9 @@ export default function Employees() {
                             <div className="min-w-0">
                               <p className="text-sm font-medium text-gray-900 truncate">{balance.leave_type_name}</p>
                               <p className="text-xs text-gray-600">
-                                {balance.balance} days
-                                {balance.accrual_rate > 0 && (
-                                  <span className="ml-2 text-emerald-600">• +{balance.accrual_rate}/month</span>
-                                )}
+                                {balance.days} days
+                                <span className="ml-2">• Paid: <span className={balance.paid ? 'text-emerald-600' : 'text-amber-600'}>{balance.paid ? 'Yes' : 'No'}</span></span>
+                                <span className="ml-2">• Approval: <span className="text-blue-600 capitalize">{balance.approval}</span></span>
                               </p>
                             </div>
                           </div>
@@ -2273,9 +2911,9 @@ export default function Employees() {
 
       {/* Confirm Modal */}
       {confirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeConfirm} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between mb-4">
               <h3 className="text-lg font-bold text-gray-900">{confirmTitle || 'Confirm'}</h3>
               <button onClick={closeConfirm} className="text-gray-500 hover:text-gray-700">✕</button>
@@ -2301,9 +2939,9 @@ export default function Employees() {
 
       {/* Notification Modal */}
       {noticeOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeNotice} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center space-x-2">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white ${noticeType === 'success' ? 'bg-green-500' : noticeType === 'error' ? 'bg-red-500' : 'bg-blue-500'}`}>

@@ -60,11 +60,43 @@ type LoanRequest = {
   guarantors?: LoanGuarantor[];
 };
 
+type AuthRole = {
+  id?: number;
+  name?: string;
+};
+
+type AuthUser = {
+  id?: number;
+  name?: string;
+  email?: string;
+  branch_id?: number | null;
+  designation?: { id?: number; name?: string } | null;
+  employee?: { id?: number; first_name?: string; last_name?: string; email?: string } | null;
+  roles?: AuthRole[];
+};
+
 const API_BASE = 'http://localhost:8000/api';
+
+const formatDisplayDate = (value?: string | null) => {
+  if (!value) return '-';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(date);
+};
 
 export default function ReleasedLoansPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [loans, setLoans] = useState<LoanRequest[]>([]);
   const [routes, setRoutes] = useState<MFRoute[]>([]);
@@ -176,6 +208,11 @@ export default function ReleasedLoansPage() {
   };
 
   const openEditModal = (loan: LoanRequest) => {
+    if (!canManageSensitiveLoanActions) {
+      openModal('Only Finance Manager, Branch Manager, and Admin can edit loans.', 'Access Denied');
+      return;
+    }
+
     setEditModal({
       open: true,
       loanId: loan.id,
@@ -227,6 +264,10 @@ export default function ReleasedLoansPage() {
 
   const saveLoanEdit = async () => {
     if (!editModal.loanId) return;
+    if (!canManageSensitiveLoanActions) {
+      openModal('Only Finance Manager, Branch Manager, and Admin can edit loans.', 'Access Denied');
+      return;
+    }
 
     try {
       setSavingEdit(true);
@@ -303,6 +344,10 @@ export default function ReleasedLoansPage() {
 
   const handleDownloadAgreement = async (loanId: number, customerNo: string) => {
     if (!token) return;
+    if (!canManageSensitiveLoanActions) {
+      openModal('Only Finance Manager, Branch Manager, and Admin can download agreements.', 'Access Denied');
+      return;
+    }
 
     setDownloadingAgreementId(loanId);
     try {
@@ -356,6 +401,10 @@ export default function ReleasedLoansPage() {
 
   const handleDownloadReminderLetter = async (loanId: number, customerNo: string) => {
     if (!token) return;
+    if (!canManageSensitiveLoanActions) {
+      openModal('Only Finance Manager, Branch Manager, and Admin can download reminder letters.', 'Access Denied');
+      return;
+    }
 
     setDownloadingReminderId(loanId);
     try {
@@ -409,6 +458,10 @@ export default function ReleasedLoansPage() {
 
   const handleDownloadLegalLetter = async (loanId: number, customerNo: string) => {
     if (!token) return;
+    if (!canManageSensitiveLoanActions) {
+      openModal('Only Finance Manager, Branch Manager, and Admin can download legal letters.', 'Access Denied');
+      return;
+    }
 
     setDownloadingLegalId(loanId);
     try {
@@ -477,6 +530,69 @@ export default function ReleasedLoansPage() {
     [token]
   );
 
+  const normalizeText = (value: string) =>
+    String(value || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const isCollectionOfficer = useMemo(() => {
+    const designationName = normalizeText(String(authUser?.designation?.name || ''));
+    const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+
+    if (designationName.includes('collection officer')) {
+      return true;
+    }
+
+    return roleNames.some((name) => name.includes('collection officer'));
+  }, [authUser]);
+
+  const collectionOfficerNameCandidates = useMemo(() => {
+    const employeeFullName = [authUser?.employee?.first_name || '', authUser?.employee?.last_name || '']
+      .join(' ')
+      .trim();
+
+    return [
+      String(authUser?.name || '').trim(),
+      employeeFullName,
+      String(authUser?.employee?.email || '').trim(),
+      String(authUser?.email || '').trim(),
+    ]
+      .map((value) => normalizeText(value))
+      .filter((value, index, arr) => value !== '' && arr.indexOf(value) === index);
+  }, [authUser]);
+
+  const preferredCollectionOfficerName = useMemo(() => {
+    const rawCandidates = [
+      String(authUser?.name || '').trim(),
+      [authUser?.employee?.first_name || '', authUser?.employee?.last_name || ''].join(' ').trim(),
+      String(authUser?.employee?.email || '').trim(),
+      String(authUser?.email || '').trim(),
+    ].filter((value, index, arr) => value !== '' && arr.indexOf(value) === index);
+
+    return rawCandidates[0] || '';
+  }, [authUser]);
+
+  const canManageSensitiveLoanActions = useMemo(() => {
+    const email = normalizeText(String(authUser?.email || ''));
+    if (email === 'superadmin softcodelk com') {
+      return true;
+    }
+
+    const allowedRoleKeywords = ['finance manager', 'branch manager', 'admin'];
+    const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+    const designationName = normalizeText(String(authUser?.designation?.name || ''));
+
+    const hasAllowedRole = roleNames.some((roleName) =>
+      allowedRoleKeywords.some((keyword) => roleName.includes(keyword))
+    );
+    const hasAllowedDesignation = allowedRoleKeywords.some((keyword) => designationName.includes(keyword));
+
+    return hasAllowedRole || hasAllowedDesignation;
+  }, [authUser]);
+
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
@@ -484,6 +600,17 @@ export default function ReleasedLoansPage() {
       return;
     }
     setToken(storedToken);
+
+    const storedUser = localStorage.getItem('auth_user');
+    if (storedUser) {
+      try {
+        setAuthUser(JSON.parse(storedUser));
+      } catch {
+        setAuthUser(null);
+      }
+    } else {
+      setAuthUser(null);
+    }
   }, [router]);
 
   useEffect(() => {
@@ -494,7 +621,12 @@ export default function ReleasedLoansPage() {
       try {
         const response = await axios.get(`${API_BASE}/microfinance/loan-requests`, {
           headers,
-          params: { status: 'approved' },
+          params: {
+            status: 'approved',
+            ...(isCollectionOfficer && preferredCollectionOfficerName
+              ? { field_officer: preferredCollectionOfficerName }
+              : {}),
+          },
         });
         setLoans(Array.isArray(response.data) ? response.data : []);
       } catch {
@@ -505,7 +637,26 @@ export default function ReleasedLoansPage() {
     };
 
     loadApprovedLoans();
-  }, [token, headers]);
+  }, [token, headers, isCollectionOfficer, preferredCollectionOfficerName]);
+
+  const scopedLoans = useMemo(() => {
+    if (!isCollectionOfficer) {
+      return loans;
+    }
+
+    if (collectionOfficerNameCandidates.length === 0) {
+      return [];
+    }
+
+    return loans.filter((loan) => {
+      const loanOfficerName = normalizeText(String(loan.field_officer || ''));
+      if (!loanOfficerName) {
+        return false;
+      }
+
+      return collectionOfficerNameCandidates.includes(loanOfficerName);
+    });
+  }, [loans, isCollectionOfficer, collectionOfficerNameCandidates]);
 
   useEffect(() => {
     if (!token) return;
@@ -547,17 +698,17 @@ export default function ReleasedLoansPage() {
 
   const routeOptions = useMemo(() => {
     const routeMap = new Map<number, string>();
-    loans.forEach((loan) => {
+    scopedLoans.forEach((loan) => {
       if (loan.route?.id && loan.route?.name) {
         routeMap.set(loan.route.id, loan.route.name);
       }
     });
     return Array.from(routeMap.entries()).map(([id, name]) => ({ id, name }));
-  }, [loans]);
+  }, [scopedLoans]);
 
   const centerOptions = useMemo(() => {
     const centerMap = new Map<number, { id: number; name: string; routeId: number | null }>();
-    loans.forEach((loan) => {
+    scopedLoans.forEach((loan) => {
       if (loan.center?.id && loan.center?.name) {
         centerMap.set(loan.center.id, {
           id: loan.center.id,
@@ -572,7 +723,7 @@ export default function ReleasedLoansPage() {
       if (!selectedRouteId) return true;
       return center.routeId === selectedRouteId;
     });
-  }, [loans, routeFilter]);
+  }, [scopedLoans, routeFilter]);
 
   const editSteps = [
     { id: 1, label: 'Location' },
@@ -639,7 +790,7 @@ export default function ReleasedLoansPage() {
     const selectedRouteId = routeFilter === 'all' ? null : Number(routeFilter);
     const selectedCenterId = centerFilter === 'all' ? null : Number(centerFilter);
 
-    return loans.filter((loan) => {
+    return scopedLoans.filter((loan) => {
       if (scopeFilter !== 'all' && loan.loan_scope !== scopeFilter) return false;
       if (selectedRouteId && loan.route?.id !== selectedRouteId) return false;
       if (selectedCenterId && loan.center?.id !== selectedCenterId) return false;
@@ -663,7 +814,7 @@ export default function ReleasedLoansPage() {
 
       return true;
     });
-  }, [loans, query, scopeFilter, routeFilter, centerFilter, fromDate, toDate]);
+  }, [scopedLoans, query, scopeFilter, routeFilter, centerFilter, fromDate, toDate]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -779,37 +930,41 @@ export default function ReleasedLoansPage() {
 
                   <div className="text-right">
                     <div className="mb-2 flex justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadAgreement(loan.id, loan.customer_no)}
-                        disabled={downloadingAgreementId === loan.id}
-                        className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-                      >
-                        {downloadingAgreementId === loan.id ? 'Downloading...' : 'Download Agreement'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadReminderLetter(loan.id, loan.customer_no)}
-                        disabled={downloadingReminderId === loan.id}
-                        className="px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-                      >
-                        {downloadingReminderId === loan.id ? 'Downloading...' : 'Reminder Letter'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadLegalLetter(loan.id, loan.customer_no)}
-                        disabled={downloadingLegalId === loan.id}
-                        className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-                      >
-                        {downloadingLegalId === loan.id ? 'Downloading...' : 'Legal Letter'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openEditModal(loan)}
-                        className="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold"
-                      >
-                        Edit Loan
-                      </button>
+                      {canManageSensitiveLoanActions && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadAgreement(loan.id, loan.customer_no)}
+                            disabled={downloadingAgreementId === loan.id}
+                            className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                          >
+                            {downloadingAgreementId === loan.id ? 'Downloading...' : 'Download Agreement'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadReminderLetter(loan.id, loan.customer_no)}
+                            disabled={downloadingReminderId === loan.id}
+                            className="px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                          >
+                            {downloadingReminderId === loan.id ? 'Downloading...' : 'Reminder Letter'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadLegalLetter(loan.id, loan.customer_no)}
+                            disabled={downloadingLegalId === loan.id}
+                            className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                          >
+                            {downloadingLegalId === loan.id ? 'Downloading...' : 'Legal Letter'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(loan)}
+                            className="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold"
+                          >
+                            Edit Loan
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         onClick={() => openDocumentsModal(loan)}
@@ -837,15 +992,15 @@ export default function ReleasedLoansPage() {
                   </div>
                   <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
                     <p className="text-xs uppercase tracking-wide text-gray-500">Next Payment Date</p>
-                    <p className="text-sm font-bold text-gray-900">{loan.next_payment_date || '-'}</p>
+                    <p className="text-sm font-bold text-gray-900">{formatDisplayDate(loan.next_payment_date)}</p>
                   </div>
                   <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
                     <p className="text-xs uppercase tracking-wide text-gray-500">Due Date</p>
-                    <p className="text-sm font-bold text-gray-900">{loan.due_date || '-'}</p>
+                    <p className="text-sm font-bold text-gray-900">{formatDisplayDate(loan.due_date)}</p>
                   </div>
                   <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
                     <p className="text-xs uppercase tracking-wide text-gray-500">Loan End Date</p>
-                    <p className="text-sm font-bold text-gray-900">{loan.loan_end_date || '-'}</p>
+                    <p className="text-sm font-bold text-gray-900">{formatDisplayDate(loan.loan_end_date)}</p>
                   </div>
                   <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
                     <p className="text-xs uppercase tracking-wide text-gray-500">Approved Status</p>

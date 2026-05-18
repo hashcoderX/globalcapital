@@ -2,7 +2,7 @@
 
 import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Download, Filter, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
 
 type PeriodRow = {
@@ -58,7 +58,10 @@ function csvEscape(value: unknown): string {
 
 export default function CashFlowReportPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+  const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
@@ -102,6 +105,7 @@ export default function CashFlowReportPage() {
           Accept: 'application/json',
         },
         params: {
+          branch_id: branchId,
           from_date: fromDate || undefined,
           to_date: toDate || undefined,
           product_type: productType === 'all' ? undefined : productType,
@@ -147,7 +151,7 @@ export default function CashFlowReportPage() {
     if (!token) return;
     fetchReport();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, branchId]);
 
   const applyFilters = () => {
     fetchReport();
@@ -242,7 +246,7 @@ export default function CashFlowReportPage() {
               </button>
               <button
                 type="button"
-                onClick={() => router.push('/dashboard/reports')}
+                onClick={() => router.back()}
                 className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm inline-flex items-center gap-2"
               >
                 <ArrowLeft className="h-4 w-4" />

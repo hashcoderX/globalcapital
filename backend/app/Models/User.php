@@ -10,6 +10,20 @@ use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
 {
+        private function isConfiguredSuperAdminEmail(): bool
+        {
+            $defaultEmail = 'superadmin@softcodelk.com';
+            $configuredEmail = trim((string) env('SYSTEM_SUPER_ADMIN_EMAIL', $defaultEmail));
+
+            if ($configuredEmail === '') {
+                $configuredEmail = $defaultEmail;
+            }
+
+            $email = strtolower((string) $this->email);
+
+            return $email === strtolower($defaultEmail) || $email === strtolower($configuredEmail);
+        }
+
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasFactory, Notifiable, HasApiTokens;
 
@@ -77,8 +91,8 @@ class User extends Authenticatable
 
     public function hasPermission($permission)
     {
-        // Keep a safe fallback for the canonical super admin account.
-        if ($this->email === 'superadmin@softcodelk.com') {
+        // Super admins should bypass granular permission checks.
+        if ($this->isSystemAdmin()) {
             return true;
         }
 
@@ -89,10 +103,14 @@ class User extends Authenticatable
 
     public function isSystemAdmin(): bool
     {
-        if ($this->email === 'superadmin@softcodelk.com') {
+        if ($this->isConfiguredSuperAdminEmail()) {
             return true;
         }
 
-        return $this->roles()->where('name', 'like', '%Admin%')->exists();
+        return $this->roles()->where(function ($query) {
+            $query->where('name', 'like', '%Admin%')
+                ->orWhere('name', 'like', '%Super Admin%')
+                ->orWhere('name', 'like', '%MD%');
+        })->exists();
     }
 }

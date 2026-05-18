@@ -7,7 +7,7 @@ import axios from 'axios';
 type MFRoute = { id: number; name: string; code: string };
 type MFCenter = { id: number; mf_route_id: number; name: string; code: string };
 type MFGroup = { id: number; mf_route_id: number; mf_center_id: number; name: string; code: string };
-type ManagerOption = { id: number; name: string; designation: string };
+type ManagerOption = { id: number; name: string; designation: string; branch: string };
 
 type Guarantor = {
   name: string;
@@ -24,12 +24,33 @@ type LoanDocumentUpload = {
 
 type ExistingCustomer = {
   id: number;
+  customer_code?: string;
   first_name?: string;
   last_name?: string;
+  nick_name?: string;
   nic_passport?: string;
   phone?: string;
   permanent_address?: string;
   current_address?: string;
+};
+
+type ExistingLoanRequest = {
+  customer_no?: string;
+  nick_name?: string;
+};
+
+type AuthRole = {
+  id?: number;
+  name?: string;
+};
+
+type AuthUser = {
+  id?: number;
+  name?: string;
+  email?: string;
+  designation?: { id?: number; name?: string } | null;
+  employee?: { id?: number; first_name?: string; last_name?: string; email?: string } | null;
+  roles?: AuthRole[];
 };
 
 const API_BASE = 'http://localhost:8000/api';
@@ -37,6 +58,7 @@ const API_BASE = 'http://localhost:8000/api';
 export default function RequestLoanPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(false);
   const [modal, setModal] = useState<{ open: boolean; title: string; message: string; onClose?: () => void }>({
     open: false,
@@ -59,9 +81,9 @@ export default function RequestLoanPage() {
   const [groups, setGroups] = useState<MFGroup[]>([]);
   const [managers, setManagers] = useState<ManagerOption[]>([]);
   const [fieldOfficers, setFieldOfficers] = useState<ManagerOption[]>([]);
-  const [existingLoanCustomerNos, setExistingLoanCustomerNos] = useState<string[]>([]);
   const [managersLoading, setManagersLoading] = useState(false);
   const [customers, setCustomers] = useState<ExistingCustomer[]>([]);
+  const [loanRequestNicknamesByCustomerNo, setLoanRequestNicknamesByCustomerNo] = useState<Record<string, string>>({});
   const [showNicSuggestions, setShowNicSuggestions] = useState(false);
   const [customerCodeTouched, setCustomerCodeTouched] = useState(false);
   const [activeStep, setActiveStep] = useState(1);
@@ -125,13 +147,39 @@ export default function RequestLoanPage() {
   );
   const progressPercent = (activeStep / steps.length) * 100;
 
-  const normalizeCustomerNo = (value: string) => value.trim().toUpperCase();
-  const isCustomerNoAlreadyUsed = useMemo(() => {
-    const current = normalizeCustomerNo(form.customer_code);
-    if (!current) return false;
+  const normalizeText = (value: string) =>
+    String(value || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
-    return existingLoanCustomerNos.some((item) => item === current);
-  }, [form.customer_code, existingLoanCustomerNos]);
+  const isCollectionOfficer = useMemo(() => {
+    const designationName = normalizeText(String(authUser?.designation?.name || ''));
+    const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+
+    if (designationName.includes('collection officer')) {
+      return true;
+    }
+
+    return roleNames.some((name) => name.includes('collection officer'));
+  }, [authUser]);
+
+  const authUserCandidateNames = useMemo(() => {
+    const fullEmployeeName = [authUser?.employee?.first_name || '', authUser?.employee?.last_name || '']
+      .join(' ')
+      .trim();
+
+    return [
+      String(authUser?.name || '').trim(),
+      fullEmployeeName,
+      String(authUser?.employee?.email || '').trim(),
+      String(authUser?.email || '').trim(),
+    ].filter((value, index, arr) => value !== '' && arr.indexOf(value) === index);
+  }, [authUser]);
+
+  const normalizeCustomerNo = (value: string) => value.trim().toUpperCase();
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -140,7 +188,46 @@ export default function RequestLoanPage() {
       return;
     }
     setToken(storedToken);
+
+    const storedUser = localStorage.getItem('auth_user');
+    if (storedUser) {
+      try {
+        setAuthUser(JSON.parse(storedUser));
+      } catch {
+        setAuthUser(null);
+      }
+    } else {
+      setAuthUser(null);
+    }
   }, [router]);
+
+  useEffect(() => {
+    if (!isCollectionOfficer) return;
+    if (fieldOfficers.length === 0) return;
+
+    const authEmployeeId = Number(authUser?.employee?.id || 0);
+    const candidateNames = authUserCandidateNames.map((name) => normalizeText(name));
+
+    let matchedOfficer =
+      authEmployeeId > 0 ? fieldOfficers.find((officer) => Number(officer.id) === authEmployeeId) : undefined;
+
+    if (!matchedOfficer) {
+      matchedOfficer = fieldOfficers.find((officer) => candidateNames.includes(normalizeText(officer.name)));
+    }
+
+    if (!matchedOfficer) {
+      return;
+    }
+
+    setForm((prev) =>
+      prev.field_officer === matchedOfficer.name
+        ? prev
+        : {
+            ...prev,
+            field_officer: matchedOfficer.name,
+          }
+    );
+  }, [isCollectionOfficer, fieldOfficers, authUser, authUserCandidateNames]);
 
   useEffect(() => {
     if (!token) return;
@@ -148,7 +235,7 @@ export default function RequestLoanPage() {
     const loadMasterData = async () => {
       setManagersLoading(true);
       try {
-        const [routeRes, centerRes, groupRes, employeeRes, customerRes, loanRes] = await Promise.all([
+        const [routeRes, centerRes, groupRes, employeeRes, customerRes, loanRequestRes] = await Promise.all([
           axios.get(`${API_BASE}/microfinance/settings/routes`, { headers }),
           axios.get(`${API_BASE}/microfinance/settings/centers`, { headers }),
           axios.get(`${API_BASE}/microfinance/settings/groups`, { headers }),
@@ -167,11 +254,13 @@ export default function RequestLoanPage() {
             const firstName = emp?.first_name || '';
             const lastName = emp?.last_name || '';
             const fullName = `${firstName} ${lastName}`.trim();
+            const branchName = String(emp?.branch?.name || emp?.branch_name || '').trim();
 
             return {
               id: Number(emp?.id || 0),
               name: fullName || emp?.email || '',
               designation: emp?.designation?.name || '',
+              branch: branchName,
             };
           })
           .filter((emp: ManagerOption) => emp.id > 0 && emp.name);
@@ -184,11 +273,19 @@ export default function RequestLoanPage() {
         const customerRows = Array.isArray(customerRes.data?.data) ? customerRes.data.data : [];
         setCustomers(customerRows);
 
-        const loanRows = Array.isArray(loanRes.data) ? loanRes.data : [];
-        const usedNos = loanRows
-          .map((row: any) => normalizeCustomerNo(String(row?.customer_no || '')))
-          .filter((value: string) => value !== '');
-        setExistingLoanCustomerNos(Array.from(new Set(usedNos)));
+        const loanRequestRows: ExistingLoanRequest[] = Array.isArray(loanRequestRes.data) ? loanRequestRes.data : [];
+        const nicknameMap = loanRequestRows.reduce<Record<string, string>>((acc, request) => {
+          const customerNo = normalizeCustomerNo(String(request.customer_no || ''));
+          const nickName = String(request.nick_name || '').trim();
+
+          if (customerNo && nickName) {
+            acc[customerNo] = nickName;
+          }
+
+          return acc;
+        }, {});
+
+        setLoanRequestNicknamesByCustomerNo(nicknameMap);
       } catch {
         openModal('Failed to load route/center/group data.', 'Error');
       } finally {
@@ -275,6 +372,52 @@ export default function RequestLoanPage() {
   }, [loanCodeMetaKey, token, headers]);
 
   useEffect(() => {
+    const typedCustomerNo = normalizeCustomerNo(form.customer_code);
+    if (!typedCustomerNo) return;
+
+    const matchedCustomer = customers.find(
+      (customer) => normalizeCustomerNo(String(customer.customer_code || '')) === typedCustomerNo
+    );
+
+    if (!matchedCustomer) return;
+
+    const first = (matchedCustomer.first_name || '').trim();
+    const last = (matchedCustomer.last_name || '').trim();
+    const fullName = `${first} ${last}`.trim();
+    const address = (matchedCustomer.current_address || matchedCustomer.permanent_address || '').trim();
+
+    setForm((prev) => {
+      const nextCustomerName = fullName || prev.customer_name;
+      const nextNickName =
+        (matchedCustomer.nick_name || '').trim() ||
+        loanRequestNicknamesByCustomerNo[typedCustomerNo] ||
+        prev.nick_name;
+      const nextNic = matchedCustomer.nic_passport || prev.nic;
+      const nextAddress = address || prev.address;
+      const nextContact = matchedCustomer.phone || prev.contact_no;
+
+      if (
+        prev.customer_name === nextCustomerName &&
+        prev.nick_name === nextNickName &&
+        prev.nic === nextNic &&
+        prev.address === nextAddress &&
+        prev.contact_no === nextContact
+      ) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        customer_name: nextCustomerName,
+        nick_name: nextNickName,
+        nic: nextNic,
+        address: nextAddress,
+        contact_no: nextContact,
+      };
+    });
+  }, [form.customer_code, customers, loanRequestNicknamesByCustomerNo]);
+
+  useEffect(() => {
     const sanitizedNic = (form.nic || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const generatedCode = sanitizedNic ? `CU-${sanitizedNic.slice(-6)}` : '';
 
@@ -326,8 +469,13 @@ export default function RequestLoanPage() {
 
     setForm((prev) => ({
       ...prev,
+      customer_code: customer.customer_code || prev.customer_code,
       nic: customer.nic_passport || prev.nic,
       customer_name: fullName || prev.customer_name,
+      nick_name:
+        (customer.nick_name || '').trim() ||
+        loanRequestNicknamesByCustomerNo[normalizeCustomerNo(String(customer.customer_code || ''))] ||
+        prev.nick_name,
       address: address || prev.address,
       contact_no: customer.phone || prev.contact_no,
     }));
@@ -391,10 +539,6 @@ export default function RequestLoanPage() {
     if (step === 3) {
       if (!form.customer_code.trim()) {
         return 'Customer Number is required to continue.';
-      }
-
-      if (isCustomerNoAlreadyUsed) {
-        return 'This Customer Number is already used. Please enter a unique customer number.';
       }
 
       if (!form.customer_name.trim()) {
@@ -679,7 +823,10 @@ export default function RequestLoanPage() {
                       <option value={0}>{managersLoading ? 'Loading Managers...' : 'Select Manager'}</option>
                       {managers.map((manager) => (
                         <option key={manager.id} value={manager.id}>
-                          {manager.name}{manager.designation ? ` (${manager.designation})` : ''}
+                          {manager.name}
+                          {manager.designation || manager.branch
+                            ? ` (${[manager.designation, manager.branch].filter(Boolean).join(' - ')})`
+                            : ''}
                         </option>
                       ))}
                     </select>
@@ -691,12 +838,15 @@ export default function RequestLoanPage() {
                       value={form.field_officer}
                       onChange={(e) => setForm((p) => ({ ...p, field_officer: e.target.value }))}
                       required
-                      disabled={managersLoading}
+                      disabled={managersLoading || isCollectionOfficer}
                     >
                       <option value="">{managersLoading ? 'Loading Field Officers...' : 'Select Field Officer'}</option>
                       {fieldOfficers.map((officer) => (
                         <option key={officer.id} value={officer.name}>
-                          {officer.name}{officer.designation ? ` (${officer.designation})` : ''}
+                          {officer.name}
+                          {officer.designation || officer.branch
+                            ? ` (${[officer.designation, officer.branch].filter(Boolean).join(' - ')})`
+                            : ''}
                         </option>
                       ))}
                     </select>
