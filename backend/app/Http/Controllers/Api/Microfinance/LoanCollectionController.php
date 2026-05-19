@@ -95,7 +95,14 @@ class LoanCollectionController extends Controller
             });
         }
 
-        return response()->json($query->get());
+        $collections = $query->get()->map(function (MicrofinanceLoanCollection $collection) {
+            $payload = $collection->toArray();
+            $payload['collection_date'] = $collection->collection_date?->format('Y-m-d');
+
+            return $payload;
+        })->values();
+
+        return response()->json($collections);
     }
 
     public function store(Request $request)

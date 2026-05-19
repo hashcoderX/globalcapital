@@ -105,6 +105,17 @@ export default function ReleasedLoansPage() {
   const [managers, setManagers] = useState<EmployeeOption[]>([]);
   const [fieldOfficers, setFieldOfficers] = useState<EmployeeOption[]>([]);
   const [modal, setModal] = useState({ open: false, title: '', message: '' });
+  const [removeConfirmModal, setRemoveConfirmModal] = useState<{
+    open: boolean;
+    loanId: number | null;
+    customerName: string;
+    customerNo: string;
+  }>({
+    open: false,
+    loanId: null,
+    customerName: '',
+    customerNo: '',
+  });
   const [documentsModal, setDocumentsModal] = useState<{
     open: boolean;
     loanCode: string;
@@ -185,6 +196,24 @@ export default function ReleasedLoansPage() {
 
   const closeModal = () => {
     setModal({ open: false, title: '', message: '' });
+  };
+
+  const openRemoveConfirmModal = (loan: LoanRequest) => {
+    setRemoveConfirmModal({
+      open: true,
+      loanId: loan.id,
+      customerName: loan.customer_name,
+      customerNo: loan.customer_no,
+    });
+  };
+
+  const closeRemoveConfirmModal = () => {
+    setRemoveConfirmModal({
+      open: false,
+      loanId: null,
+      customerName: '',
+      customerNo: '',
+    });
   };
 
   const openDocumentsModal = (loan: LoanRequest) => {
@@ -593,6 +622,37 @@ export default function ReleasedLoansPage() {
     return hasAllowedRole || hasAllowedDesignation;
   }, [authUser]);
 
+  const isSuperAdmin = useMemo(() => {
+    const email = normalizeText(String(authUser?.email || ''));
+    if (email === 'superadmin softcodelk com') {
+      return true;
+    }
+
+    const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+    return roleNames.some((roleName) =>
+      ['super admin', 'superadmin', 'system admin'].some((keyword) => roleName.includes(keyword))
+    );
+  }, [authUser]);
+
+  const [removingLoanId, setRemovingLoanId] = useState<number | null>(null);
+  const confirmRemoveLoan = async () => {
+    if (!isSuperAdmin || !removeConfirmModal.loanId) return;
+
+    const loanId = removeConfirmModal.loanId;
+    closeRemoveConfirmModal();
+    setRemovingLoanId(loanId);
+
+    try {
+      await axios.delete(`${API_BASE}/microfinance/loan-requests/${loanId}`, { headers });
+      setLoans((prev) => prev.filter((loan) => loan.id !== loanId));
+      openModal('Loan removed successfully.', 'Success');
+    } catch {
+      openModal('Failed to remove loan.', 'Error');
+    } finally {
+      setRemovingLoanId(null);
+    }
+  };
+
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
@@ -965,6 +1025,16 @@ export default function ReleasedLoansPage() {
                           </button>
                         </>
                       )}
+                      {isSuperAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => openRemoveConfirmModal(loan)}
+                          disabled={removingLoanId === loan.id}
+                          className="px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {removingLoanId === loan.id ? 'Removing...' : 'Remove Loan'}
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => openDocumentsModal(loan)}
@@ -1049,6 +1119,37 @@ export default function ReleasedLoansPage() {
               >
                 Next
               </button>
+            </div>
+          </div>
+        )}
+
+        {removeConfirmModal.open && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+            <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl border border-red-100">
+              <h3 className="text-lg font-bold text-slate-900">Remove Loan</h3>
+              <p className="mt-2 text-sm text-slate-600">
+                Are you sure you want to remove this loan? This action cannot be undone.
+              </p>
+              <p className="mt-3 text-sm font-semibold text-slate-800">{removeConfirmModal.customerName}</p>
+              <p className="text-xs text-slate-500">Loan Code: {removeConfirmModal.customerNo}</p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeRemoveConfirmModal}
+                  disabled={removingLoanId === removeConfirmModal.loanId}
+                  className="px-4 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmRemoveLoan}
+                  disabled={removingLoanId === removeConfirmModal.loanId}
+                  className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {removingLoanId === removeConfirmModal.loanId ? 'Removing...' : 'Remove Loan'}
+                </button>
+              </div>
             </div>
           </div>
         )}

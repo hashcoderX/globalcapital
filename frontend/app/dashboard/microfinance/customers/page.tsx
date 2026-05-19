@@ -129,7 +129,8 @@ export default function MicrofinanceCustomersPage() {
         customer.customer_code || '',
         customer.nic_passport || '',
         customer.phone || customer.contact_number || '',
-        customer.email || '',
+        customer.current_address || '',
+        customer.permanent_address || '',
       ]
         .join(' ')
         .toLowerCase();
@@ -162,7 +163,6 @@ export default function MicrofinanceCustomersPage() {
           customerNo: customer.customer_code || '',
           nic: customer.nic_passport || '',
           phone: customer.phone || customer.contact_number || '',
-          email: customer.email || '',
           status: customer.status || '',
           address: customer.current_address || customer.permanent_address || '',
         };
@@ -181,16 +181,15 @@ export default function MicrofinanceCustomersPage() {
       return text;
     };
 
-    const headersRow = ['ID', 'Customer Name', 'Customer No', 'NIC', 'Phone', 'Email', 'Status', 'Address'];
+    const headersRow = ['ID', 'Customer Name', 'Customer No', 'NIC', 'Phone', 'Address', 'Status'];
     const bodyRows = exportRows.map((row) => [
       row.id,
       row.name,
       row.customerNo,
       row.nic,
       row.phone,
-      row.email,
-      row.status,
       row.address,
+      row.status,
     ]);
 
     const csvContent = [headersRow, ...bodyRows]
@@ -223,16 +222,15 @@ export default function MicrofinanceCustomersPage() {
 
     autoTable(doc, {
       startY: 64,
-      head: [['ID', 'Customer Name', 'Customer No', 'NIC', 'Phone', 'Email', 'Status', 'Address']],
+      head: [['ID', 'Customer Name', 'Customer No', 'NIC', 'Phone', 'Address', 'Status']],
       body: exportRows.map((row) => [
         row.id,
         row.name,
         row.customerNo,
         row.nic,
         row.phone,
-        row.email,
-        row.status,
         row.address,
+        row.status,
       ]),
       styles: { fontSize: 8, cellPadding: 4 },
       headStyles: { fillColor: [245, 158, 11], textColor: [255, 255, 255] },
@@ -474,9 +472,8 @@ export default function MicrofinanceCustomersPage() {
                     <th className="px-4 py-3 font-semibold">Customer No</th>
                     <th className="px-4 py-3 font-semibold">NIC</th>
                     <th className="px-4 py-3 font-semibold">Phone</th>
-                    <th className="px-4 py-3 font-semibold">Email</th>
-                    <th className="px-4 py-3 font-semibold">Status</th>
                     <th className="px-4 py-3 font-semibold">Address</th>
+                    <th className="px-4 py-3 font-semibold">Status</th>
                     <th className="px-4 py-3 font-semibold text-center">Action</th>
                   </tr>
                 </thead>
@@ -495,7 +492,7 @@ export default function MicrofinanceCustomersPage() {
                         <td className="px-4 py-3">{customer.customer_code || 'N/A'}</td>
                         <td className="px-4 py-3">{customer.nic_passport || 'N/A'}</td>
                         <td className="px-4 py-3">{phone}</td>
-                        <td className="px-4 py-3">{customer.email || 'N/A'}</td>
+                        <td className="px-4 py-3 min-w-[220px]">{address}</td>
                         <td className="px-4 py-3">
                           <span
                             className={`inline-flex px-2 py-1 rounded-full text-[11px] font-semibold ${
@@ -509,7 +506,6 @@ export default function MicrofinanceCustomersPage() {
                             {status}
                           </span>
                         </td>
-                        <td className="px-4 py-3 min-w-[220px]">{address}</td>
                         <td className="px-4 py-3 text-center">
                           <button
                             type="button"

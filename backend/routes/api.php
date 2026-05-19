@@ -275,6 +275,7 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
         Route::get('/meta', [MicrofinanceLoanRequestController::class, 'meta']);
         Route::post('/', [MicrofinanceLoanRequestController::class, 'store']);
         Route::put('/{loanRequest}', [MicrofinanceLoanRequestController::class, 'update']);
+        Route::delete('/{loanRequest}', [MicrofinanceLoanRequestController::class, 'destroy']);
         Route::post('/{loanRequest}/lifecycle', [MicrofinanceLoanRequestController::class, 'updateLifecycle']);
         Route::post('/{loanRequest}/documents', [MicrofinanceLoanRequestController::class, 'storeDocuments']);
         Route::get('/{loanRequest}/download-agreement', [MicrofinanceLoanRequestController::class, 'downloadAgreement']);

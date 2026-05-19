@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -38,14 +38,6 @@ type MFPenaltySetting = {
   is_active: boolean;
 };
 
-type MFHoliday = {
-  id: number;
-  holiday_date: string;
-  name: string;
-  note?: string | null;
-  is_active: boolean;
-};
-
 type LoanLifecycleRow = {
   id: number;
   loan_code?: string | null;
@@ -60,7 +52,7 @@ type LoanLifecycleRow = {
   arrears_balance?: number | string | null;
 };
 
-type TabType = 'routes' | 'groups' | 'centers' | 'holidays' | 'penalty' | 'loan_lifecycle';
+type TabType = 'routes' | 'groups' | 'centers' | 'penalty' | 'loan_lifecycle';
 
 const API_BASE = 'http://localhost:8000/api/microfinance/settings';
 const shellCardClass =
@@ -76,19 +68,16 @@ export default function MicrofinanceSettingsPage() {
   const [routes, setRoutes] = useState<MFRoute[]>([]);
   const [groups, setGroups] = useState<MFGroup[]>([]);
   const [centers, setCenters] = useState<MFCenter[]>([]);
-  const [holidays, setHolidays] = useState<MFHoliday[]>([]);
   const [penaltySetting, setPenaltySetting] = useState<MFPenaltySetting | null>(null);
   const [loanLifecycleRows, setLoanLifecycleRows] = useState<LoanLifecycleRow[]>([]);
 
   const [routeForm, setRouteForm] = useState({ id: 0, name: '', code: '', is_active: true });
   const [groupForm, setGroupForm] = useState({ id: 0, mf_route_id: 0, mf_center_id: 0, name: '', code: '', is_active: true });
   const [centerForm, setCenterForm] = useState({ id: 0, mf_route_id: 0, name: '', code: '', meeting_day: '', is_active: true });
-  const [holidayForm, setHolidayForm] = useState({ id: 0, holiday_date: '', name: '', note: '', is_active: true });
   const [penaltyForm, setPenaltyForm] = useState({ id: 0, penalty_rate: '', is_active: true });
   const [routeLoading, setRouteLoading] = useState(false);
   const [groupLoading, setGroupLoading] = useState(false);
   const [centerLoading, setCenterLoading] = useState(false);
-  const [holidayLoading, setHolidayLoading] = useState(false);
   const [penaltyLoading, setPenaltyLoading] = useState(false);
   const [lifecycleLoading, setLifecycleLoading] = useState(false);
   const [lifecycleActionLoading, setLifecycleActionLoading] = useState(false);
@@ -146,11 +135,10 @@ export default function MicrofinanceSettingsPage() {
 
   const loadAll = async () => {
     try {
-      const [routeRes, groupRes, centerRes, holidayRes, penaltyRes, loanRes] = await Promise.all([
+      const [routeRes, groupRes, centerRes, penaltyRes, loanRes] = await Promise.all([
         axios.get(`${API_BASE}/routes`, { headers }),
         axios.get(`${API_BASE}/groups`, { headers }),
         axios.get(`${API_BASE}/centers`, { headers }),
-        axios.get(`${API_BASE}/holidays`, { headers }),
         axios.get(`${API_BASE}/penalty-rate`, { headers }),
         axios.get('http://localhost:8000/api/microfinance/loan-requests', { headers }),
       ]);
@@ -158,7 +146,6 @@ export default function MicrofinanceSettingsPage() {
       setRoutes(routeRes.data);
       setGroups(groupRes.data);
       setCenters(centerRes.data);
-      setHolidays(holidayRes.data);
       setPenaltySetting(penaltyRes.data);
       const loanRows = Array.isArray(loanRes.data) ? loanRes.data : [];
       setLoanLifecycleRows(
@@ -186,7 +173,6 @@ export default function MicrofinanceSettingsPage() {
   const resetRouteForm = () => setRouteForm({ id: 0, name: '', code: '', is_active: true });
   const resetGroupForm = () => setGroupForm({ id: 0, mf_route_id: 0, mf_center_id: 0, name: '', code: '', is_active: true });
   const resetCenterForm = () => setCenterForm({ id: 0, mf_route_id: 0, name: '', code: '', meeting_day: '', is_active: true });
-  const resetHolidayForm = () => setHolidayForm({ id: 0, holiday_date: '', name: '', note: '', is_active: true });
   const resetPenaltyForm = () =>
     setPenaltyForm({
       id: penaltySetting?.id ?? 0,
@@ -271,36 +257,6 @@ export default function MicrofinanceSettingsPage() {
     }
   };
 
-  const submitHoliday = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setHolidayLoading(true);
-    try {
-      const payload = {
-        holiday_date: holidayForm.holiday_date,
-        name: holidayForm.name,
-        note: holidayForm.note || null,
-        is_active: holidayForm.is_active,
-      };
-
-      let message = 'Holiday saved successfully.';
-      if (holidayForm.id) {
-        const response = await axios.put(`${API_BASE}/holidays/${holidayForm.id}`, payload, { headers });
-        message = response.data?.message || message;
-      } else {
-        const response = await axios.post(`${API_BASE}/holidays`, payload, { headers });
-        message = response.data?.message || message;
-      }
-
-      await loadAll();
-      resetHolidayForm();
-      openModal(message, 'Holiday Updated');
-    } catch {
-      openModal('Failed to save holiday. Date may already be marked.', 'Error');
-    } finally {
-      setHolidayLoading(false);
-    }
-  };
-
   const deleteItem = (type: Exclude<TabType, 'penalty'>, id: number) => {
     setDeleteConfirm({ open: true, type, id });
   };
@@ -317,11 +273,7 @@ export default function MicrofinanceSettingsPage() {
       await loadAll();
       closeDeleteConfirm();
 
-      const successMessage =
-        response?.data?.message ||
-        (deleteConfirm.type === 'holidays'
-          ? 'Holiday deleted successfully. Related loan dates were recovered.'
-          : 'Item deleted successfully.');
+      const successMessage = response?.data?.message || 'Item deleted successfully.';
       openModal(successMessage, 'Delete Success');
     } catch {
       openModal('Delete failed. Item may have dependent records.', 'Error');
@@ -482,7 +434,6 @@ export default function MicrofinanceSettingsPage() {
             { key: 'routes', label: 'Routes', icon: '🛣️' },
             { key: 'centers', label: 'Centers', icon: '🏢' },
             { key: 'groups', label: 'Groups', icon: '👥' },
-            { key: 'holidays', label: 'Holidays', icon: '📅' },
             { key: 'penalty', label: 'Penalty Rate', icon: '⚖️' },
             { key: 'loan_lifecycle', label: 'Loan Hold/Close', icon: '🧷' },
           ].map((tab) => (
@@ -543,7 +494,7 @@ export default function MicrofinanceSettingsPage() {
                   <div key={item.id} className="rounded-2xl border border-cyan-100/80 bg-white/85 p-4 shadow-sm flex items-center justify-between">
                     <div>
                       <p className="font-semibold text-slate-900">{item.name}</p>
-                      <p className="text-xs text-slate-500">Code: {item.code} • {item.is_active ? 'Active' : 'Inactive'}</p>
+                      <p className="text-xs text-slate-500">Code: {item.code} â€¢ {item.is_active ? 'Active' : 'Inactive'}</p>
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => setRouteForm(item)} className="text-xs px-2.5 py-1.5 bg-amber-100 text-amber-700 rounded-lg font-semibold">Edit</button>
@@ -629,7 +580,7 @@ export default function MicrofinanceSettingsPage() {
                   <div key={item.id} className="rounded-2xl border border-cyan-100/80 bg-white/85 p-4 shadow-sm flex items-center justify-between">
                     <div>
                       <p className="font-semibold text-slate-900">{item.name}</p>
-                      <p className="text-xs text-slate-500">Code: {item.code} • Route: {item.route?.name ?? 'N/A'} • Center: {item.center?.name ?? 'N/A'}</p>
+                      <p className="text-xs text-slate-500">Code: {item.code} â€¢ Route: {item.route?.name ?? 'N/A'} â€¢ Center: {item.center?.name ?? 'N/A'}</p>
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => setGroupForm({ id: item.id, mf_route_id: item.mf_route_id, mf_center_id: item.mf_center_id, name: item.name, code: item.code, is_active: item.is_active })} className="text-xs px-2.5 py-1.5 bg-amber-100 text-amber-700 rounded-lg font-semibold">Edit</button>
@@ -702,7 +653,7 @@ export default function MicrofinanceSettingsPage() {
                   <div key={item.id} className="rounded-2xl border border-cyan-100/80 bg-white/85 p-4 shadow-sm flex items-center justify-between">
                     <div>
                       <p className="font-semibold text-slate-900">{item.name}</p>
-                      <p className="text-xs text-slate-500">Code: {item.code} • Route: {item.route?.name ?? 'N/A'} • Day: {item.meeting_day || 'N/A'}</p>
+                      <p className="text-xs text-slate-500">Code: {item.code} â€¢ Route: {item.route?.name ?? 'N/A'} â€¢ Day: {item.meeting_day || 'N/A'}</p>
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => setCenterForm({ id: item.id, mf_route_id: item.mf_route_id, name: item.name, code: item.code, meeting_day: item.meeting_day ?? '', is_active: item.is_active })} className="text-xs px-2.5 py-1.5 bg-amber-100 text-amber-700 rounded-lg font-semibold">Edit</button>
@@ -711,87 +662,6 @@ export default function MicrofinanceSettingsPage() {
                   </div>
                 ))}
                 {!centers.length && <p className="text-sm text-slate-500">No centers yet.</p>}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'holidays' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <form onSubmit={submitHoliday} className={`${shellCardClass} p-6 md:p-7 space-y-4`}>
-              <h2 className="text-lg font-bold text-slate-900">{holidayForm.id ? 'Edit Holiday' : 'Mark Holiday'}</h2>
-              <p className="text-sm text-slate-600">
-                When a holiday is marked, matching loan collection dates are automatically forwarded to the next working day.
-              </p>
-              <input
-                type="date"
-                value={holidayForm.holiday_date}
-                onChange={(e) => setHolidayForm({ ...holidayForm, holiday_date: e.target.value })}
-                className={inputClass}
-                required
-              />
-              <input
-                value={holidayForm.name}
-                onChange={(e) => setHolidayForm({ ...holidayForm, name: e.target.value })}
-                placeholder="Holiday name"
-                className={inputClass}
-                required
-              />
-              <input
-                value={holidayForm.note}
-                onChange={(e) => setHolidayForm({ ...holidayForm, note: e.target.value })}
-                placeholder="Note (optional)"
-                className={inputClass}
-              />
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={holidayForm.is_active}
-                  onChange={(e) => setHolidayForm({ ...holidayForm, is_active: e.target.checked })}
-                />
-                Active
-              </label>
-              <div className="flex gap-2">
-                <button disabled={holidayLoading} className="rounded-xl bg-gradient-to-r from-cyan-600 to-sky-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:from-cyan-700 hover:to-sky-700 disabled:opacity-70 disabled:cursor-not-allowed inline-flex items-center gap-2">
-                  {holidayLoading && <span className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin"></span>}
-                  {holidayLoading ? 'Saving...' : holidayForm.id ? 'Update Holiday' : 'Mark Holiday'}
-                </button>
-                <button type="button" onClick={resetHolidayForm} className="rounded-xl bg-slate-100 px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-200">Clear</button>
-              </div>
-            </form>
-
-            <div className={`${shellCardClass} p-6 md:p-7`}>
-              <h2 className="text-lg font-bold text-slate-900 mb-4">Holiday List</h2>
-              <div className="space-y-3 max-h-[420px] overflow-auto">
-                {holidays.map((item) => (
-                  <div key={item.id} className="rounded-2xl border border-cyan-100/80 bg-white/85 p-4 shadow-sm flex items-center justify-between">
-                    <div>
-                      <p className="font-semibold text-slate-900">{item.name}</p>
-                      <p className="text-xs text-slate-500">
-                        Date: {formatDate(item.holiday_date)} • {item.is_active ? 'Active' : 'Inactive'}
-                        {item.note ? ` • ${item.note}` : ''}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() =>
-                          setHolidayForm({
-                            id: item.id,
-                            holiday_date: String(item.holiday_date || '').slice(0, 10),
-                            name: item.name,
-                            note: item.note || '',
-                            is_active: item.is_active,
-                          })
-                        }
-                        className="text-xs px-2.5 py-1.5 bg-amber-100 text-amber-700 rounded-lg font-semibold"
-                      >
-                        Edit
-                      </button>
-                      <button onClick={() => deleteItem('holidays', item.id)} className="text-xs px-2.5 py-1.5 bg-red-100 text-red-700 rounded-lg font-semibold">Delete</button>
-                    </div>
-                  </div>
-                ))}
-                {!holidays.length && <p className="text-sm text-slate-500">No holidays marked yet.</p>}
               </div>
             </div>
           </div>
@@ -1015,7 +885,7 @@ export default function MicrofinanceSettingsPage() {
                 {lifecycleModal.action === 'hold' ? 'Put Loan On Hold' : 'Close Loan'}
               </h3>
               <p className="mt-2 text-sm text-slate-600">
-                Loan: {lifecycleModal.loan.loan_code || `LR-${lifecycleModal.loan.id}`} • Customer: {lifecycleModal.loan.customer_name || '-'}
+                Loan: {lifecycleModal.loan.loan_code || `LR-${lifecycleModal.loan.id}`} â€¢ Customer: {lifecycleModal.loan.customer_name || '-'}
               </p>
               <textarea
                 className="mt-3 w-full rounded-xl border border-cyan-100 bg-white px-3 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-cyan-200"

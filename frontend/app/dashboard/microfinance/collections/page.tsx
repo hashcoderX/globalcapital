@@ -27,6 +27,9 @@ type LoanRow = {
   penalty_grace_days?: number | string | null;
   due_date?: string | null;
   next_payment_date?: string | null;
+  loan_end_date?: string | null;
+  last_pay_date?: string | null;
+  collections_max_collection_date?: string | null;
   refund_option?: 'day' | 'week' | 'month' | string;
   arrears_balance?: number | string;
   status: string;
@@ -38,6 +41,39 @@ type CollectionRow = {
   collected_amount: number | string;
   collection_date?: string;
 };
+
+const normalizeCollectionDate = (row: Record<string, unknown>) => {
+  const candidates = [row.collection_date, row.collectionDate, row.created_at, row.createdAt];
+
+  for (const candidate of candidates) {
+    if (candidate == null || candidate === '') continue;
+
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed) {
+        return trimmed.includes('T') ? trimmed.split('T')[0] : trimmed.slice(0, 10);
+      }
+    }
+
+    if (typeof candidate === 'object' && candidate !== null && 'date' in candidate) {
+      const nested = String((candidate as { date?: string }).date || '').trim();
+      if (nested) {
+        return nested.includes('T') ? nested.split('T')[0] : nested.slice(0, 10);
+      }
+    }
+  }
+
+  return '';
+};
+
+const normalizeCollectionRow = (row: Record<string, unknown>): CollectionRow => ({
+  id: Number(row.id || 0),
+  mf_loan_request_id: Number(
+    row.mf_loan_request_id ?? row.loan_request_id ?? (row.loan_request as { id?: number } | undefined)?.id ?? 0
+  ),
+  collected_amount: row.collected_amount as number | string,
+  collection_date: normalizeCollectionDate(row),
+});
 
 type AuthUser = {
   id: number;
@@ -210,7 +246,10 @@ export default function CollectionManagementPage() {
         ]);
 
         setLoans(Array.isArray(loanResponse.data) ? loanResponse.data : []);
-        setCollections(Array.isArray(collectionResponse.data) ? collectionResponse.data : []);
+        const collectionRows = Array.isArray(collectionResponse.data) ? collectionResponse.data : [];
+        setCollections(
+          collectionRows.map((row) => normalizeCollectionRow(row as Record<string, unknown>))
+        );
       } catch {
         setLoans([]);
         setCollections([]);
@@ -256,7 +295,35 @@ export default function CollectionManagementPage() {
     return map;
   }, [collections]);
 
+  const lastPayDateByLoan = useMemo(() => {
+    const map = new Map<number, string>();
+
+    collections.forEach((row) => {
+      const loanId = Number(row.mf_loan_request_id || 0);
+      const collectionDate = String(row.collection_date || '').trim();
+      if (!loanId || !collectionDate) return;
+
+      const datePart = collectionDate.includes('T') ? collectionDate.split('T')[0] : collectionDate;
+      const existing = map.get(loanId);
+
+      if (!existing || datePart > existing) {
+        map.set(loanId, datePart);
+      }
+    });
+
+    return map;
+  }, [collections]);
+
   const getPaidTotal = (loanId: number) => paidTotalByLoan.get(loanId) || 0;
+
+  const getLastPayDate = (loan: LoanRow) => {
+    const fromLoan = String(loan.last_pay_date || loan.collections_max_collection_date || '').trim();
+    if (fromLoan) {
+      return fromLoan.includes('T') ? fromLoan.split('T')[0] : fromLoan.slice(0, 10);
+    }
+
+    return lastPayDateByLoan.get(loan.id) || null;
+  };
   const getOutstandingBalance = (loan: LoanRow) => {
     const totalPayable = Number(loan.refundable_amount || 0);
     const paidTotal = getPaidTotal(loan.id);
@@ -940,15 +1007,15 @@ export default function CollectionManagementPage() {
 
       const savedCollection = response?.data?.data;
       if (savedCollection?.mf_loan_request_id) {
-        setCollections((prev) => [
-          ...prev,
-          {
-            id: Number(savedCollection.id || 0),
-            mf_loan_request_id: Number(savedCollection.mf_loan_request_id),
-            collected_amount: Number(savedCollection.collected_amount || 0),
-            collection_date: String(savedCollection.collection_date || ''),
-          },
-        ]);
+        const normalizedCollection = normalizeCollectionRow(savedCollection as Record<string, unknown>);
+        setCollections((prev) => [...prev, normalizedCollection]);
+        setLoans((prev) =>
+          prev.map((loan) =>
+            loan.id === normalizedCollection.mf_loan_request_id
+              ? { ...loan, last_pay_date: normalizedCollection.collection_date || loan.last_pay_date }
+              : loan
+          )
+        );
       }
 
       const loanDates = response?.data?.loan_dates;
@@ -1218,6 +1285,7 @@ export default function CollectionManagementPage() {
                     <th className="px-3 py-2 font-semibold">Installment</th>
                     <th className="px-3 py-2 font-semibold">Outstanding</th>
                     <th className="px-3 py-2 font-semibold">Due Date</th>
+                    <th className="px-3 py-2 font-semibold">Loan End Date</th>
                     <th className="px-3 py-2 font-semibold">Action</th>
                   </tr>
                 </thead>
@@ -1233,6 +1301,7 @@ export default function CollectionManagementPage() {
                       <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
                       <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
                       <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>
+                      <td className="px-3 py-2">{formatDateDisplay(loan.loan_end_date)}</td>
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2">
                           <button
@@ -1885,6 +1954,14 @@ export default function CollectionManagementPage() {
                   <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-3"><p className="text-xs text-violet-700">Extra Payment</p><p className="font-extrabold text-violet-700">{getExtraPayment(loanDetailsModal.loan).toFixed(2)}</p></div>
                   <div className="rounded-xl border border-cyan-100 bg-white p-3"><p className="text-xs text-slate-500">Due Date</p><p className="font-semibold">{formatDateDisplay(loanDetailsModal.loan.due_date)}</p></div>
                   <div className="rounded-xl border border-cyan-100 bg-white p-3"><p className="text-xs text-slate-500">Next Payment Date</p><p className="font-semibold">{formatDateDisplay(loanDetailsModal.loan.next_payment_date)}</p></div>
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
+                    <p className="text-xs text-indigo-700">Last Pay Date</p>
+                    <p className="font-semibold text-indigo-900">{formatDateDisplay(getLastPayDate(loanDetailsModal.loan))}</p>
+                  </div>
+                  <div className="rounded-xl border border-orange-100 bg-orange-50/60 p-3">
+                    <p className="text-xs text-orange-700">Loan End Date</p>
+                    <p className="font-semibold text-orange-900">{formatDateDisplay(loanDetailsModal.loan.loan_end_date)}</p>
+                  </div>
                 </div>
               </div>
 

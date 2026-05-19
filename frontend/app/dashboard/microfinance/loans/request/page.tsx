@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 
@@ -54,6 +54,46 @@ type AuthUser = {
 };
 
 const API_BASE = 'http://localhost:8000/api';
+const INTEREST_RATE_MAX_DECIMALS = 7;
+
+const sanitizeInterestRateInput = (value: string) => {
+  const normalized = value.replace(/,/g, '.').trim();
+  if (normalized === '') {
+    return '';
+  }
+
+  if (!/^\d*\.?\d*$/.test(normalized)) {
+    return null;
+  }
+
+  const [whole = '', fractional = ''] = normalized.split('.');
+  if (fractional.length > INTEREST_RATE_MAX_DECIMALS) {
+    return `${whole}.${fractional.slice(0, INTEREST_RATE_MAX_DECIMALS)}`;
+  }
+
+  return normalized;
+};
+
+const finalizeInterestRate = (value: string) => {
+  const sanitized = sanitizeInterestRateInput(value);
+  if (sanitized === null || sanitized === '' || sanitized === '.') {
+    return '';
+  }
+
+  const numeric = Number(sanitized);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return '';
+  }
+
+  const [whole = '0', fractional = ''] = sanitized.split('.');
+  const trimmedFraction = fractional.slice(0, INTEREST_RATE_MAX_DECIMALS).replace(/0+$/, '');
+
+  if (trimmedFraction === '') {
+    return whole === '' ? '0' : whole;
+  }
+
+  return `${whole || '0'}.${trimmedFraction}`;
+};
 
 export default function RequestLoanPage() {
   const router = useRouter();
@@ -86,6 +126,9 @@ export default function RequestLoanPage() {
   const [loanRequestNicknamesByCustomerNo, setLoanRequestNicknamesByCustomerNo] = useState<Record<string, string>>({});
   const [showNicSuggestions, setShowNicSuggestions] = useState(false);
   const [customerCodeTouched, setCustomerCodeTouched] = useState(false);
+  const [customerCodeLookupLoading, setCustomerCodeLookupLoading] = useState(false);
+  const [customerCodeLookupNotice, setCustomerCodeLookupNotice] = useState('');
+  const customerCodeLookupRequestRef = useRef(0);
   const [activeStep, setActiveStep] = useState(1);
 
   const [form, setForm] = useState({
@@ -180,6 +223,26 @@ export default function RequestLoanPage() {
   }, [authUser]);
 
   const normalizeCustomerNo = (value: string) => value.trim().toUpperCase();
+
+  const handleInterestRateChange = (value: string) => {
+    const sanitized = sanitizeInterestRateInput(value);
+    if (sanitized === null) {
+      return;
+    }
+
+    setForm((prev) => ({ ...prev, interest_rate: sanitized }));
+  };
+
+  const handleInterestRateBlur = () => {
+    setForm((prev) => {
+      const finalized = finalizeInterestRate(prev.interest_rate);
+      if (finalized === prev.interest_rate) {
+        return prev;
+      }
+
+      return { ...prev, interest_rate: finalized };
+    });
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -372,52 +435,6 @@ export default function RequestLoanPage() {
   }, [loanCodeMetaKey, token, headers]);
 
   useEffect(() => {
-    const typedCustomerNo = normalizeCustomerNo(form.customer_code);
-    if (!typedCustomerNo) return;
-
-    const matchedCustomer = customers.find(
-      (customer) => normalizeCustomerNo(String(customer.customer_code || '')) === typedCustomerNo
-    );
-
-    if (!matchedCustomer) return;
-
-    const first = (matchedCustomer.first_name || '').trim();
-    const last = (matchedCustomer.last_name || '').trim();
-    const fullName = `${first} ${last}`.trim();
-    const address = (matchedCustomer.current_address || matchedCustomer.permanent_address || '').trim();
-
-    setForm((prev) => {
-      const nextCustomerName = fullName || prev.customer_name;
-      const nextNickName =
-        (matchedCustomer.nick_name || '').trim() ||
-        loanRequestNicknamesByCustomerNo[typedCustomerNo] ||
-        prev.nick_name;
-      const nextNic = matchedCustomer.nic_passport || prev.nic;
-      const nextAddress = address || prev.address;
-      const nextContact = matchedCustomer.phone || prev.contact_no;
-
-      if (
-        prev.customer_name === nextCustomerName &&
-        prev.nick_name === nextNickName &&
-        prev.nic === nextNic &&
-        prev.address === nextAddress &&
-        prev.contact_no === nextContact
-      ) {
-        return prev;
-      }
-
-      return {
-        ...prev,
-        customer_name: nextCustomerName,
-        nick_name: nextNickName,
-        nic: nextNic,
-        address: nextAddress,
-        contact_no: nextContact,
-      };
-    });
-  }, [form.customer_code, customers, loanRequestNicknamesByCustomerNo]);
-
-  useEffect(() => {
     const sanitizedNic = (form.nic || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const generatedCode = sanitizedNic ? `CU-${sanitizedNic.slice(-6)}` : '';
 
@@ -461,26 +478,102 @@ export default function RequestLoanPage() {
       .slice(0, 8);
   }, [customers, form.nic]);
 
+  const fillCustomerFromRecord = useCallback(
+    (customer: ExistingCustomer) => {
+      const first = (customer.first_name || '').trim();
+      const last = (customer.last_name || '').trim();
+      const fullName = `${first} ${last}`.trim();
+      const address = (customer.current_address || customer.permanent_address || '').trim();
+      const customerCode = normalizeCustomerNo(String(customer.customer_code || ''));
+
+      setForm((prev) => ({
+        ...prev,
+        customer_code: customerCode || prev.customer_code,
+        nic: customer.nic_passport || prev.nic,
+        customer_name: fullName || prev.customer_name,
+        nick_name:
+          (customer.nick_name || '').trim() ||
+          loanRequestNicknamesByCustomerNo[customerCode] ||
+          prev.nick_name,
+        address: address || prev.address,
+        contact_no: customer.phone || prev.contact_no,
+      }));
+    },
+    [loanRequestNicknamesByCustomerNo]
+  );
+
+  const lookupCustomerByCode = useCallback(
+    async (rawCode: string, showNotFoundNotice = false) => {
+      const code = normalizeCustomerNo(rawCode);
+      if (!token || code.length < 2) {
+        setCustomerCodeLookupNotice('');
+        return false;
+      }
+
+      const localMatch = customers.find(
+        (customer) => normalizeCustomerNo(String(customer.customer_code || '')) === code
+      );
+      if (localMatch) {
+        fillCustomerFromRecord(localMatch);
+        setCustomerCodeLookupNotice('');
+        return true;
+      }
+
+      const requestId = customerCodeLookupRequestRef.current + 1;
+      customerCodeLookupRequestRef.current = requestId;
+      setCustomerCodeLookupLoading(true);
+
+      try {
+        const response = await axios.get(`${API_BASE}/customers/by-code/${encodeURIComponent(code)}`, {
+          headers,
+        });
+
+        if (customerCodeLookupRequestRef.current !== requestId) {
+          return false;
+        }
+
+        fillCustomerFromRecord(response.data as ExistingCustomer);
+        setCustomerCodeLookupNotice('');
+        return true;
+      } catch {
+        if (customerCodeLookupRequestRef.current !== requestId) {
+          return false;
+        }
+
+        if (showNotFoundNotice) {
+          setCustomerCodeLookupNotice('No registered customer found for this customer number.');
+        } else {
+          setCustomerCodeLookupNotice('');
+        }
+
+        return false;
+      } finally {
+        if (customerCodeLookupRequestRef.current === requestId) {
+          setCustomerCodeLookupLoading(false);
+        }
+      }
+    },
+    [token, headers, customers, fillCustomerFromRecord]
+  );
+
+  useEffect(() => {
+    const code = normalizeCustomerNo(form.customer_code);
+    if (code.length < 2) {
+      setCustomerCodeLookupNotice('');
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void lookupCustomerByCode(code);
+    }, 450);
+
+    return () => window.clearTimeout(timer);
+  }, [form.customer_code, lookupCustomerByCode]);
+
   const applyCustomerFromSuggestion = (customer: ExistingCustomer) => {
-    const first = (customer.first_name || '').trim();
-    const last = (customer.last_name || '').trim();
-    const fullName = `${first} ${last}`.trim();
-    const address = (customer.current_address || customer.permanent_address || '').trim();
-
-    setForm((prev) => ({
-      ...prev,
-      customer_code: customer.customer_code || prev.customer_code,
-      nic: customer.nic_passport || prev.nic,
-      customer_name: fullName || prev.customer_name,
-      nick_name:
-        (customer.nick_name || '').trim() ||
-        loanRequestNicknamesByCustomerNo[normalizeCustomerNo(String(customer.customer_code || ''))] ||
-        prev.nick_name,
-      address: address || prev.address,
-      contact_no: customer.phone || prev.contact_no,
-    }));
-
+    fillCustomerFromRecord(customer);
     setShowNicSuggestions(false);
+    setCustomerCodeLookupNotice('');
   };
 
   const addGuarantor = () => {
@@ -563,7 +656,8 @@ export default function RequestLoanPage() {
         return 'Please enter a valid loan amount.';
       }
 
-      if (!form.interest_rate || Number(form.interest_rate) < 0) {
+      const finalizedInterestRate = finalizeInterestRate(form.interest_rate);
+      if (!finalizedInterestRate || Number(finalizedInterestRate) < 0) {
         return 'Please enter a valid interest rate.';
       }
 
@@ -640,7 +734,7 @@ export default function RequestLoanPage() {
           mf_group_id: form.mf_group_id || null,
           manager_employee_id: Number(form.manager_employee_id || 0),
           loan_amount: Number(form.loan_amount),
-          interest_rate: Number(form.interest_rate),
+          interest_rate: Number(finalizeInterestRate(form.interest_rate)),
           terms_count: Number(form.terms_count),
           refundable_amount: Number(form.refundable_amount),
           installment_amount: Number(form.installment_amount),
@@ -875,9 +969,19 @@ export default function RequestLoanPage() {
                       value={form.customer_code}
                       onChange={(e) => {
                         setCustomerCodeTouched(true);
+                        setCustomerCodeLookupNotice('');
                         setForm((p) => ({ ...p, customer_code: e.target.value }));
                       }}
+                      onBlur={() => {
+                        void lookupCustomerByCode(form.customer_code, true);
+                      }}
                     />
+                    {customerCodeLookupLoading && (
+                      <p className="mt-1 text-xs text-emerald-700">Loading customer details...</p>
+                    )}
+                    {!customerCodeLookupLoading && customerCodeLookupNotice && (
+                      <p className="mt-1 text-xs text-amber-700">{customerCodeLookupNotice}</p>
+                    )}
                   </div>
                   <div>
                     <label className="fieldLabel">Customer Name *</label>
@@ -1049,7 +1153,19 @@ export default function RequestLoanPage() {
                   </div>
                   <div>
                     <label className="fieldLabel">Interest Rate (%) *</label>
-                    <input className="input" type="number" min="0" step="0.01" placeholder="Enter interest rate" value={form.interest_rate} onChange={(e) => setForm((p) => ({ ...p, interest_rate: e.target.value }))} required />
+                    <input
+                      className="input"
+                      type="number"
+                      min="0"
+                      step="0.0000001"
+                      inputMode="decimal"
+                      placeholder="e.g. 5.5555555"
+                      value={form.interest_rate}
+                      onChange={(e) => handleInterestRateChange(e.target.value)}
+                      onBlur={handleInterestRateBlur}
+                      required
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Up to {INTEREST_RATE_MAX_DECIMALS} decimal places</p>
                   </div>
                   <div>
                     <label className="fieldLabel">Interest Type *</label>

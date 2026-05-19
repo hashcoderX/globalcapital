@@ -82,7 +82,6 @@ export default function CompanySettingsPage() {
   const [holidays, setHolidays] = useState<MFHoliday[]>([]);
   const [holidayForm, setHolidayForm] = useState({ id: 0, holiday_date: '', name: '', note: '', is_active: true });
   const [holidaySaving, setHolidaySaving] = useState(false);
-  const [deletingHolidayId, setDeletingHolidayId] = useState<number | null>(null);
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -621,30 +620,6 @@ export default function CompanySettingsPage() {
     }
   };
 
-  const handleHolidayDelete = async (holidayId: number) => {
-    if (!token) return;
-
-    setDeletingHolidayId(holidayId);
-    setNotice(null);
-
-    try {
-      const response = await axios.delete(`${API_URL}/api/microfinance/settings/holidays/${holidayId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      await fetchHolidays(token);
-      if (holidayForm.id === holidayId) {
-        resetHolidayForm();
-      }
-
-      setNotice({ type: 'success', text: response.data?.message || 'Holiday deleted successfully.' });
-    } catch (error: any) {
-      setNotice({ type: 'error', text: error?.response?.data?.message || 'Failed to delete holiday.' });
-    } finally {
-      setDeletingHolidayId(null);
-    }
-  };
-
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
@@ -1050,14 +1025,6 @@ export default function CompanySettingsPage() {
                               className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-100 text-amber-700 font-semibold"
                             >
                               Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleHolidayDelete(item.id)}
-                              disabled={deletingHolidayId === item.id}
-                              className="text-xs px-2.5 py-1.5 rounded-lg bg-red-100 text-red-700 font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-                            >
-                              {deletingHolidayId === item.id ? 'Deleting...' : 'Delete'}
                             </button>
                           </div>
                         </div>

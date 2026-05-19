@@ -400,33 +400,33 @@ export default function FieldOfficerCollectionReportPage() {
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
             <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Transactions</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.transactionCount}</p>
+              <p className="text-sm font-extrabold text-slate-900 mt-1">{summary.transactionCount}</p>
             </div>
             <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Officers</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.officerCount}</p>
+              <p className="text-sm font-extrabold text-slate-900 mt-1">{summary.officerCount}</p>
             </div>
             <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Collected</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+              <p className="text-sm font-extrabold text-slate-900 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected)}
               </p>
             </div>
             <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Capital</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+              <p className="text-sm font-extrabold text-slate-900 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.capital)}
               </p>
             </div>
             <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Interest</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+              <p className="text-sm font-extrabold text-slate-900 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.interest)}
               </p>
             </div>
             <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Penalty</p>
-              <p className="text-2xl font-extrabold text-rose-700 mt-1">
+              <p className="text-sm font-extrabold text-rose-700 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.penalty)}
               </p>
             </div>

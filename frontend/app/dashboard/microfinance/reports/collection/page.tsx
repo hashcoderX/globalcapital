@@ -368,38 +368,50 @@ export default function CollectionReportPage() {
 
           <div className="mt-5 h-1.5 w-40 rounded-full bg-gradient-to-r from-cyan-500 via-sky-500 to-emerald-500"></div>
 
-          <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
-            <div className="rounded-2xl bg-gradient-to-br from-white to-cyan-50/40 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Transactions</p>
-              <p className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">{summary.transactionCount}</p>
+          <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div className="relative overflow-hidden rounded-2xl border border-cyan-100 bg-gradient-to-br from-white via-cyan-50/60 to-sky-50/70 p-4 shadow-sm">
+              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-cyan-200/40 blur-xl"></div>
+              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-100 text-cyan-700 text-xs font-bold">TX</div>
+              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Transactions</p>
+              <p className="text-lg sm:text-xl font-bold text-slate-900 mt-1">{summary.transactionCount}</p>
             </div>
-            <div className="rounded-2xl bg-gradient-to-br from-white to-emerald-50/50 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Total Collected</p>
-              <p className="text-base sm:text-lg lg:text-xl font-extrabold text-emerald-700 mt-1 break-words [overflow-wrap:anywhere]">
+            <div className="relative overflow-hidden rounded-2xl border border-emerald-100 bg-gradient-to-br from-white via-emerald-50/70 to-teal-50/70 p-4 shadow-sm">
+              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-emerald-200/40 blur-xl"></div>
+              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 text-xs font-bold">TC</div>
+              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Total Collected</p>
+              <p className="text-sm sm:text-base font-bold text-emerald-700 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCollected)}
               </p>
             </div>
-            <div className="rounded-2xl bg-gradient-to-br from-white to-sky-50/60 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Capital</p>
-              <p className="text-base sm:text-lg lg:text-xl font-extrabold text-slate-900 mt-1 break-words [overflow-wrap:anywhere]">
+            <div className="relative overflow-hidden rounded-2xl border border-sky-100 bg-gradient-to-br from-white via-sky-50/70 to-cyan-50/70 p-4 shadow-sm">
+              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-sky-200/40 blur-xl"></div>
+              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-sky-100 text-sky-700 text-xs font-bold">CP</div>
+              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Capital</p>
+              <p className="text-sm sm:text-base font-bold text-slate-900 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCapital)}
               </p>
             </div>
-            <div className="rounded-2xl bg-gradient-to-br from-white to-cyan-50/60 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Interest</p>
-              <p className="text-base sm:text-lg lg:text-xl font-extrabold text-slate-900 mt-1 break-words [overflow-wrap:anywhere]">
+            <div className="relative overflow-hidden rounded-2xl border border-cyan-100 bg-gradient-to-br from-white via-cyan-50/70 to-blue-50/70 p-4 shadow-sm">
+              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-cyan-200/40 blur-xl"></div>
+              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-100 text-cyan-700 text-xs font-bold">IN</div>
+              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Interest</p>
+              <p className="text-sm sm:text-base font-bold text-slate-900 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalInterest)}
               </p>
             </div>
-            <div className="rounded-2xl bg-gradient-to-br from-white to-rose-50/50 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Penalty</p>
-              <p className="text-base sm:text-lg lg:text-xl font-extrabold text-rose-700 mt-1 break-words [overflow-wrap:anywhere]">
+            <div className="relative overflow-hidden rounded-2xl border border-rose-100 bg-gradient-to-br from-white via-rose-50/70 to-orange-50/70 p-4 shadow-sm sm:col-span-2">
+              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-rose-200/40 blur-xl"></div>
+              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-700 text-xs font-bold">PN</div>
+              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Penalty</p>
+              <p className="text-sm sm:text-base font-bold text-rose-700 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalPenalty)}
               </p>
             </div>
-            <div className="rounded-2xl bg-gradient-to-br from-white to-teal-50/50 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Today / Officers</p>
-              <p className="text-base sm:text-lg font-extrabold text-cyan-800 mt-1 break-words [overflow-wrap:anywhere]">
+            <div className="relative overflow-hidden rounded-2xl border border-teal-100 bg-gradient-to-br from-white via-teal-50/70 to-cyan-50/70 p-4 shadow-sm sm:col-span-2">
+              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-teal-200/40 blur-xl"></div>
+              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-teal-100 text-teal-700 text-xs font-bold">TD</div>
+              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Today / Officers</p>
+              <p className="text-sm sm:text-base font-bold text-cyan-800 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.todayCollected)} / {summary.officerCount}
               </p>
             </div>

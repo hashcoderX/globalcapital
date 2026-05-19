@@ -54,9 +54,18 @@ const toInputDate = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
-const shiftDateByRefundOption = (refundOption: LoanRequest['refund_option'], steps = 1) => {
-  const base = new Date();
-  base.setHours(12, 0, 0, 0);
+type LoanSchedule = {
+  approvalDate: string;
+  nextPaymentDate: string;
+  loanEndDate: string;
+};
+
+const shiftDateFromBase = (
+  baseDate: string,
+  refundOption: LoanRequest['refund_option'],
+  steps = 1
+) => {
+  const base = new Date(`${baseDate}T12:00:00`);
 
   if (refundOption === 'day') {
     base.setDate(base.getDate() + steps);
@@ -70,6 +79,17 @@ const shiftDateByRefundOption = (refundOption: LoanRequest['refund_option'], ste
 
   base.setMonth(base.getMonth() + steps);
   return toInputDate(base);
+};
+
+const buildDefaultLoanSchedule = (loan: LoanRequest): LoanSchedule => {
+  const approvalDate = toInputDate(new Date());
+  const termCount = Math.max(Number(loan.terms_count || 1), 1);
+
+  return {
+    approvalDate,
+    nextPaymentDate: shiftDateFromBase(approvalDate, loan.refund_option, 1),
+    loanEndDate: shiftDateFromBase(approvalDate, loan.refund_option, termCount),
+  };
 };
 
 const getResponsibleRoles = (loanAmount: number): string[] => {
@@ -102,6 +122,7 @@ export default function LoanApprovalsPage() {
     title: '',
     message: '',
   });
+  const [scheduleByLoanId, setScheduleByLoanId] = useState<Record<number, LoanSchedule>>({});
 
   const openModal = (message: string, title = 'Notice', onClose?: () => void) => {
     setModal({ open: true, title, message, onClose });
@@ -305,21 +326,64 @@ export default function LoanApprovalsPage() {
   const startIndex = (safePage - 1) * pageSize;
   const paginatedRequests = filteredRequests.slice(startIndex, startIndex + pageSize);
 
-  const handleApprove = async (loanId: number) => {
+  const getLoanSchedule = (loan: LoanRequest): LoanSchedule => ({
+    ...buildDefaultLoanSchedule(loan),
+    ...scheduleByLoanId[loan.id],
+  });
+
+  const handleApprovalDateChange = (loan: LoanRequest, approvalDate: string) => {
+    const termCount = Math.max(Number(loan.terms_count || 1), 1);
+
+    setScheduleByLoanId((prev) => ({
+      ...prev,
+      [loan.id]: {
+        approvalDate,
+        nextPaymentDate: shiftDateFromBase(approvalDate, loan.refund_option, 1),
+        loanEndDate: shiftDateFromBase(approvalDate, loan.refund_option, termCount),
+      },
+    }));
+  };
+
+  const handleLoanEndDateChange = (loan: LoanRequest, loanEndDate: string) => {
+    setScheduleByLoanId((prev) => {
+      const current = prev[loan.id] ?? buildDefaultLoanSchedule(loan);
+
+      return {
+        ...prev,
+        [loan.id]: {
+          ...current,
+          loanEndDate,
+        },
+      };
+    });
+  };
+
+  const handleApprove = async (loan: LoanRequest) => {
     if (!token) return;
     if (!canApproveOrReject) {
       openModal('Only Loan Approver, Finance Manager, Branch Manager, and Admin can accept loans.', 'Access Denied');
       return;
     }
 
-    setApprovingId(loanId);
+    const schedule = getLoanSchedule(loan);
+
+    setApprovingId(loan.id);
     try {
       await axios.post(
-        `${API_BASE}/microfinance/loan-requests/${loanId}/approve`,
-        {},
+        `${API_BASE}/microfinance/loan-requests/${loan.id}/approve`,
+        {
+          approval_date: schedule.approvalDate,
+          next_payment_date: schedule.nextPaymentDate,
+          loan_end_date: schedule.loanEndDate,
+        },
         { headers }
       );
-      setRequests((prev) => prev.filter((loan) => loan.id !== loanId));
+      setRequests((prev) => prev.filter((item) => item.id !== loan.id));
+      setScheduleByLoanId((prev) => {
+        const next = { ...prev };
+        delete next[loan.id];
+        return next;
+      });
       openModal('Loan approved successfully.', 'Success');
     } catch (error: any) {
       const message = error?.response?.data?.message || 'Failed to approve loan.';
@@ -515,7 +579,10 @@ export default function LoanApprovalsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {paginatedRequests.map((loan) => (
+            {paginatedRequests.map((loan) => {
+              const schedule = getLoanSchedule(loan);
+
+              return (
               <div key={loan.id} className="bg-white/90 rounded-2xl shadow-lg border border-orange-100 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="space-y-1">
@@ -592,27 +659,34 @@ export default function LoanApprovalsPage() {
                     <p className="text-xs text-gray-500 mb-2">
                       Schedule will be generated from this approval date.
                     </p>
-                    <div className="w-full px-3 py-2 rounded-lg border border-orange-100 text-sm text-black bg-white">
-                      {toInputDate(new Date())}
-                    </div>
+                    <input
+                      type="date"
+                      className="w-full px-3 py-2 rounded-lg border border-orange-100 text-sm text-black bg-white"
+                      value={schedule.approvalDate}
+                      onChange={(e) => handleApprovalDateChange(loan, e.target.value)}
+                    />
                   </div>
                   <div>
                     <label className="block text-xs uppercase tracking-wide text-gray-600 mb-1">Auto Next Payment Date</label>
                     <p className="text-xs text-gray-500 mb-2">
                       Calculated using refund option.
                     </p>
-                    <div className="w-full px-3 py-2 rounded-lg border border-orange-100 text-sm text-black bg-white font-semibold">
-                      {shiftDateByRefundOption(loan.refund_option, 1)}
+                    <div className="w-full px-3 py-2 rounded-lg border border-orange-100 text-sm text-black bg-slate-50 font-semibold">
+                      {schedule.nextPaymentDate}
                     </div>
                   </div>
                   <div className="md:col-span-2">
                     <label className="block text-xs uppercase tracking-wide text-gray-600 mb-1">Auto Loan End Date</label>
                     <p className="text-xs text-gray-500 mb-2">
-                      Calculated from approval date + terms count using refund option.
+                      Default is calculated from approval date + terms. You can change it before accepting.
                     </p>
-                    <div className="w-full px-3 py-2 rounded-lg border border-orange-100 text-sm text-black bg-white font-semibold">
-                      {shiftDateByRefundOption(loan.refund_option, Math.max(Number(loan.terms_count || 1), 1))}
-                    </div>
+                    <input
+                      type="date"
+                      className="w-full px-3 py-2 rounded-lg border border-orange-100 text-sm text-black bg-white font-semibold"
+                      value={schedule.loanEndDate}
+                      min={schedule.approvalDate}
+                      onChange={(e) => handleLoanEndDateChange(loan, e.target.value)}
+                    />
                   </div>
                 </div>
 
@@ -646,7 +720,7 @@ export default function LoanApprovalsPage() {
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            handleApprove(loan.id);
+                            handleApprove(loan);
                           }}
                           disabled={approvingId === loan.id}
                           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold shadow disabled:opacity-70"
@@ -661,7 +735,8 @@ export default function LoanApprovalsPage() {
                   </div>
                 </div>
               </div>
-            ))}
+            );
+            })}
 
             <div className="flex items-center justify-center gap-2 pt-2">
               <button

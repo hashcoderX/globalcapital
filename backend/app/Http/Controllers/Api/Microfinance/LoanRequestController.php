@@ -947,6 +947,13 @@ class LoanRequestController extends Controller
         return false;
     }
 
+    private function canRemoveLoan(?object $user): bool
+    {
+        return $user !== null
+            && method_exists($user, 'isSystemAdmin')
+            && $user->isSystemAdmin();
+    }
+
     private function isAdminUser(?object $user): bool
     {
         if (!$user) {
@@ -999,7 +1006,9 @@ class LoanRequestController extends Controller
             'group:id,name,code',
             'guarantors',
             'documents',
-        ])->orderBy('id', 'desc');
+        ])
+            ->withMax('collections as last_pay_date', 'collection_date')
+            ->orderBy('id', 'desc');
 
         if ($status) {
             $query->where('status', $status);
@@ -1599,14 +1608,26 @@ class LoanRequestController extends Controller
             ], 422);
         }
 
+        $validated = $request->validate([
+            'approval_date' => ['nullable', 'date'],
+            'next_payment_date' => ['nullable', 'date'],
+            'loan_end_date' => ['nullable', 'date'],
+        ]);
+
         $graceDays = 2;
-        $approveDate = new \DateTimeImmutable(date('Y-m-d'));
+        $approveDate = !empty($validated['approval_date'])
+            ? new \DateTimeImmutable((string) $validated['approval_date'])
+            : new \DateTimeImmutable(date('Y-m-d'));
         $refundOption = (string)$loanRequest->refund_option;
         $termCount = max((int)$loanRequest->terms_count, 1);
 
-        $nextPaymentDate = $this->shiftByRefundOption($approveDate, $refundOption, 1)->format('Y-m-d');
+        $nextPaymentDate = !empty($validated['next_payment_date'])
+            ? (string) $validated['next_payment_date']
+            : $this->shiftByRefundOption($approveDate, $refundOption, 1)->format('Y-m-d');
         $dueDate = $nextPaymentDate;
-        $loanEndDate = $this->shiftByRefundOption($approveDate, $refundOption, $termCount)->format('Y-m-d');
+        $loanEndDate = !empty($validated['loan_end_date'])
+            ? (string) $validated['loan_end_date']
+            : $this->shiftByRefundOption($approveDate, $refundOption, $termCount)->format('Y-m-d');
 
         $penaltyStartsOn = (new \DateTimeImmutable($dueDate))
             ->modify('+' . ($graceDays + 1) . ' days')
@@ -1851,5 +1872,30 @@ class LoanRequestController extends Controller
         }
 
         return $this->downloadLoanDocumentByTemplate($loanRequest, 'arrears_letter', 'legal_letter');
+    }
+
+    public function destroy(Request $request, MicrofinanceLoanRequest $loanRequest)
+    {
+        if (!$this->canRemoveLoan($request->user())) {
+            return response()->json([
+                'message' => 'Only Super Admin can remove loans.',
+            ], 403);
+        }
+
+        DB::transaction(function () use ($loanRequest): void {
+            foreach ($loanRequest->documents()->get() as $document) {
+                $path = trim((string) $document->file_path);
+                if ($path !== '' && Storage::disk('public')->exists($path)) {
+                    Storage::disk('public')->delete($path);
+                }
+            }
+
+            $loanRequest->collections()->withTrashed()->forceDelete();
+            $loanRequest->delete();
+        });
+
+        return response()->json([
+            'message' => 'Loan removed successfully.',
+        ]);
     }
 }
