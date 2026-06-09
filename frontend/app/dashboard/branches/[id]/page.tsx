@@ -1,6 +1,7 @@
 'use client';
 
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
@@ -46,7 +47,7 @@ export default function BranchDashboardPage() {
 
   const branchId = Number(params?.id || 0);
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const apiBase = getApiBaseUrl();
 
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
@@ -80,7 +81,7 @@ export default function BranchDashboardPage() {
     const loadBranch = async () => {
       setLoading(true);
       try {
-        const res = await axios.get(`${API_URL}/api/companies/${branchId}`, {
+        const res = await axios.get(`${apiBase}/companies/${branchId}`, {
           headers: {
             Authorization: `Bearer ${token}`,
             Accept: 'application/json',
@@ -96,7 +97,7 @@ export default function BranchDashboardPage() {
     };
 
     loadBranch();
-  }, [API_URL, token, branchId]);
+  }, [apiBase, token, branchId]);
 
   const normalizeText = (value: string) =>
     String(value || '')
@@ -177,6 +178,11 @@ export default function BranchDashboardPage() {
             path: withBranch('/dashboard/mortgages/reports/collection'),
           },
           {
+            title: 'Mortgage Profit Report',
+            description: 'Interest income and profit from mortgage collections.',
+            path: withBranch('/dashboard/mortgages/reports/profit'),
+          },
+          {
             title: 'Mortgage Arrears Report',
             description: 'Identify overdue mortgage accounts and balances.',
             path: withBranch('/dashboard/mortgages/reports/arrears'),
@@ -222,38 +228,17 @@ export default function BranchDashboardPage() {
           {
             title: 'Income and Expense Report',
             description: 'Track revenue, expenses, and profitability.',
-            path: withBranch('/dashboard/finance/reports/income-expense'),
+            path: withBranch('/dashboard/reports/income-expense'),
           },
           {
             title: 'Cash Flow Report',
             description: 'Cash-in and cash-out summary over selected periods.',
-            path: withBranch('/dashboard/finance/reports/cash-flow'),
+            path: withBranch('/dashboard/reports/cash-flow'),
           },
           {
             title: 'General Ledger Snapshot',
             description: 'Account-wise ledger balances and movement.',
-            path: withBranch('/dashboard/finance/reports/general-ledger'),
-          },
-        ],
-      },
-      {
-        key: 'branch',
-        title: 'Branch Management Related Reports',
-        icon: '🏢',
-        gradient: 'from-rose-500 to-red-500',
-        bg: 'from-rose-50 to-red-50',
-        reports: [
-          {
-            title: 'Branch Performance Report',
-            description: 'Operational and financial KPI comparison by branch.',
-          },
-          {
-            title: 'Branch Collection Report',
-            description: 'Collections and pending balances per branch.',
-          },
-          {
-            title: 'Branch Staff Productivity Report',
-            description: 'Team-level work output and service delivery metrics.',
+            path: withBranch('/dashboard/reports/general-ledger'),
           },
         ],
       },
@@ -262,7 +247,7 @@ export default function BranchDashboardPage() {
     [branchId]
   );
 
-  const collectionOfficerBlockedCategoryKeys = new Set(['mortgage', 'savings', 'finance', 'branch']);
+  const collectionOfficerBlockedCategoryKeys = new Set(['mortgage', 'savings', 'finance']);
   const collectionOfficerBlockedMicrofinanceReportTitles = new Set([
     'Arrears Report',
     'Active Member Report',
@@ -394,10 +379,31 @@ export default function BranchDashboardPage() {
                 <div className="flex flex-col gap-3">
                   <button
                     type="button"
+                    onClick={() => router.push(`/dashboard/reports/branch-performance?branch_id=${branchId}`)}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 text-white text-sm font-semibold shadow-sm hover:from-rose-700 hover:to-red-700"
+                  >
+                    Branch Performance Report
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/dashboard/reports/branch-collection?branch_id=${branchId}`)}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 text-white text-sm font-semibold shadow-sm hover:from-orange-700 hover:to-amber-700"
+                  >
+                    Branch Collection Report
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/dashboard/reports/branch-repayment?branch_id=${branchId}`)}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-violet-600 to-purple-600 text-white text-sm font-semibold shadow-sm hover:from-violet-700 hover:to-purple-700"
+                  >
+                    Branch Repayment Report
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => router.push(`/dashboard/branches/${branchId}#reports`)}
                     className="px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm"
                   >
-                    View Branch Reports
+                    View All Branch Reports
                   </button>
                   <button
                     type="button"

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
 
 interface Designation {
   id: number;
@@ -14,7 +15,7 @@ interface Designation {
 
 export default function Designations() {
   const [token, setToken] = useState('');
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const apiBase = getApiBaseUrl();
   const [designations, setDesignations] = useState<Designation[]>([]);
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -48,7 +49,7 @@ export default function Designations() {
     if (!tokenToUse) return;
     
     try {
-      const response = await axios.get(`${API_URL}/api/hr/designations`, {
+      const response = await axios.get(`${apiBase}/hr/designations`, {
         headers: { Authorization: `Bearer ${tokenToUse}`, Accept: 'application/json' },
       });
       setDesignations(response.data.data || []);
@@ -80,11 +81,11 @@ export default function Designations() {
 
     try {
       if (editingDesignation) {
-        await axios.put(`${API_URL}/api/hr/designations/${editingDesignation.id}`, designationData, {
+        await axios.put(`${apiBase}/hr/designations/${editingDesignation.id}`, designationData, {
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         });
       } else {
-        await axios.post(`${API_URL}/api/hr/designations`, designationData, {
+        await axios.post(`${apiBase}/hr/designations`, designationData, {
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         });
       }
@@ -118,7 +119,7 @@ export default function Designations() {
     if (!designationToDelete) return;
 
     try {
-      await axios.delete(`${API_URL}/api/hr/designations/${designationToDelete.id}`, {
+      await axios.delete(`${apiBase}/hr/designations/${designationToDelete.id}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       setShowDeleteModal(false);

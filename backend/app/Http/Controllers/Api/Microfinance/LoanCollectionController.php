@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Microfinance;
 use App\Http\Controllers\Controller;
 use App\Models\MicrofinanceLoanCollection;
 use App\Models\MicrofinanceLoanRequest;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -98,6 +99,9 @@ class LoanCollectionController extends Controller
         $collections = $query->get()->map(function (MicrofinanceLoanCollection $collection) {
             $payload = $collection->toArray();
             $payload['collection_date'] = $collection->collection_date?->format('Y-m-d');
+            $interestAmount = (float) ($collection->interest_amount ?? 0);
+            $penaltyAmount = (float) ($collection->penalty_amount ?? 0);
+            $payload['profit_amount'] = round($interestAmount + $penaltyAmount, 2);
 
             return $payload;
         })->values();
@@ -114,7 +118,50 @@ class LoanCollectionController extends Controller
             'payment_type' => 'required|in:cash,check,bank_transfer',
             'payment_reference' => 'nullable|string|max:255|required_unless:payment_type,cash',
             'note' => 'nullable|string|max:1000',
+            'client_reference' => 'nullable|string|max:64',
         ]);
+
+        if (!empty($validated['client_reference'])) {
+            $existing = MicrofinanceLoanCollection::query()
+                ->where('client_reference', $validated['client_reference'])
+                ->first();
+
+            if ($existing) {
+                $loanRequest = MicrofinanceLoanRequest::find($existing->mf_loan_request_id);
+                $breakdown = [
+                    'arrears_outstanding_before' => null,
+                    'arrears_deducted' => null,
+                    'arrears_outstanding_after' => round((float) ($loanRequest?->arrears_balance ?? 0), 2),
+                    'extra_payment_after' => null,
+                    'capital_amount' => round((float) ($existing->capital_amount ?? 0), 2),
+                    'interest_amount' => round((float) ($existing->interest_amount ?? 0), 2),
+                    'penalty_amount' => round((float) ($existing->penalty_amount ?? 0), 2),
+                    'outstanding_principal_after' => null,
+                ];
+
+                return response()->json([
+                    'message' => 'Collection already synced.',
+                    'data' => $existing,
+                    'loan_dates' => [
+                        'next_payment_date' => $loanRequest?->next_payment_date,
+                        'due_date' => $loanRequest?->due_date,
+                    ],
+                    'breakdown' => $breakdown,
+                    'receipt' => $loanRequest
+                        ? $this->buildReceipt(
+                            $loanRequest,
+                            $existing,
+                            $breakdown,
+                            (string) ($loanRequest->due_date ?? ''),
+                            (string) ($existing->payment_type ?? 'cash'),
+                            $existing->payment_reference,
+                            $existing->note
+                        )
+                        : null,
+                    'synced_from_offline' => true,
+                ], 200);
+            }
+        }
 
         $loanRequest = MicrofinanceLoanRequest::findOrFail((int)$validated['loan_request_id']);
 
@@ -218,6 +265,7 @@ class LoanCollectionController extends Controller
             'payment_type' => $validated['payment_type'],
             'payment_reference' => $validated['payment_reference'] ?? null,
             'note' => $validated['note'] ?? null,
+            'client_reference' => $validated['client_reference'] ?? null,
             'created_by' => optional($request->user())->id,
         ]);
 
@@ -252,6 +300,23 @@ class LoanCollectionController extends Controller
 
         $loanRequest->save();
 
+        $breakdown = [
+            'arrears_outstanding_before' => round($arrearsOutstandingBefore, 2),
+            'arrears_deducted' => round($arrearsDeducted, 2),
+            'arrears_outstanding_after' => round($arrearsOutstandingAfter, 2),
+            'extra_payment_after' => round($extraPaymentAfter, 2),
+            'accrued_installment_count' => $accruedInstallmentCount,
+            'capital_amount' => round($capitalAmount, 2),
+            'interest_amount' => round($interestAmount, 2),
+            'penalty_amount' => round($penaltyAmount, 2),
+            'penalty_rate' => round($penaltyRate, 4),
+            'grace_days' => $graceDays,
+            'late_days' => $lateDays,
+            'profit_amount' => round($interestAmount + $penaltyAmount, 2),
+            'business_fund_amount' => round($capitalAmount, 2),
+            'outstanding_principal_after' => round(max($outstandingPrincipal - $capitalAmount, 0), 2),
+        ];
+
         return response()->json([
             'message' => 'Collection saved successfully.',
             'data' => $collection,
@@ -259,22 +324,16 @@ class LoanCollectionController extends Controller
                 'next_payment_date' => $loanRequest->next_payment_date,
                 'due_date' => $loanRequest->due_date,
             ],
-            'breakdown' => [
-                'arrears_outstanding_before' => round($arrearsOutstandingBefore, 2),
-                'arrears_deducted' => round($arrearsDeducted, 2),
-                'arrears_outstanding_after' => round($arrearsOutstandingAfter, 2),
-                'extra_payment_after' => round($extraPaymentAfter, 2),
-                'accrued_installment_count' => $accruedInstallmentCount,
-                'capital_amount' => round($capitalAmount, 2),
-                'interest_amount' => round($interestAmount, 2),
-                'penalty_amount' => round($penaltyAmount, 2),
-                'penalty_rate' => round($penaltyRate, 4),
-                'grace_days' => $graceDays,
-                'late_days' => $lateDays,
-                'profit_amount' => round($interestAmount + $penaltyAmount, 2),
-                'business_fund_amount' => round($capitalAmount, 2),
-                'outstanding_principal_after' => round(max($outstandingPrincipal - $capitalAmount, 0), 2),
-            ],
+            'breakdown' => $breakdown,
+            'receipt' => $this->buildReceipt(
+                $loanRequest,
+                $collection,
+                $breakdown,
+                (string) $loanRequest->due_date,
+                (string) $validated['payment_type'],
+                $validated['payment_reference'] ?? null,
+                $validated['note'] ?? null
+            ),
         ], 201);
     }
 
@@ -380,6 +439,57 @@ class LoanCollectionController extends Controller
         $loanRequest->penalty_starts_on = $dueCursor->modify('+' . ($graceDays + 1) . ' days')->format('Y-m-d');
         $loanRequest->status = $outstandingPrincipal <= 0.01 ? 'released' : 'approved';
         $loanRequest->save();
+    }
+
+    /**
+     * @param  array<string, mixed>  $breakdown
+     * @return array<string, mixed>
+     */
+    private function buildReceipt(
+        MicrofinanceLoanRequest $loanRequest,
+        MicrofinanceLoanCollection $collection,
+        array $breakdown,
+        ?string $nextDueDate,
+        string $paymentType,
+        ?string $paymentReference,
+        ?string $note
+    ): array {
+        $referenceCode = (string) ($loanRequest->loan_code ?: ('MF-' . $loanRequest->id));
+        $refundable = (float) ($loanRequest->refundable_amount ?? 0);
+        $totalPaidCumulative = (float) MicrofinanceLoanCollection::query()
+            ->where('mf_loan_request_id', $loanRequest->id)
+            ->sum('collected_amount');
+        $arrearsAfter = (float) ($breakdown['arrears_outstanding_after'] ?? $loanRequest->arrears_balance ?? 0);
+        $extraAfter = (float) ($breakdown['extra_payment_after'] ?? 0);
+
+        return [
+            'bill_no' => sprintf('BILL-MIC-%d-%d', $loanRequest->id, $collection->id),
+            'product_type' => 'microfinance',
+            'product_label' => 'Micro Credit',
+            'reference' => $referenceCode,
+            'source_id' => (int) $loanRequest->id,
+            'customer_name' => (string) ($loanRequest->customer_name ?: ''),
+            'customer_no' => $loanRequest->customer_no,
+            'loan_product' => 'Micro Loan',
+            'payment_date' => (string) $collection->collection_date,
+            'payment_type' => $paymentType,
+            'payment_reference' => $paymentReference !== null && $paymentReference !== '' ? $paymentReference : null,
+            'paid_amount' => round((float) $collection->collected_amount, 2),
+            'principal_paid' => round((float) ($breakdown['capital_amount'] ?? $collection->capital_amount ?? 0), 2),
+            'interest_paid' => round((float) ($breakdown['interest_amount'] ?? $collection->interest_amount ?? 0), 2),
+            'penalty_paid' => round((float) ($breakdown['penalty_amount'] ?? $collection->penalty_amount ?? 0), 2),
+            'arrears_before' => round((float) ($breakdown['arrears_outstanding_before'] ?? 0), 2),
+            'arrears_after' => round(max($arrearsAfter - $extraAfter, 0), 2),
+            'outstanding' => round(max($refundable - $totalPaidCumulative, 0), 2),
+            'total_paid_cumulative' => round($totalPaidCumulative, 2),
+            'installment_amount' => round((float) ($loanRequest->installment_amount ?? 0), 2),
+            'next_due_date' => $nextDueDate
+                ? Carbon::parse($nextDueDate)->toDateString()
+                : null,
+            'note' => $note,
+            'collection_id' => (int) $collection->id,
+            'printed_at' => now()->toDateTimeString(),
+        ];
     }
 
     private function resolveFirstDueDate(MicrofinanceLoanRequest $loanRequest, string $refundOption, int $termCount): \DateTimeImmutable

@@ -1,6 +1,7 @@
 'use client';
 
 import axios from 'axios';
+import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
@@ -40,7 +41,7 @@ type RepaymentRow = {
   repaymentStatus: 'excellent' | 'good' | 'watch' | 'critical';
 };
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = getApiBaseUrl();
 
 export default function RepaymentReportPage() {
   const router = useRouter();

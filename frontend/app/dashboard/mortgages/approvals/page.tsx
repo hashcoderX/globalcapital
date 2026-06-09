@@ -3,7 +3,38 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
-import { CheckCircle2, Clock3, FileSearch, Search, ShieldAlert, XCircle } from 'lucide-react';
+import Badge from '../_components/Badge';
+import ClientMountGate from '@/app/components/ClientMountGate';
+import {
+  ArrowLeft,
+  Banknote,
+  Briefcase,
+  Building2,
+  Car,
+  CheckCircle2,
+  Clock3,
+  Eye,
+  FileSearch,
+  Filter,
+  Gem,
+  Home,
+  LayoutGrid,
+  List,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  Sparkles,
+  Trash2,
+  TrendingUp,
+  X,
+  XCircle,
+} from 'lucide-react';
+import { getApiBaseUrl } from '@/lib/api';
+
+const inputClass =
+  'w-full rounded-xl border border-slate-200/90 bg-white/95 px-3 py-2.5 text-sm text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-200/70';
+
+type ViewMode = 'table' | 'cards';
 
 type MortgageApprovalRow = {
   id: number;
@@ -25,7 +56,37 @@ type MortgageApprovalRow = {
   } | null;
 };
 
-type ActionType = 'approve' | 'reject';
+type ActionType = 'approve' | 'reject' | 'delete';
+
+type AuthUser = {
+  email?: string | null;
+  designation?: { name?: string | null } | null;
+  roles?: Array<{ name?: string | null }> | null;
+};
+
+function normalizeRoleText(value: unknown): string {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isAdminOrSuperAdminRole(name: unknown): boolean {
+  const normalized = normalizeRoleText(name);
+  return normalized === 'admin' || normalized === 'superadmin' || normalized === 'super admin';
+}
+
+function userCanDeleteMortgage(authUser: AuthUser | null): boolean {
+  if (!authUser) return false;
+  if (String(authUser.email || '').toLowerCase() === 'superadmin@softcodelk.com') return true;
+
+  const designation = normalizeRoleText(authUser.designation?.name);
+  if (isAdminOrSuperAdminRole(designation)) return true;
+
+  return (authUser.roles || []).some((role) => isAdminOrSuperAdminRole(role?.name));
+}
 
 type MortgageDetail = MortgageApprovalRow & {
   created_at?: string | null;
@@ -123,6 +184,30 @@ function getInstallmentCount(tenureMonths: unknown, frequency: unknown): number 
   return Math.max(1, Math.round(years * perYear));
 }
 
+function canReviewStatus(status: unknown): boolean {
+  const normalized = String(status || '').toLowerCase();
+  return normalized === 'draft' || normalized === 'submitted';
+}
+
+function statusVariant(status: string | null | undefined): 'success' | 'warning' | 'info' | 'danger' | 'default' {
+  const s = String(status || '').toLowerCase();
+  if (s === 'approved' || s === 'active' || s === 'released') return 'success';
+  if (s === 'rejected') return 'danger';
+  if (s === 'arrears') return 'warning';
+  if (s === 'submitted') return 'info';
+  if (s === 'draft') return 'default';
+  return 'default';
+}
+
+function mortgageTypeMeta(type: string) {
+  const key = String(type || 'other').toLowerCase();
+  if (key === 'vehicle') return { icon: Car, color: 'from-sky-500 to-blue-600', label: 'Vehicle' };
+  if (key === 'land') return { icon: Building2, color: 'from-emerald-500 to-teal-600', label: 'Land' };
+  if (key === 'house') return { icon: Home, color: 'from-violet-500 to-indigo-600', label: 'House' };
+  if (key === 'gold') return { icon: Gem, color: 'from-amber-500 to-orange-600', label: 'Gold' };
+  return { icon: Briefcase, color: 'from-slate-500 to-slate-700', label: 'Other' };
+}
+
 function calculateRefundAmount(row: MortgageApprovalRow | MortgageDetail): number {
   const installment = toNumber(row.installment_amount);
   const count = getInstallmentCount(row.tenure_months, row.installment_frequency);
@@ -133,10 +218,14 @@ function calculateRefundAmount(row: MortgageApprovalRow | MortgageDetail): numbe
 export default function MortgageApprovals() {
   const router = useRouter();
   const [token, setToken] = useState('');
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [rows, setRows] = useState<MortgageApprovalRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [viewMode, setViewMode] = useState<ViewMode>('cards');
+  const [filtersOpen, setFiltersOpen] = useState(true);
 
   const [actionModalOpen, setActionModalOpen] = useState(false);
   const [actionType, setActionType] = useState<ActionType>('approve');
@@ -165,7 +254,18 @@ export default function MortgageApprovals() {
     }
 
     setToken(t);
+
+    const storedUser = localStorage.getItem('auth_user');
+    if (storedUser) {
+      try {
+        setAuthUser(JSON.parse(storedUser));
+      } catch {
+        setAuthUser(null);
+      }
+    }
   }, [router]);
+
+  const canDeleteMortgage = useMemo(() => userCanDeleteMortgage(authUser), [authUser]);
 
   useEffect(() => {
     if (!token) return;
@@ -175,12 +275,12 @@ export default function MortgageApprovals() {
   const fetchApprovals = async (authToken: string) => {
     try {
       setLoading(true);
-      const response = await axios.get('http://localhost:8000/api/mortgages', {
+      const response = await axios.get(`${getApiBaseUrl()}/mortgages`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
           Accept: 'application/json',
         },
-        params: { status: 'submitted', per_page: 200 },
+        params: { per_page: 300 },
       });
 
       const data = Array.isArray(response.data?.data)
@@ -192,11 +292,18 @@ export default function MortgageApprovals() {
       setRows(data);
     } catch {
       setRows([]);
-      openToast('error', 'Failed to load submitted mortgages.');
+      openToast('error', 'Failed to load mortgage records.');
     } finally {
       setLoading(false);
     }
   };
+
+  const statusOptions = useMemo(() => {
+    const values = Array.from(
+      new Set(rows.map((row) => String(row.status || '').toLowerCase()).filter((v) => v !== ''))
+    );
+    return values.sort((a, b) => a.localeCompare(b));
+  }, [rows]);
 
   const mortgageTypes = useMemo(() => {
     const values = Array.from(
@@ -210,7 +317,9 @@ export default function MortgageApprovals() {
 
     return rows.filter((row) => {
       const type = String(row.mortgage_type || '').toLowerCase();
+      const status = String(row.status || '').toLowerCase();
       if (typeFilter !== 'all' && type !== typeFilter) return false;
+      if (statusFilter !== 'all' && status !== statusFilter) return false;
 
       if (!keyword) return true;
 
@@ -228,7 +337,7 @@ export default function MortgageApprovals() {
 
       return haystack.includes(keyword);
     });
-  }, [rows, query, typeFilter]);
+  }, [rows, query, typeFilter, statusFilter]);
 
   const stats = useMemo(() => {
     const requestedTotal = filteredRows.reduce((sum, row) => {
@@ -244,14 +353,22 @@ export default function MortgageApprovals() {
       : 0;
 
     const reducingCount = filteredRows.filter((row) => String(row.interest_type || '').toLowerCase() === 'reducing').length;
+    const reviewable = filteredRows.filter((row) => canReviewStatus(row.status)).length;
+    const draftCount = rows.filter((row) => String(row.status || '').toLowerCase() === 'draft').length;
+    const submittedCount = rows.filter((row) => String(row.status || '').toLowerCase() === 'submitted').length;
+    const approvedCount = rows.filter((row) => String(row.status || '').toLowerCase() === 'approved').length;
 
     return {
-      pending: filteredRows.length,
+      visible: filteredRows.length,
+      reviewable,
+      draftCount,
+      submittedCount,
+      approvedCount,
       requestedTotal,
       averageRate,
       reducingCount,
     };
-  }, [filteredRows]);
+  }, [filteredRows, rows]);
 
   const openActionModal = (type: ActionType, row: MortgageApprovalRow) => {
     setActionType(type);
@@ -263,10 +380,15 @@ export default function MortgageApprovals() {
   const runStatusAction = async (type: ActionType, row: MortgageApprovalRow, note?: string) => {
     if (!token) return;
 
+    if (!canReviewStatus(row.status)) {
+      openToast('error', `Mortgage #${row.id} is already "${row.status || 'unknown'}" and cannot be ${type === 'approve' ? 'approved' : 'rejected'}.`);
+      return;
+    }
+
     try {
       setActionLoading(true);
-      await axios.post(
-        `http://localhost:8000/api/mortgages/${row.id}/status`,
+      const response = await axios.post(
+        `${getApiBaseUrl()}/mortgages/${row.id}/status`,
         {
           action: type,
           note: note?.trim() || undefined,
@@ -279,12 +401,21 @@ export default function MortgageApprovals() {
         }
       );
 
-      setRows((prev) => prev.filter((item) => item.id !== row.id));
+      const nextStatus = String(response.data?.status || (type === 'approve' ? 'approved' : 'rejected'));
+      setRows((prev) =>
+        prev.map((item) => (item.id === row.id ? { ...item, status: nextStatus } : item))
+      );
+      if (detailRow?.id === row.id) {
+        setDetailRow((prev) => (prev ? { ...prev, status: nextStatus } : prev));
+      }
       setActionModalOpen(false);
-      setDetailModalOpen(false);
       openToast('success', `Mortgage #${row.id} ${type === 'approve' ? 'approved' : 'rejected'} successfully.`);
     } catch (error: any) {
-      const message = error?.response?.data?.message || 'Action failed. Please try again.';
+      const message =
+        error?.response?.data?.message ||
+        (error?.response?.data?.current
+          ? `Cannot ${type} while status is "${error.response.data.current}".`
+          : 'Action failed. Please try again.');
       openToast('error', message);
     } finally {
       setActionLoading(false);
@@ -301,7 +432,7 @@ export default function MortgageApprovals() {
     setCustomerLoading(false);
 
     try {
-      const response = await axios.get(`http://localhost:8000/api/mortgages/${id}`, {
+      const response = await axios.get(`${getApiBaseUrl()}/mortgages/${id}`, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
@@ -316,7 +447,7 @@ export default function MortgageApprovals() {
         setCustomerLoading(true);
 
         try {
-          const customerResponse = await axios.get(`http://localhost:8000/api/customers/${customerId}`, {
+          const customerResponse = await axios.get(`${getApiBaseUrl()}/customers/${customerId}`, {
             headers: {
               Authorization: `Bearer ${token}`,
               Accept: 'application/json',
@@ -339,222 +470,470 @@ export default function MortgageApprovals() {
     }
   };
 
+  const runDelete = async (row: MortgageApprovalRow) => {
+    if (!token || !canDeleteMortgage) return;
+
+    try {
+      setActionLoading(true);
+      const response = await axios.delete(`${getApiBaseUrl()}/mortgages/${row.id}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+      });
+
+      setRows((prev) => prev.filter((item) => item.id !== row.id));
+      if (detailRow?.id === row.id) {
+        setDetailModalOpen(false);
+        setDetailRow(null);
+      }
+      setActionModalOpen(false);
+      const deletedPayments = Number(response.data?.deleted_payments ?? 0);
+      openToast(
+        'success',
+        deletedPayments > 0
+          ? `Mortgage #${row.id} and ${deletedPayments} payment record${deletedPayments === 1 ? '' : 's'} deleted.`
+          : `Mortgage #${row.id} deleted successfully.`
+      );
+    } catch (error: any) {
+      const message = error?.response?.data?.message || 'Failed to delete mortgage.';
+      openToast('error', message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const submitAction = async () => {
     if (!actionRow) return;
+    if (actionType === 'delete') {
+      await runDelete(actionRow);
+      return;
+    }
     await runStatusAction(actionType, actionRow, actionNote);
   };
 
-  if (!token) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
+  const openDeleteModal = (row: MortgageApprovalRow) => {
+    setActionType('delete');
+    setActionRow(row);
+    setActionNote('');
+    setActionModalOpen(true);
+  };
+
+  const resetFilters = () => {
+    setQuery('');
+    setTypeFilter('all');
+    setStatusFilter('all');
+  };
+
+  const renderRowActions = (row: MortgageApprovalRow, stacked = false) => (
+    <div className={`flex ${stacked ? 'flex-col' : 'flex-wrap'} items-center gap-2`}>
+      {canReviewStatus(row.status) && (
+        <>
+          <button
+            type="button"
+            onClick={() => openActionModal('approve', row)}
+            className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Approve
+          </button>
+          <button
+            type="button"
+            onClick={() => openActionModal('reject', row)}
+            className="inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 transition hover:bg-rose-100"
+          >
+            <XCircle className="h-3.5 w-3.5" />
+            Reject
+          </button>
+        </>
+      )}
+      <button
+        type="button"
+        onClick={() => openDetailModal(row.id)}
+        className="inline-flex items-center gap-1 rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-semibold text-cyan-800 transition hover:bg-cyan-100"
+      >
+        <Eye className="h-3.5 w-3.5" />
+        View
+      </button>
+      {canDeleteMortgage && (
+        <button
+          type="button"
+          onClick={() => openDeleteModal(row)}
+          className="inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 transition hover:bg-rose-100"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Delete
+        </button>
+      )}
+    </div>
+  );
+
+  const pageFallback = (
+    <div className="flex min-h-screen items-center justify-center bg-[#071a22]">
+      <div className="flex flex-col items-center gap-4">
+        <div className="h-14 w-14 animate-spin rounded-full border-2 border-cyan-400/30 border-t-cyan-400" />
+        <p className="text-sm font-medium text-cyan-100/80">Loading approval desk...</p>
       </div>
-    );
+    </div>
+  );
+
+  if (!token) {
+    return <ClientMountGate fallback={pageFallback}>{pageFallback}</ClientMountGate>;
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
+    <ClientMountGate fallback={pageFallback}>
+    <div className="relative min-h-screen overflow-hidden bg-[#f3f8fb]">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-24 top-0 h-96 w-96 rounded-full bg-cyan-400/20 blur-3xl" />
+        <div className="absolute right-0 top-16 h-[28rem] w-[28rem] rounded-full bg-blue-500/12 blur-3xl" />
+        <div className="absolute bottom-0 left-1/4 h-72 w-72 rounded-full bg-teal-400/10 blur-3xl" />
+        <div
+          className="absolute inset-0 opacity-[0.3]"
+          style={{
+            backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(14,116,144,0.1) 1px, transparent 0)',
+            backgroundSize: '26px 26px',
+          }}
+        />
       </div>
 
-      <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
-                Mortgage Approval Desk
-              </span>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Pending Mortgage Approvals</h1>
-              <p className="text-sm text-slate-600 mt-1">Review submitted mortgage applications and approve or reject with clear decision tracking.</p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => router.push('/dashboard/mortgages')}
-                className="px-4 py-2 rounded-xl bg-white hover:bg-cyan-50 text-cyan-800 text-sm font-semibold border border-cyan-200 shadow-sm"
-              >
-                Back
-              </button>
-              <button
-                onClick={() => fetchApprovals(token)}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white text-sm font-semibold shadow-md"
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Pending</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{stats.pending}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Requested Total</p>
-              <p className="text-2xl font-extrabold text-cyan-700 mt-1">{formatAmount(stats.requestedTotal)}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Avg Interest Rate</p>
-              <p className="text-2xl font-extrabold text-indigo-700 mt-1">{formatPercent(stats.averageRate)}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Reducing Type</p>
-              <p className="text-2xl font-extrabold text-emerald-700 mt-1">{stats.reducingCount}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <h2 className="text-lg font-bold text-slate-900">Submitted Mortgage Requests</h2>
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="relative min-w-[250px]">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
-                  placeholder="Search by id, customer, NIC, phone"
-                />
+      <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+        <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#0a1a24] via-[#0f3a52] to-[#0c5a7a] text-white shadow-[0_30px_80px_-24px_rgba(14,116,144,0.8)]">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.25),transparent_42%)]" />
+          <div className="relative p-6 md:p-8">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+              <div className="max-w-2xl">
+                <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-100">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Approval Desk
+                </span>
+                <h1 className="mt-4 text-3xl font-black tracking-tight md:text-4xl">Mortgage Approval Workspace</h1>
+                <p className="mt-2 text-sm leading-relaxed text-cyan-50/90 md:text-base">
+                  Review draft and submitted applications, approve or reject with notes, and inspect full customer and collateral profiles.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2 text-xs text-cyan-100/90">
+                  <span className="rounded-lg bg-white/10 px-2.5 py-1">Mortgages</span>
+                  <span className="text-cyan-200/50">/</span>
+                  <span className="rounded-lg bg-cyan-400/20 px-2.5 py-1 font-semibold text-white">Approvals</span>
+                </div>
               </div>
-              <select
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
-                className="px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
-              >
-                <option value="all">All Types</option>
-                {mortgageTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => router.push('/dashboard/mortgages/create')}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20"
+                >
+                  New Application
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push('/dashboard/mortgages')}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/15"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Mortgages Hub
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fetchApprovals(token)}
+                  disabled={loading}
+                  className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 to-blue-400 px-4 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/30 transition hover:brightness-110 disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+              </div>
             </div>
           </div>
+        </section>
 
-          {loading ? (
-            <div className="py-12 flex items-center justify-center">
-              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-cyan-600"></div>
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+          {[
+            { icon: FileSearch, label: 'Visible', value: stats.visible, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
+            { icon: Clock3, label: 'Awaiting Review', value: stats.reviewable, tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
+            { icon: ShieldAlert, label: 'Draft', value: stats.draftCount, tone: 'text-slate-600', bg: 'from-slate-400/10 to-zinc-500/5' },
+            { icon: CheckCircle2, label: 'Submitted', value: stats.submittedCount, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
+            { icon: Banknote, label: 'Requested Total', value: formatAmount(stats.requestedTotal), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
+            { icon: TrendingUp, label: 'Avg Rate', value: formatPercent(stats.averageRate), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
+            { icon: CheckCircle2, label: 'Approved', value: stats.approvedCount, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
+            { icon: TrendingUp, label: 'Reducing Loans', value: stats.reducingCount, tone: 'text-violet-700', bg: 'from-violet-500/10 to-purple-500/5' },
+          ].map((item) => (
+            <div
+              key={item.label}
+              className={`overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
+                  <p className={`mt-2 text-xl font-black ${item.tone}`}>{item.value}</p>
+                </div>
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/80 shadow-sm">
+                  <item.icon className="h-5 w-5 text-slate-600" />
+                </div>
+              </div>
             </div>
-          ) : filteredRows.length === 0 ? (
-            <div className="mt-4 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-100/60 to-teal-100/40 p-8 text-sm text-slate-700 text-center">
-              No submitted mortgages found.
-            </div>
-          ) : (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
-              <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70 text-slate-700">
-                  <tr>
-                    <th className="px-3 py-2 font-semibold">ID</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Contact</th>
-                    <th className="px-3 py-2 font-semibold">NIC</th>
-                    <th className="px-3 py-2 font-semibold">Type</th>
-                    <th className="px-3 py-2 font-semibold">Requested</th>
-                    <th className="px-3 py-2 font-semibold">Installment</th>
-                    <th className="px-3 py-2 font-semibold">Refund Amount</th>
-                    <th className="px-3 py-2 font-semibold">Rate</th>
-                    <th className="px-3 py-2 font-semibold">Tenure</th>
-                    <th className="px-3 py-2 font-semibold">Due Date</th>
-                    <th className="px-3 py-2 font-semibold text-center">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRows.map((row) => {
-                    const customerName = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim();
-                    const refundAmount = calculateRefundAmount(row);
+          ))}
+        </section>
 
-                    return (
-                      <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                        <td className="px-3 py-2 font-semibold text-slate-900">#{row.id}</td>
-                        <td className="px-3 py-2">{customerName || '-'}</td>
-                        <td className="px-3 py-2">{row.customer?.phone || '-'}</td>
-                        <td className="px-3 py-2">{row.customer?.nic_passport || '-'}</td>
-                        <td className="px-3 py-2 capitalize">{row.mortgage_type || '-'}</td>
-                        <td className="px-3 py-2 font-semibold text-cyan-700">{formatAmount(row.requested_amount)}</td>
-                        <td className="px-3 py-2 font-semibold text-indigo-700">{formatAmount(row.installment_amount)}</td>
-                        <td className="px-3 py-2 font-semibold text-emerald-700">{formatAmount(refundAmount)}</td>
-                        <td className="px-3 py-2">{formatPercent(row.interest_rate)} ({row.interest_type || '-'})</td>
-                        <td className="px-3 py-2">{row.tenure_months || '-'} months</td>
-                        <td className="px-3 py-2">{formatDate(row.due_date)}</td>
-                        <td className="px-3 py-2">
-                          <div className="flex items-center justify-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openActionModal('approve', row)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-cyan-100 hover:bg-cyan-200 text-cyan-800 text-xs font-semibold border border-cyan-200"
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              Approve
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openActionModal('reject', row)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-800 text-xs font-semibold border border-indigo-200"
-                            >
-                              <XCircle className="h-3.5 w-3.5" />
-                              Reject
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openDetailModal(row.id)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-teal-100 hover:bg-teal-200 text-teal-800 text-xs font-semibold border border-teal-200"
-                            >
-                              <FileSearch className="h-3.5 w-3.5" />
-                              View
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+        <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl">
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((v) => !v)}
+            className="flex w-full items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 text-left transition hover:bg-slate-50/80"
+          >
+            <div className="flex items-center gap-2">
+              <Filter className="h-4 w-4 text-cyan-700" />
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Filters</p>
+                <p className="mt-1 text-sm text-slate-600">Search, mortgage type, and status.</p>
+              </div>
+            </div>
+            <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-800">{filtersOpen ? 'Hide' : 'Show'}</span>
+          </button>
+          {filtersOpen && (
+            <div className="space-y-4 p-5">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+                <div className="relative lg:col-span-6">
+                  <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search by id, customer, NIC, phone..."
+                    className={`${inputClass} pl-9`}
+                  />
+                </div>
+                <div className="lg:col-span-3">
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Type</label>
+                  <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className={inputClass}>
+                    <option value="all">All Types</option>
+                    {mortgageTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="lg:col-span-3">
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Status</label>
+                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={inputClass}>
+                    <option value="all">All Status</option>
+                    {statusOptions.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <button type="button" onClick={resetFilters} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                  Reset Filters
+                </button>
+              </div>
             </div>
           )}
-        </div>
+        </section>
+
+        <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+          <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-extrabold text-slate-900">Mortgage Requests</h2>
+              <p className="text-sm text-slate-500">
+                {filteredRows.length} record{filteredRows.length === 1 ? '' : 's'} • {stats.reviewable} awaiting review
+              </p>
+            </div>
+            <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+              <button
+                type="button"
+                onClick={() => setViewMode('cards')}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  viewMode === 'cards' ? 'bg-white text-cyan-800 shadow-sm' : 'text-slate-600'
+                }`}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+                Cards
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('table')}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  viewMode === 'table' ? 'bg-white text-cyan-800 shadow-sm' : 'text-slate-600'
+                }`}
+              >
+                <List className="h-3.5 w-3.5" />
+                Table
+              </button>
+            </div>
+          </div>
+
+          <div className="p-5">
+            {loading ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-20">
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-cyan-200 border-t-cyan-600" />
+                <p className="text-sm text-slate-500">Loading mortgage requests...</p>
+              </div>
+            ) : filteredRows.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-700">
+                  <FileSearch className="h-8 w-8" />
+                </div>
+                <h3 className="mt-4 text-lg font-bold text-slate-900">No records found</h3>
+                <p className="mt-1 max-w-md text-sm text-slate-500">Adjust filters or refresh to load mortgage applications.</p>
+              </div>
+            ) : viewMode === 'cards' ? (
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {filteredRows.map((row) => {
+                  const customerName = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim() || '—';
+                  const refundAmount = calculateRefundAmount(row);
+                  const typeMeta = mortgageTypeMeta(String(row.mortgage_type || 'other'));
+                  const TypeIcon = typeMeta.icon;
+                  const reviewable = canReviewStatus(row.status);
+
+                  return (
+                    <article
+                      key={row.id}
+                      className={`relative overflow-hidden rounded-2xl border p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${
+                        reviewable
+                          ? 'border-amber-200/90 bg-gradient-to-br from-amber-50/40 to-white'
+                          : 'border-slate-200/90 bg-gradient-to-br from-white to-cyan-50/30'
+                      }`}
+                    >
+                      <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${typeMeta.color}`} />
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <div className={`flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br ${typeMeta.color} text-white shadow-md`}>
+                            <TypeIcon className="h-5 w-5" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">#{row.id} • {typeMeta.label}</p>
+                            <h3 className="mt-1 text-lg font-extrabold text-slate-900">{customerName}</h3>
+                            <p className="text-sm text-slate-500">{row.customer?.phone || '—'} • {row.customer?.nic_passport || '—'}</p>
+                          </div>
+                        </div>
+                        <Badge label={String(row.status || '—')} variant={statusVariant(row.status)} />
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                        <div className="rounded-xl border border-cyan-100 bg-cyan-50/50 p-3">
+                          <p className="text-[11px] font-bold uppercase text-cyan-800">Requested</p>
+                          <p className="mt-1 font-bold text-cyan-800">{formatAmount(row.requested_amount)}</p>
+                        </div>
+                        <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+                          <p className="text-[11px] font-bold uppercase text-indigo-800">Installment</p>
+                          <p className="mt-1 font-bold text-indigo-700">{formatAmount(row.installment_amount)}</p>
+                        </div>
+                        <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3">
+                          <p className="text-[11px] font-bold uppercase text-emerald-800">Total Repay</p>
+                          <p className="mt-1 font-bold text-emerald-700">{formatAmount(refundAmount)}</p>
+                        </div>
+                        <div className="rounded-xl border border-slate-100 bg-white/90 p-3">
+                          <p className="text-[11px] font-bold uppercase text-slate-500">Rate / Tenure</p>
+                          <p className="mt-1 font-bold text-slate-900">{formatPercent(row.interest_rate)}</p>
+                          <p className="text-xs text-slate-500">{row.tenure_months || '—'} mo • {formatDate(row.due_date)}</p>
+                        </div>
+                      </div>
+                      <div className="mt-4 border-t border-slate-100 pt-4">{renderRowActions(row, true)}</div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-2xl border border-cyan-100">
+                <table className="min-w-[1200px] w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
+                      <th className="px-3 py-3 text-black">ID</th>
+                      <th className="px-3 py-3 text-black">Customer</th>
+                      <th className="px-3 py-3 text-black">Contact</th>
+                      <th className="px-3 py-3 text-black">NIC</th>
+                      <th className="px-3 py-3 text-black">Type</th>
+                      <th className="px-3 py-3 text-black">Requested</th>
+                      <th className="px-3 py-3 text-black">Installment</th>
+                      <th className="px-3 py-3 text-black">Total Repay</th>
+                      <th className="px-3 py-3 text-black">Rate</th>
+                      <th className="px-3 py-3 text-black">Tenure</th>
+                      <th className="px-3 py-3 text-black">Due Date</th>
+                      <th className="px-3 py-3 text-black">Status</th>
+                      <th className="px-3 py-3 text-center text-black">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {filteredRows.map((row, index) => {
+                      const customerName = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim();
+                      const refundAmount = calculateRefundAmount(row);
+                      return (
+                        <tr key={row.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                          <td className="px-3 py-2.5 font-bold text-slate-900">#{row.id}</td>
+                          <td className="px-3 py-2.5 font-semibold text-black">{customerName || '—'}</td>
+                          <td className="px-3 py-2.5 text-black">{row.customer?.phone || '—'}</td>
+                          <td className="px-3 py-2.5 text-black">{row.customer?.nic_passport || '—'}</td>
+                          <td className="px-3 py-2.5 capitalize text-black">{row.mortgage_type || '—'}</td>
+                          <td className="px-3 py-2.5 font-bold text-cyan-800">{formatAmount(row.requested_amount)}</td>
+                          <td className="px-3 py-2.5 font-bold text-indigo-700">{formatAmount(row.installment_amount)}</td>
+                          <td className="px-3 py-2.5 font-bold text-emerald-700">{formatAmount(refundAmount)}</td>
+                          <td className="px-3 py-2.5 text-black">
+                            {formatPercent(row.interest_rate)} ({row.interest_type || '—'})
+                          </td>
+                          <td className="px-3 py-2.5 text-black">{row.tenure_months || '—'} mo</td>
+                          <td className="px-3 py-2.5 text-black">{formatDate(row.due_date)}</td>
+                          <td className="px-3 py-2.5">
+                            <Badge label={String(row.status || '—')} variant={statusVariant(row.status)} />
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <div className="flex justify-center">{renderRowActions(row)}</div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
 
       {detailModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center px-4">
-          <div className="w-full max-w-5xl rounded-2xl bg-white border border-cyan-100 shadow-2xl overflow-hidden max-h-[88vh] flex flex-col">
-            <div className="px-5 py-4 border-b border-cyan-100 bg-gradient-to-r from-cyan-50 to-blue-50 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 px-4 backdrop-blur-sm">
+          <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-cyan-100 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-cyan-100 bg-gradient-to-r from-cyan-50 to-blue-50 px-6 py-4">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">Mortgage Details</h3>
-                <p className="text-sm text-slate-600 mt-1">Comprehensive view of selected mortgage request.</p>
+                <h3 className="text-xl font-black text-slate-900">Mortgage Details</h3>
+                <p className="mt-1 text-sm text-slate-600">Full application, financial terms, asset, and customer profile.</p>
               </div>
-              <div className="flex items-center gap-2">
-                {detailRow && (
+              <div className="flex flex-wrap items-center gap-2">
+                {canDeleteMortgage && detailRow && (
+                  <button
+                    type="button"
+                    onClick={() => openDeleteModal(detailRow)}
+                    className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-semibold text-rose-800 hover:bg-rose-100"
+                  >
+                    Delete
+                  </button>
+                )}
+                {detailRow && canReviewStatus(detailRow.status) && (
                   <>
                     <button
                       type="button"
-                      onClick={() => {
-                        openActionModal('reject', detailRow);
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 border border-indigo-200 text-indigo-800 text-sm font-semibold"
+                      onClick={() => openActionModal('reject', detailRow)}
+                      className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-semibold text-rose-800 hover:bg-rose-100"
                     >
                       Reject
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        openActionModal('approve', detailRow);
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white text-sm font-semibold"
+                      onClick={() => openActionModal('approve', detailRow)}
+                      className="rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm"
                     >
-                      Accept
+                      Approve
                     </button>
                   </>
                 )}
                 <button
                   type="button"
                   onClick={() => setDetailModalOpen(false)}
-                  className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 text-sm font-semibold"
+                  className="rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50"
                 >
-                  Close
+                  <X className="h-4 w-4" />
                 </button>
               </div>
             </div>
@@ -673,26 +1052,35 @@ export default function MortgageApprovals() {
               )}
             </div>
 
-            {detailRow && (
-              <div className="px-5 py-4 border-t border-cyan-100 bg-slate-50 flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    openActionModal('reject', detailRow);
-                  }}
-                  className="px-4 py-2 rounded-lg bg-indigo-100 hover:bg-indigo-200 border border-indigo-200 text-indigo-800 text-sm font-semibold"
-                >
-                  Reject
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    openActionModal('approve', detailRow);
-                  }}
-                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white text-sm font-semibold"
-                >
-                  Accept
-                </button>
+            {(canDeleteMortgage || (detailRow && canReviewStatus(detailRow.status))) && (
+              <div className="flex items-center justify-end gap-2 border-t border-cyan-100 bg-slate-50/80 px-6 py-4">
+                {canDeleteMortgage && detailRow && (
+                  <button
+                    type="button"
+                    onClick={() => openDeleteModal(detailRow)}
+                    className="rounded-xl border border-rose-300 bg-rose-100 px-4 py-2 text-sm font-semibold text-rose-900 hover:bg-rose-200"
+                  >
+                    Delete
+                  </button>
+                )}
+                {detailRow && canReviewStatus(detailRow.status) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => openActionModal('reject', detailRow)}
+                      className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-800 hover:bg-rose-100"
+                    >
+                      Reject
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openActionModal('approve', detailRow)}
+                      className="rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm"
+                    >
+                      Confirm Approve
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -700,36 +1088,50 @@ export default function MortgageApprovals() {
       )}
 
       {actionModalOpen && actionRow && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center px-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white border border-cyan-100 shadow-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-cyan-100 bg-gradient-to-r from-cyan-50 to-blue-50">
-              <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                {actionType === 'approve' ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <ShieldAlert className="h-5 w-5 text-rose-600" />}
-                {actionType === 'approve' ? 'Approve Mortgage' : 'Reject Mortgage'}
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-cyan-100 bg-white shadow-2xl">
+            <div
+              className={`border-b px-6 py-4 ${
+                actionType === 'delete'
+                  ? 'border-rose-100 bg-gradient-to-r from-rose-50 to-red-50'
+                  : 'border-cyan-100 bg-gradient-to-r from-cyan-50 to-blue-50'
+              }`}
+            >
+              <h3 className="flex items-center gap-2 text-lg font-extrabold text-slate-900">
+                {actionType === 'approve' && <CheckCircle2 className="h-5 w-5 text-emerald-600" />}
+                {actionType === 'reject' && <ShieldAlert className="h-5 w-5 text-rose-600" />}
+                {actionType === 'delete' && <Trash2 className="h-5 w-5 text-rose-600" />}
+                {actionType === 'approve' ? 'Approve Mortgage' : actionType === 'reject' ? 'Reject Mortgage' : 'Delete Mortgage'}
               </h3>
-              <p className="text-sm text-slate-600 mt-1">
-                Mortgage #{actionRow.id} | Requested: {formatAmount(actionRow.requested_amount)}
+              <p className="mt-1 text-sm text-slate-600">
+                Mortgage #{actionRow.id} • Requested {formatAmount(actionRow.requested_amount)}
               </p>
             </div>
 
-            <div className="p-5">
-              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">
-                Note (Optional)
-              </label>
-              <textarea
-                value={actionNote}
-                onChange={(e) => setActionNote(e.target.value)}
-                rows={4}
-                placeholder={actionType === 'approve' ? 'Approval note' : 'Reason for rejection'}
-                className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-              />
-            </div>
+            {actionType === 'delete' ? (
+              <div className="p-6">
+                <p className="text-sm leading-relaxed text-slate-700">
+                  This permanently removes the mortgage application, all payment history, schedules, collateral records, and uploaded documents. This action cannot be undone.
+                </p>
+              </div>
+            ) : (
+              <div className="p-6">
+                <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Note (optional)</label>
+                <textarea
+                  value={actionNote}
+                  onChange={(e) => setActionNote(e.target.value)}
+                  rows={4}
+                  placeholder={actionType === 'approve' ? 'Approval note' : 'Reason for rejection'}
+                  className={inputClass}
+                />
+              </div>
+            )}
 
-            <div className="px-5 py-4 border-t border-cyan-100 bg-slate-50 flex items-center justify-end gap-2">
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-6 py-4">
               <button
                 type="button"
                 onClick={() => setActionModalOpen(false)}
-                className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 text-sm font-semibold"
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 Cancel
               </button>
@@ -737,13 +1139,21 @@ export default function MortgageApprovals() {
                 type="button"
                 onClick={submitAction}
                 disabled={actionLoading}
-                className={`px-4 py-2 rounded-lg text-sm font-semibold text-white shadow-md ${
+                className={`rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-60 ${
                   actionType === 'approve'
                     ? 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700'
-                    : 'bg-gradient-to-r from-indigo-600 to-slate-700 hover:from-indigo-700 hover:to-slate-800'
-                } disabled:opacity-60`}
+                    : actionType === 'delete'
+                      ? 'bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-700 hover:to-red-800'
+                      : 'bg-gradient-to-r from-indigo-600 to-slate-700 hover:from-indigo-700 hover:to-slate-800'
+                }`}
               >
-                {actionLoading ? 'Processing...' : actionType === 'approve' ? 'Confirm Approve' : 'Confirm Reject'}
+                {actionLoading
+                  ? 'Processing...'
+                  : actionType === 'approve'
+                    ? 'Confirm Approve'
+                    : actionType === 'delete'
+                      ? 'Confirm Delete'
+                      : 'Confirm Reject'}
               </button>
             </div>
           </div>
@@ -751,21 +1161,22 @@ export default function MortgageApprovals() {
       )}
 
       {toast && (
-        <div className="fixed bottom-5 right-5 z-50">
+        <div className="fixed bottom-5 right-5 z-[70]">
           <div
-            className={`rounded-xl px-4 py-3 text-sm font-semibold shadow-xl border ${
+            className={`rounded-2xl border px-4 py-3 text-sm font-semibold shadow-xl ${
               toast.kind === 'success'
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                : 'bg-rose-50 text-rose-800 border-rose-200'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : 'border-rose-200 bg-rose-50 text-rose-800'
             }`}
           >
             <div className="flex items-center gap-2">
-              <Clock3 className="h-4 w-4" />
+              {toast.kind === 'success' ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
               {toast.message}
             </div>
           </div>
         </div>
       )}
     </div>
+    </ClientMountGate>
   );
 }

@@ -63,7 +63,7 @@ export default function SavingsTransactionsPage() {
 
   const loadAccounts = async (authToken: string) => {
     try {
-      const response = await axios.get('http://localhost:8000/api/savings-accounts', {
+      const response = await axios.get('/api/savings-accounts', {
         headers: {
           Authorization: `Bearer ${authToken}`,
           Accept: 'application/json',
@@ -86,7 +86,7 @@ export default function SavingsTransactionsPage() {
   const loadTransactions = async (authToken: string, accountId: number) => {
     setLoadingTransactions(true);
     try {
-      const response = await axios.get(`http://localhost:8000/api/savings-accounts/${accountId}/transactions`, {
+      const response = await axios.get(`/api/savings-accounts/${accountId}/transactions`, {
         headers: {
           Authorization: `Bearer ${authToken}`,
           Accept: 'application/json',
@@ -156,7 +156,7 @@ export default function SavingsTransactionsPage() {
       setSuccessMessage('');
 
       await axios.post(
-        `http://localhost:8000/api/savings-accounts/${accountId}/${type === 'deposit' ? 'deposit' : 'withdraw'}`,
+        `/api/savings-accounts/${accountId}/${type === 'deposit' ? 'deposit' : 'withdraw'}`,
         {
           amount: value,
           transaction_date: transactionDate || undefined,

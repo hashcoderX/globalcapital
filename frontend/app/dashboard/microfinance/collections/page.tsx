@@ -1,7 +1,19 @@
 'use client';
 
 import axios from 'axios';
-import { useEffect, useMemo, useState } from 'react';
+import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import CollectionReceiptBill, {
+  type CollectionReceipt,
+} from '@/app/components/collections/CollectionReceiptBill';
+import MfOfflineBanner from '@/app/components/microfinance/MfOfflineBanner';
+import {
+  buildScopeKey,
+  cacheMfCollectionData,
+  enqueueMfCollection,
+  loadMfCollectionCache,
+} from '@/lib/offline/mfOfflineSync';
+import { useMfOffline } from '@/lib/offline/useMfOffline';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 type LoanRow = {
@@ -85,7 +97,7 @@ type AuthUser = {
   roles?: Array<{ id?: number; name?: string }>;
 };
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = getApiBaseUrl();
 
 export default function CollectionManagementPage() {
   const router = useRouter();
@@ -114,10 +126,12 @@ export default function CollectionManagementPage() {
     loanId: number | null;
     loanCode: string;
     customerName: string;
+    customerNo: string;
     amount: string;
     paymentType: 'cash' | 'check' | 'bank_transfer';
     paymentReference: string;
     installmentAmount: number;
+    refundableAmount: number;
     dueDate: string;
     penaltyRate: number;
     graceDays: number;
@@ -128,10 +142,12 @@ export default function CollectionManagementPage() {
     loanId: null,
     loanCode: '',
     customerName: '',
+    customerNo: '',
     amount: '',
     paymentType: 'cash',
     paymentReference: '',
     installmentAmount: 0,
+    refundableAmount: 0,
     dueDate: '',
     penaltyRate: 0,
     graceDays: 0,
@@ -139,7 +155,15 @@ export default function CollectionManagementPage() {
     date: new Date().toISOString().split('T')[0],
   });
   const [collectSaving, setCollectSaving] = useState(false);
+  const [cacheMeta, setCacheMeta] = useState<{ available: boolean; cachedAt: string | null }>({
+    available: false,
+    cachedAt: null,
+  });
   const [noticeModal, setNoticeModal] = useState({ open: false, title: '', message: '' });
+  const [receiptModal, setReceiptModal] = useState<{ open: boolean; receipt: CollectionReceipt | null }>({
+    open: false,
+    receipt: null,
+  });
   const [loanDetailsModal, setLoanDetailsModal] = useState<{ open: boolean; loan: LoanRow | null }>({
     open: false,
     loan: null,
@@ -204,6 +228,92 @@ export default function CollectionManagementPage() {
     [token]
   );
 
+  const scopeKey = useMemo(
+    () => buildScopeKey(authUser?.branch_id, isFieldOfficer ? authUser?.name : null),
+    [authUser?.branch_id, authUser?.name, isFieldOfficer]
+  );
+
+  const loadLoans = useCallback(async () => {
+    if (!token) return;
+
+    setLoading(true);
+
+    const applyCacheMeta = (available: boolean, cachedAt: string | null) => {
+      setCacheMeta({ available, cachedAt });
+    };
+
+    const readCache = async () => {
+      const cached = await loadMfCollectionCache(scopeKey);
+      if (!cached) {
+        applyCacheMeta(false, null);
+        return false;
+      }
+
+      setLoans(cached.loans as LoanRow[]);
+      setCollections(
+        (cached.collections as Record<string, unknown>[]).map((row) => normalizeCollectionRow(row))
+      );
+      applyCacheMeta(true, cached.cachedAt);
+      return true;
+    };
+
+    const online = typeof navigator === 'undefined' ? true : navigator.onLine;
+
+    if (!online) {
+      await readCache();
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const [loanResponse, collectionResponse] = await Promise.all([
+        axios.get(`${API_BASE}/microfinance/loan-requests`, {
+          headers,
+          params:
+            isFieldOfficer && authUser?.branch_id
+              ? {
+                  status: 'approved',
+                  branch_id: authUser.branch_id,
+                  field_officer: authUser?.name || undefined,
+                }
+              : { status: 'approved' },
+        }),
+        axios.get(`${API_BASE}/microfinance/collections`, {
+          headers,
+        }),
+      ]);
+
+      const loanRows = Array.isArray(loanResponse.data) ? loanResponse.data : [];
+      const collectionRows = Array.isArray(collectionResponse.data) ? collectionResponse.data : [];
+      const normalizedCollections = collectionRows.map((row) =>
+        normalizeCollectionRow(row as Record<string, unknown>)
+      );
+
+      setLoans(loanRows);
+      setCollections(normalizedCollections);
+
+      const cachedAt = new Date().toISOString();
+      await cacheMfCollectionData(scopeKey, loanRows, normalizedCollections);
+      applyCacheMeta(true, cachedAt);
+    } catch {
+      const restored = await readCache();
+      if (!restored) {
+        setLoans([]);
+        setCollections([]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [token, headers, isFieldOfficer, authUser?.branch_id, authUser?.name, scopeKey]);
+
+  const { isOnline, pendingCount, syncing, lastSyncMessage, syncNow, refreshPendingCount } = useMfOffline(
+    token,
+    headers,
+    () => {
+      void loadLoans();
+    }
+  );
+
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
@@ -224,42 +334,8 @@ export default function CollectionManagementPage() {
 
   useEffect(() => {
     if (!token) return;
-
-    const loadLoans = async () => {
-      setLoading(true);
-      try {
-        const [loanResponse, collectionResponse] = await Promise.all([
-          axios.get(`${API_BASE}/microfinance/loan-requests`, {
-            headers,
-            params:
-              isFieldOfficer && authUser?.branch_id
-                ? {
-                    status: 'approved',
-                    branch_id: authUser.branch_id,
-                    field_officer: authUser?.name || undefined,
-                  }
-                : { status: 'approved' },
-          }),
-          axios.get(`${API_BASE}/microfinance/collections`, {
-            headers,
-          }),
-        ]);
-
-        setLoans(Array.isArray(loanResponse.data) ? loanResponse.data : []);
-        const collectionRows = Array.isArray(collectionResponse.data) ? collectionResponse.data : [];
-        setCollections(
-          collectionRows.map((row) => normalizeCollectionRow(row as Record<string, unknown>))
-        );
-      } catch {
-        setLoans([]);
-        setCollections([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadLoans();
-  }, [token, headers, isFieldOfficer, authUser?.branch_id, authUser?.name]);
+    void loadLoans();
+  }, [token, loadLoans]);
 
   const scopedLoans = useMemo(() => {
     if (!isFieldOfficer) return loans;
@@ -897,10 +973,12 @@ export default function CollectionManagementPage() {
       loanId: loan.id,
       loanCode: getFinderLoanCode(loan),
       customerName: loan.customer_name,
+      customerNo: loan.customer_no || '',
       amount: Number(loan.installment_amount || 0).toFixed(2),
       paymentType: 'cash',
       paymentReference: '',
       installmentAmount: Number(loan.installment_amount || 0),
+      refundableAmount: Number(loan.refundable_amount || 0),
       dueDate: loan.due_date || '',
       penaltyRate: Number.isFinite(penaltyRate) ? penaltyRate : 0,
       graceDays: Number.isFinite(graceDays) && graceDays >= 0 ? graceDays : 0,
@@ -923,10 +1001,12 @@ export default function CollectionManagementPage() {
       loanId: null,
       loanCode: '',
       customerName: '',
+      customerNo: '',
       amount: '',
       paymentType: 'cash',
       paymentReference: '',
       installmentAmount: 0,
+      refundableAmount: 0,
       dueDate: '',
       penaltyRate: 0,
       graceDays: 0,
@@ -974,6 +1054,63 @@ export default function CollectionManagementPage() {
     collectModal.installmentAmount,
   ]);
 
+  const buildLocalMfReceipt = useCallback(
+    (
+      modal: typeof collectModal,
+      options?: {
+        breakdown?: Record<string, unknown>;
+        savedCollection?: Record<string, unknown>;
+        loanDates?: { due_date?: string | null; next_payment_date?: string | null };
+        offline?: boolean;
+      }
+    ): CollectionReceipt => {
+      const paid = Number(options?.savedCollection?.collected_amount ?? modal.amount ?? 0);
+      const breakdown = options?.breakdown ?? {};
+      const priorPaid = collections
+        .filter((row) => row.mf_loan_request_id === modal.loanId)
+        .reduce((sum, row) => sum + Number(row.collected_amount || 0), 0);
+      const totalPaidCumulative = priorPaid + (options?.offline ? paid : 0);
+      const outstanding = Math.max(modal.refundableAmount - totalPaidCumulative, 0);
+      const arrearsAfterRaw = Number(breakdown.arrears_outstanding_after ?? 0);
+      const extraAfter = Number(breakdown.extra_payment_after ?? 0);
+      const collectionId = Number(options?.savedCollection?.id ?? 0);
+      const offlineNote = options?.offline
+        ? 'Saved offline — will sync when internet is available.'
+        : null;
+      const mergedNote = [modal.note || '', offlineNote || ''].filter(Boolean).join(' ').trim() || null;
+
+      return {
+        bill_no: options?.offline
+          ? `BILL-MF-OFF-${Date.now()}`
+          : `BILL-MIC-${modal.loanId}-${collectionId > 0 ? collectionId : Date.now()}`,
+        product_type: 'microfinance',
+        product_label: 'Micro Credit',
+        reference: modal.loanCode,
+        source_id: modal.loanId || 0,
+        customer_name: modal.customerName,
+        customer_no: modal.customerNo || null,
+        loan_product: 'Micro Loan',
+        payment_date: String(options?.savedCollection?.collection_date ?? modal.date),
+        payment_type: modal.paymentType,
+        payment_reference: modal.paymentReference.trim() || null,
+        paid_amount: paid,
+        principal_paid: Number(breakdown.capital_amount ?? options?.savedCollection?.capital_amount ?? 0),
+        interest_paid: Number(breakdown.interest_amount ?? options?.savedCollection?.interest_amount ?? 0),
+        penalty_paid: Number(breakdown.penalty_amount ?? options?.savedCollection?.penalty_amount ?? 0),
+        arrears_before: Number(breakdown.arrears_outstanding_before ?? 0),
+        arrears_after: Math.max(arrearsAfterRaw - extraAfter, 0),
+        outstanding,
+        total_paid_cumulative: totalPaidCumulative,
+        installment_amount: modal.installmentAmount,
+        next_due_date: options?.loanDates?.due_date || modal.dueDate || null,
+        note: mergedNote,
+        collection_id: collectionId > 0 ? collectionId : null,
+        printed_at: new Date().toISOString(),
+      };
+    },
+    [collections]
+  );
+
   const submitCollection = async () => {
     if (!collectModal.loanId) {
       setNoticeModal({ open: true, title: 'Error', message: 'Loan record is missing.' });
@@ -987,6 +1124,66 @@ export default function CollectionManagementPage() {
 
     if (collectModal.paymentType !== 'cash' && !collectModal.paymentReference.trim()) {
       setNoticeModal({ open: true, title: 'Validation', message: 'Reference is required for check and bank transfer payments.' });
+      return;
+    }
+
+    const browserOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+    if (browserOffline) {
+      if (!cacheMeta.available) {
+        setNoticeModal({
+          open: true,
+          title: 'Offline Data Missing',
+          message: 'Connect to the internet once and open this page to download loan data before collecting offline.',
+        });
+        return;
+      }
+
+      setCollectSaving(true);
+      try {
+        await enqueueMfCollection({
+          scopeKey,
+          loanRequestId: collectModal.loanId,
+          loanCode: collectModal.loanCode,
+          customerName: collectModal.customerName,
+          collectionDate: collectModal.date,
+          collectedAmount: Number(collectModal.amount),
+          paymentType: collectModal.paymentType,
+          paymentReference: collectModal.paymentReference || undefined,
+          note: collectModal.note || undefined,
+        });
+
+        const optimisticCollection = normalizeCollectionRow({
+          id: -Date.now(),
+          mf_loan_request_id: collectModal.loanId,
+          collected_amount: Number(collectModal.amount),
+          collection_date: collectModal.date,
+        });
+
+        const nextCollections = [...collections, optimisticCollection];
+        setCollections(nextCollections);
+        setLoans((prev) =>
+          prev.map((loan) =>
+            loan.id === collectModal.loanId
+              ? { ...loan, last_pay_date: collectModal.date || loan.last_pay_date }
+              : loan
+          )
+        );
+
+        await cacheMfCollectionData(scopeKey, loans, nextCollections);
+        await refreshPendingCount();
+        const offlineReceipt = buildLocalMfReceipt(collectModal, { offline: true });
+        closeCollectModal();
+        setReceiptModal({ open: true, receipt: offlineReceipt });
+      } catch {
+        setNoticeModal({
+          open: true,
+          title: 'Offline Save Failed',
+          message: 'Could not save collection locally. Check browser storage and try again.',
+        });
+      } finally {
+        setCollectSaving(false);
+      }
       return;
     }
 
@@ -1006,69 +1203,54 @@ export default function CollectionManagementPage() {
       );
 
       const savedCollection = response?.data?.data;
+      let nextCollections = collections;
+      let nextLoans = loans;
+
       if (savedCollection?.mf_loan_request_id) {
         const normalizedCollection = normalizeCollectionRow(savedCollection as Record<string, unknown>);
-        setCollections((prev) => [...prev, normalizedCollection]);
-        setLoans((prev) =>
-          prev.map((loan) =>
-            loan.id === normalizedCollection.mf_loan_request_id
-              ? { ...loan, last_pay_date: normalizedCollection.collection_date || loan.last_pay_date }
-              : loan
-          )
+        nextCollections = [...collections, normalizedCollection];
+        setCollections(nextCollections);
+        nextLoans = loans.map((loan) =>
+          loan.id === normalizedCollection.mf_loan_request_id
+            ? { ...loan, last_pay_date: normalizedCollection.collection_date || loan.last_pay_date }
+            : loan
         );
+        setLoans(nextLoans);
       }
 
       const loanDates = response?.data?.loan_dates;
       const breakdown = response?.data?.breakdown || {};
       if (loanDates?.due_date || loanDates?.next_payment_date) {
-        setLoans((prev) =>
-          prev.map((loan) => {
-            if (loan.id !== collectModal.loanId) return loan;
+        nextLoans = nextLoans.map((loan) => {
+          if (loan.id !== collectModal.loanId) return loan;
 
-            return {
-              ...loan,
-              due_date: loanDates.due_date || loan.due_date,
-              next_payment_date: loanDates.next_payment_date || loan.next_payment_date,
-              arrears_balance:
-                typeof breakdown.arrears_outstanding_after !== 'undefined'
-                  ? Number(breakdown.arrears_outstanding_after || 0) - Number(breakdown.extra_payment_after || 0)
-                  : loan.arrears_balance,
-            };
-          })
-        );
+          return {
+            ...loan,
+            due_date: loanDates.due_date || loan.due_date,
+            next_payment_date: loanDates.next_payment_date || loan.next_payment_date,
+            arrears_balance:
+              typeof breakdown.arrears_outstanding_after !== 'undefined'
+                ? Number(breakdown.arrears_outstanding_after || 0) - Number(breakdown.extra_payment_after || 0)
+                : loan.arrears_balance,
+          };
+        });
+        setLoans(nextLoans);
       }
+
+      await cacheMfCollectionData(scopeKey, nextLoans, nextCollections);
+      setCacheMeta((prev) => ({ ...prev, available: true, cachedAt: new Date().toISOString() }));
+
+      const serverReceipt = response?.data?.receipt as CollectionReceipt | undefined;
+      const receipt =
+        serverReceipt ||
+        buildLocalMfReceipt(collectModal, {
+          breakdown,
+          savedCollection: savedCollection as Record<string, unknown> | undefined,
+          loanDates,
+        });
 
       closeCollectModal();
-      const modalLines = [
-        `Collected Amount: ${Number(savedCollection?.collected_amount || collectModal.amount || 0).toFixed(2)}`,
-        `Arrears Outstanding (Before): ${Number(breakdown.arrears_outstanding_before || 0).toFixed(2)}`,
-        `Arrears Deducted: ${Number(breakdown.arrears_deducted || 0).toFixed(2)}`,
-        `Arrears Outstanding (After): ${Number(breakdown.arrears_outstanding_after || 0).toFixed(2)}`,
-      ];
-
-      if (isAdmin) {
-        modalLines.push(
-          `Capital Collection: ${Number(breakdown.capital_amount || 0).toFixed(2)}`,
-          `Interest Collection: ${Number(breakdown.interest_amount || 0).toFixed(2)}`,
-          `Penalty Collection: ${Number(breakdown.penalty_amount || 0).toFixed(2)}`,
-          `Penalty Rate: ${Number(breakdown.penalty_rate || 0).toFixed(2)}% | Grace Days: ${Number(breakdown.grace_days || 0)} | Late Days: ${Number(breakdown.late_days || 0)}`,
-          `Profit (Interest + Penalty): ${Number(breakdown.profit_amount || 0).toFixed(2)}`,
-          `Business Fund (Capital): ${Number(breakdown.business_fund_amount || 0).toFixed(2)}`,
-          `Outstanding Principal: ${Number(breakdown.outstanding_principal_after || 0).toFixed(2)}`
-        );
-      } else {
-        modalLines.push(
-          `Penalty Collection: ${Number(breakdown.penalty_amount || 0).toFixed(2)}`,
-          `Penalty Rate: ${Number(breakdown.penalty_rate || 0).toFixed(2)}% | Grace Days: ${Number(breakdown.grace_days || 0)} | Late Days: ${Number(breakdown.late_days || 0)}`,
-          `Outstanding Principal: ${Number(breakdown.outstanding_principal_after || 0).toFixed(2)}`
-        );
-      }
-
-      setNoticeModal({
-        open: true,
-        title: 'Collection Saved',
-        message: modalLines.join('\n'),
-      });
+      setReceiptModal({ open: true, receipt });
     } catch (error: any) {
       const message = error?.response?.data?.message || 'Failed to save collection.';
       setNoticeModal({ open: true, title: 'Collection Error', message });
@@ -1197,6 +1379,21 @@ export default function CollectionManagementPage() {
       </div>
 
       <div className="max-w-7xl mx-auto space-y-6 relative z-10">
+        <MfOfflineBanner
+          isOnline={isOnline}
+          pendingCount={pendingCount}
+          syncing={syncing}
+          cacheAvailable={cacheMeta.available}
+          cachedAt={cacheMeta.cachedAt}
+          lastSyncMessage={lastSyncMessage}
+          onSyncNow={() => {
+            void syncNow();
+          }}
+          onRefreshCache={() => {
+            void loadLoans();
+          }}
+        />
+
         <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
@@ -1987,6 +2184,12 @@ export default function CollectionManagementPage() {
             </div>
           </div>
         )}
+
+        <CollectionReceiptBill
+          open={receiptModal.open}
+          receipt={receiptModal.receipt}
+          onClose={() => setReceiptModal({ open: false, receipt: null })}
+        />
 
         {noticeModal.open && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">

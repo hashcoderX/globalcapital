@@ -3,13 +3,39 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
-import ModuleHeader from '../_components/ModuleHeader';
-import StatCard from '../_components/StatCard';
-import SectionCard from '../_components/SectionCard';
 import Badge from '../_components/Badge';
 import ActionButton from '../_components/ActionButton';
 import Modal from '../_components/Modal';
-import { Briefcase, Clock, AlertTriangle, Eye, Banknote, Receipt } from 'lucide-react';
+import ClientMountGate from '@/app/components/ClientMountGate';
+import { getApiBaseUrl } from '@/lib/api';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Banknote,
+  Briefcase,
+  Building2,
+  Car,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Eye,
+  Gem,
+  Home,
+  LayoutGrid,
+  List,
+  Plus,
+  Receipt,
+  RefreshCw,
+  Search,
+  Sparkles,
+  TrendingUp,
+  Wallet,
+} from 'lucide-react';
+
+const inputClass =
+  'w-full rounded-xl border border-slate-200/90 bg-white/95 px-3 py-2.5 text-sm text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-200/70';
+
+type ViewMode = 'table' | 'cards';
 
 interface Mortgage {
   id: number;
@@ -51,6 +77,29 @@ function formatAmount(v: number | string | null | undefined) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function parseDateValue(value: unknown): Date | null {
+  if (!value) return null;
+  const raw = String(value).trim();
+  const dateOnly = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dateOnly) {
+    const [, year, month, day] = dateOnly;
+    const parsed = new Date(Number(year), Number(month) - 1, Number(day));
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDate(value: unknown): string {
+  const date = parseDateValue(value);
+  if (!date) return '—';
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(date);
+}
+
 function toNumber(v: number | string | null | undefined): number {
   if (typeof v === 'number') return v;
   if (v == null) return NaN;
@@ -80,14 +129,29 @@ function frequencyLabel(frequency: string | null | undefined): string {
 }
 
 function daysOverdue(dueDate: string | null | undefined): number | null {
-  if (!dueDate) return null;
-  const due = new Date(dueDate);
-  if (Number.isNaN(due.getTime())) return null;
+  const due = parseDateValue(dueDate);
+  if (!due) return null;
   const today = new Date();
   due.setHours(0, 0, 0, 0);
   today.setHours(0, 0, 0, 0);
   const diff = Math.floor((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24));
   return diff > 0 ? diff : 0;
+}
+
+function mortgageTypeMeta(type: string) {
+  const key = String(type || 'other').toLowerCase();
+  if (key === 'vehicle') return { icon: Car, color: 'from-sky-500 to-blue-600', label: 'Vehicle' };
+  if (key === 'land') return { icon: Building2, color: 'from-emerald-500 to-teal-600', label: 'Land' };
+  if (key === 'house') return { icon: Home, color: 'from-violet-500 to-indigo-600', label: 'House' };
+  if (key === 'gold') return { icon: Gem, color: 'from-amber-500 to-orange-600', label: 'Gold' };
+  return { icon: Briefcase, color: 'from-slate-500 to-slate-700', label: 'Other' };
+}
+
+function statusTone(status: string): 'success' | 'warning' | 'info' | 'default' {
+  if (status === 'active') return 'success';
+  if (status === 'arrears') return 'warning';
+  if (status === 'approved') return 'info';
+  return 'default';
 }
 
 function computeInstallmentFigures(m: Mortgage) {
@@ -141,6 +205,8 @@ export default function Mortgages() {
   const [searchMobile, setSearchMobile] = useState('');
   const [searchVehicle, setSearchVehicle] = useState('');
   const [searchDeed, setSearchDeed] = useState('');
+  const [viewMode, setViewMode] = useState<ViewMode>('cards');
+  const [filtersOpen, setFiltersOpen] = useState(true);
   const router = useRouter();
 
   const stats = useMemo(() => {
@@ -162,7 +228,15 @@ export default function Mortgages() {
         }, 0) / totalAccounts
       : 0;
 
-    return { totalAccounts, totalApprovedAmount, averageInstallment, averageRate };
+    let overdueCount = 0;
+    let totalArrears = 0;
+    mortgages.forEach((mortgage) => {
+      const arrears = toNumber(mortgage.arrears_amount);
+      if (Number.isFinite(arrears)) totalArrears += arrears;
+      if ((daysOverdue(mortgage.due_date) ?? 0) > 0) overdueCount += 1;
+    });
+
+    return { totalAccounts, totalApprovedAmount, averageInstallment, averageRate, overdueCount, totalArrears };
   }, [mortgages]);
 
   useEffect(() => {
@@ -187,7 +261,7 @@ export default function Mortgages() {
       if (searchVehicle) params.vehicle_no = searchVehicle;
       if (searchDeed) params.deed_no = searchDeed;
 
-      const res = await axios.get('http://localhost:8000/api/mortgages', {
+      const res = await axios.get(`${getApiBaseUrl()}/mortgages`, {
         headers: { Authorization: `Bearer ${authToken}` },
         params: { ...params, per_page: perPage, page }
       });
@@ -263,7 +337,7 @@ export default function Mortgages() {
         collected_by: null,
       };
       // Attempt backend call (if endpoint exists); otherwise show success toast.
-      await axios.post(`http://localhost:8000/api/mortgages/${paymentMortgageId}/payments`, payload, {
+      await axios.post(`${getApiBaseUrl()}/mortgages/${paymentMortgageId}/payments`, payload, {
         headers: { Authorization: `Bearer ${token}` },
       }).catch(() => {
         // Graceful fallback if POST not implemented yet
@@ -281,414 +355,518 @@ export default function Mortgages() {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-24 left-10 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute top-24 right-6 h-96 w-96 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute -bottom-20 left-1/3 h-80 w-80 rounded-full bg-teal-300 blur-3xl"></div>
-      </div>
+  const clearFilters = () => {
+    setBranchFilter('');
+    setSearchId('');
+    setSearchNic('');
+    setSearchMobile('');
+    setSearchVehicle('');
+    setSearchDeed('');
+    if (token) fetchMortgages(token, 1);
+  };
 
-      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <ModuleHeader
-          title="Mortgage Portfolio"
-          subtitle="Premium workspace to manage approved mortgage accounts"
-          breadcrumbs={[
-            { label: 'Dashboard', href: '/dashboard' },
-            { label: 'Mortgages', href: '/dashboard/mortgages' },
-            { label: 'Portfolio' },
-          ]}
-          actions={(
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="rounded-lg bg-gradient-to-r from-slate-600 to-gray-800 px-4 py-2 text-white shadow-sm transition hover:opacity-95"
-              >
-                Dashboard
-              </button>
-              <button
-                onClick={() => router.back()}
-                className="rounded-lg bg-gradient-to-r from-gray-500 to-zinc-700 px-4 py-2 text-white shadow-sm transition hover:opacity-95"
-              >
-                Back
-              </button>
-              <button
-                onClick={() => router.push('/dashboard/mortgages/create')}
-                className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-2 text-white shadow-sm transition hover:opacity-95"
-              >
-                <span className="h-4 w-4">+</span>
-                New Mortgage
-              </button>
-            </div>
-          )}
-        />
-      </div>
+  const renderMortgageActions = (id: number, compact = false) => (
+    <div className={`flex ${compact ? 'flex-col gap-2' : 'flex-wrap items-center gap-2'}`}>
+      <button
+        type="button"
+        onClick={() => router.push(`/dashboard/mortgages/${id}`)}
+        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-semibold text-cyan-800 transition hover:bg-cyan-100"
+      >
+        <Eye className="h-3.5 w-3.5" />
+        View
+      </button>
+      <button
+        type="button"
+        onClick={() => openPaymentModal(id)}
+        className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-3 py-2 text-xs font-semibold text-white shadow-md transition hover:from-emerald-600 hover:to-teal-700"
+      >
+        <Banknote className="h-3.5 w-3.5" />
+        Collect
+      </button>
+      <button
+        type="button"
+        onClick={() => router.push(`/dashboard/mortgages/${id}/payments`)}
+        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+      >
+        <Receipt className="h-3.5 w-3.5" />
+        Payments
+      </button>
+    </div>
+  );
 
-      {/* Stats + Filters */}
-      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        <div className="rounded-3xl border border-white/70 bg-white/82 backdrop-blur-xl p-6 shadow-[0_22px_60px_-30px_rgba(14,116,144,0.52)]">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.16em] font-bold text-cyan-700">Portfolio Overview</p>
-              <h2 className="mt-2 text-2xl font-extrabold text-slate-900">Approved Mortgage Book</h2>
-              <p className="mt-1 text-sm text-slate-600">Monitor value exposure, installment strength, and rate profile across approved accounts.</p>
-            </div>
-            <button
-              onClick={() => token && fetchMortgages(token)}
-              className="rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:from-cyan-700 hover:to-blue-700"
-            >
-              Refresh Portfolio
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            icon={<Briefcase className="h-5 w-5" />}
-            label="Approved Accounts"
-            value={stats.totalAccounts}
-            tone="primary"
-          />
-          <StatCard
-            icon={<Banknote className="h-5 w-5" />}
-            label="Portfolio Value"
-            value={formatAmount(stats.totalApprovedAmount)}
-            hint="Approved + effective principal"
-            tone="success"
-          />
-          <StatCard
-            icon={<Clock className="h-5 w-5" />}
-            label="Avg Installment"
-            value={formatAmount(stats.averageInstallment)}
-            hint="Per repayment period"
-            tone="warning"
-          />
-          <StatCard
-            icon={<AlertTriangle className="h-5 w-5" />}
-            label="Avg Interest Rate"
-            value={`${stats.averageRate.toFixed(2)}%`}
-            hint="Across approved records"
-            tone="primary"
-          />
-        </div>
-
-        <div>
-          <SectionCard title="Smart Filters" description="Showing approved mortgages. Filter quickly by branch and identity markers." className="border-white/80 bg-white/85 backdrop-blur-xl shadow-[0_18px_44px_-28px_rgba(14,116,144,0.48)]">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-4 xl:grid-cols-6">
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">Status</label>
-                <select
-                  value="approved"
-                  disabled
-                  className="w-full rounded-xl border border-cyan-100 bg-cyan-50/80 px-3 py-2 text-slate-800"
-                >
-                  <option value="approved">approved</option>
-                </select>
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">Branch</label>
-                <input
-                  value={branchFilter}
-                  onChange={(e) => setBranchFilter(e.target.value)}
-                  placeholder="Branch ID"
-                  className="w-full rounded-xl border border-cyan-100 px-3 py-2 text-black focus:ring-2 focus:ring-cyan-300"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">Mortgage ID</label>
-                <input value={searchId} onChange={(e)=>setSearchId(e.target.value)} placeholder="e.g. 2" className="w-full rounded-xl border border-cyan-100 px-3 py-2 text-black focus:ring-2 focus:ring-cyan-300" />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">Customer NIC</label>
-                <input value={searchNic} onChange={(e)=>setSearchNic(e.target.value)} placeholder="e.g. 992233445V" className="w-full rounded-xl border border-cyan-100 px-3 py-2 text-black focus:ring-2 focus:ring-cyan-300" />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">Mobile</label>
-                <input value={searchMobile} onChange={(e)=>setSearchMobile(e.target.value)} placeholder="e.g. 0771234567" className="w-full rounded-xl border border-cyan-100 px-3 py-2 text-black focus:ring-2 focus:ring-cyan-300" />
-              </div>
-              <div className="flex items-end xl:justify-end">
-                <button
-                  onClick={() => token && fetchMortgages(token, 1)}
-                  className="inline-flex items-center rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-6 py-2.5 text-white shadow-md transition hover:from-cyan-700 hover:to-blue-700"
-                >
-                  Apply Filters
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">Vehicle Reg No</label>
-                <input value={searchVehicle} onChange={(e)=>setSearchVehicle(e.target.value)} placeholder="e.g. CA-1234" className="w-full rounded-xl border border-cyan-100 px-3 py-2 text-black focus:ring-2 focus:ring-cyan-300" />
-              </div>
-              <div>
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">Deed No</label>
-                <input value={searchDeed} onChange={(e)=>setSearchDeed(e.target.value)} placeholder="e.g. D123" className="w-full rounded-xl border border-cyan-100 px-3 py-2 text-black focus:ring-2 focus:ring-cyan-300" />
-              </div>
-              <div className="flex items-end xl:justify-end">
-                <button
-                  onClick={() => {
-                    setBranchFilter('');
-                    setSearchId('');
-                    setSearchNic('');
-                    setSearchMobile('');
-                    setSearchVehicle('');
-                    setSearchDeed('');
-                    if (token) fetchMortgages(token, 1);
-                  }}
-                  className="inline-flex items-center rounded-xl border border-cyan-200 bg-white px-6 py-2.5 text-cyan-800 shadow-sm transition hover:bg-cyan-50"
-                >
-                  Clear Filters
-                </button>
-              </div>
-            </div>
-          </SectionCard>
-        </div>
-
-      </div>
-
-      {/* Table */}
-      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
-        <div className="overflow-hidden rounded-3xl border border-cyan-100 bg-white/90 backdrop-blur-xl shadow-[0_22px_55px_-34px_rgba(14,116,144,0.56)]">
-          {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-cyan-100">
-                <thead className="bg-cyan-50/80">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">NIC</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Requested</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Interest</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tenure</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due Date</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Arrears</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due Principal</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due Interest</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Installment Amount</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Interest Amount</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-cyan-100 bg-white">
-                  {mortgages.map(m => (
-                    <tr key={m.id} className="hover:bg-cyan-50/40 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.id}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {(m.customer?.first_name || m.customer?.last_name) ? `${m.customer?.first_name ?? ''} ${m.customer?.last_name ?? ''}`.trim() : '—'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.customer?.phone ?? '—'}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.customer?.nic_passport ?? '—'}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        <span className="capitalize text-gray-900">{m.mortgage_type}</span>
-                        {m.asset?.asset_type === 'vehicle' && m.asset?.vehicle_reg_no ? (
-                          <span className="ml-2 text-gray-700">• {m.asset.vehicle_reg_no}</span>
-                        ) : null}
-                        {m.asset?.asset_type !== 'vehicle' && m.asset?.deed_number ? (
-                          <span className="ml-2 text-gray-700">• {m.asset.deed_number}</span>
-                        ) : null}
-                        {!m.asset?.deed_number && !m.asset?.vehicle_reg_no && m.asset?.description ? (
-                          <span className="ml-2 text-gray-700">• {m.asset.description}</span>
-                        ) : null}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{formatAmount(m.requested_amount)}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.interest_rate}% ({m.interest_type})</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.tenure_months} months</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {m.due_date ? (
-                          <div>
-                            <div>{m.due_date}</div>
-                            {daysOverdue(m.due_date) ? <div className="text-xs text-rose-600">{daysOverdue(m.due_date)} days overdue</div> : <div className="text-xs text-emerald-600">On schedule</div>}
-                          </div>
-                        ) : '—'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {formatAmount(m.arrears_amount ?? 0)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{formatAmount(m.due_amount ?? 0)}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{formatAmount(m.due_interest_amount ?? 0)}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {(() => {
-                          const { installmentAmount } = computeInstallmentFigures(m);
-                          return `${formatAmount(installmentAmount)} (${frequencyLabel(m.installment_frequency)})`;
-                        })()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {(() => {
-                          const { interestAmount } = computeInstallmentFigures(m);
-                          return `${formatAmount(interestAmount)} (${frequencyLabel(m.interest_calculation_frequency || 'monthly')})`;
-                        })()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <Badge
-                          label={m.status}
-                          variant={
-                            m.status === 'active' ? 'success' :
-                            m.status === 'arrears' ? 'warning' :
-                            m.status === 'approved' ? 'info' : 'default'
-                          }
-                        />
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div className="flex items-center gap-2">
-                          <ActionButton
-                            label="View"
-                            size="sm"
-                            variant="info"
-                            icon={<Eye className="h-4 w-4" />}
-                            onClick={() => router.push(`/dashboard/mortgages/${m.id}`)}
-                          />
-                          <ActionButton
-                            label="Collect Payment"
-                            size="sm"
-                            variant="success"
-                            icon={<Banknote className="h-4 w-4" />}
-                            onClick={() => openPaymentModal(m.id)}
-                          />
-                          <ActionButton
-                            label="View Payments"
-                            size="sm"
-                            variant="warning"
-                            icon={<Receipt className="h-4 w-4" />}
-                            onClick={() => router.push(`/dashboard/mortgages/${m.id}/payments`)}
-                          />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {mortgages.length === 0 && (
-                <div className="text-center py-12">
-                  <p className="text-gray-500">No mortgages found.</p>
-                </div>
-              )}
-
-              {totalRows > 0 && (
-                <div className="flex flex-col gap-3 border-t border-cyan-100 bg-cyan-50/50 px-4 py-3 md:flex-row md:items-center md:justify-between">
-                  <p className="text-xs font-medium text-slate-600">
-                    Showing page {currentPage} of {lastPage} • Total records: {totalRows}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={loading || currentPage <= 1}
-                      onClick={() => token && fetchMortgages(token, currentPage - 1)}
-                      className="rounded-lg border border-cyan-200 bg-white px-3 py-1.5 text-sm font-semibold text-cyan-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Previous
-                    </button>
-                    <span className="rounded-lg border border-cyan-100 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700">
-                      {currentPage}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={loading || currentPage >= lastPage}
-                      onClick={() => token && fetchMortgages(token, currentPage + 1)}
-                      className="rounded-lg border border-cyan-200 bg-white px-3 py-1.5 text-sm font-semibold text-cyan-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Payment Modal */}
-              <Modal isOpen={paymentOpen} onClose={() => setPaymentOpen(false)} title="Collect Payment" size="md">
-                <div className="grid grid-cols-1 gap-4">
-                  {paymentMortgage && (
-                    <div className="rounded-lg border border-gray-200 bg-white p-3">
-                      <div className="text-xs text-gray-500">Interest per {frequencyLabel(paymentMortgage.interest_calculation_frequency || 'monthly')} ({paymentMortgage.interest_type})</div>
-                      <div className="text-base font-medium text-gray-900">
-                        {(() => {
-                          const { interestAmount } = computeInstallmentFigures(paymentMortgage);
-                          return formatAmount(interestAmount);
-                        })()}
-                      </div>
-                      <div className="mt-2 text-xs text-gray-600">
-                        {paymentMortgage.interest_type === 'reducing' ? (
-                          <span>Reducing: interest is on current outstanding principal.</span>
-                        ) : (
-                          <span>Fixed: interest is flat on full principal.</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-gray-700">Amount</label>
-                    <input
-                      value={paymentAmount}
-                      onChange={e => setPaymentAmount(e.target.value)}
-                      placeholder="e.g. 25000.00"
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500"
-                    />
-                    {paymentMortgage && paymentAmount && (
-                      <div className="mt-1 text-xs">
-                        {(() => {
-                          const amt = parseFloat(paymentAmount);
-                          const { interestAmount } = computeInstallmentFigures(paymentMortgage);
-                          if (!Number.isFinite(amt)) return null;
-                          if (Math.abs(amt - interestAmount) < 0.01) {
-                            return <span className="text-amber-600">Interest-only payment: principal will not reduce.</span>;
-                          }
-                          if (amt < interestAmount) {
-                            return <span className="text-rose-600">Less than interest due for this period: will be recorded with arrears.</span>;
-                          }
-                          return <span className="text-emerald-600">Covers interest; excess reduces principal.</span>;
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-gray-700">Date</label>
-                      <input
-                        type="date"
-                        value={paymentDate}
-                        onChange={e => setPaymentDate(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-gray-700">Method</label>
-                      <select
-                        value={paymentMethod}
-                        onChange={e => setPaymentMethod(e.target.value)}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:border-transparent focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="cash">Cash</option>
-                        <option value="bank">Bank Transfer</option>
-                        <option value="card">Card</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-gray-700">Note</label>
-                    <textarea
-                      value={paymentNote}
-                      onChange={e => setPaymentNote(e.target.value)}
-                      placeholder="Optional remarks"
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-black focus:ring-2 focus:ring-blue-500"
-                      rows={3}
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end gap-2 mt-4">
-                  <ActionButton label="Cancel" variant="default" onClick={() => setPaymentOpen(false)} />
-                  <ActionButton label={paymentSubmitting ? 'Submitting...' : 'Record Payment'} variant="success" onClick={submitPayment} disabled={paymentSubmitting} />
-                </div>
-              </Modal>
-            </div>
-          )}
-        </div>
+  const pageFallback = (
+    <div className="flex min-h-screen items-center justify-center bg-[#070d1a]">
+      <div className="flex flex-col items-center gap-4">
+        <div className="h-14 w-14 animate-spin rounded-full border-2 border-cyan-400/30 border-t-cyan-400" />
+        <p className="text-sm font-medium text-cyan-100/80">Loading portfolio...</p>
       </div>
     </div>
+  );
+
+  return (
+    <ClientMountGate fallback={pageFallback}>
+      <div className="relative min-h-screen overflow-hidden bg-[#f4f8fc]">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute -left-24 top-0 h-96 w-96 rounded-full bg-cyan-400/20 blur-3xl" />
+          <div className="absolute right-0 top-24 h-[28rem] w-[28rem] rounded-full bg-blue-500/15 blur-3xl" />
+          <div className="absolute bottom-0 left-1/3 h-80 w-80 rounded-full bg-teal-400/15 blur-3xl" />
+          <div
+            className="absolute inset-0 opacity-[0.35]"
+            style={{
+              backgroundImage:
+                'radial-gradient(circle at 1px 1px, rgba(14,116,144,0.12) 1px, transparent 0)',
+              backgroundSize: '28px 28px',
+            }}
+          />
+        </div>
+
+        <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+          {/* Hero */}
+          <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#0b1224] via-[#0f2744] to-[#0c4a6e] text-white shadow-[0_30px_80px_-24px_rgba(8,47,73,0.75)]">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.22),transparent_45%)]" />
+            <div className="relative p-6 md:p-8">
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+                <div className="max-w-2xl">
+                  <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-100">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Mortgage Portfolio
+                  </span>
+                  <h1 className="mt-4 text-3xl font-black tracking-tight md:text-4xl">Approved Book Command Center</h1>
+                  <p className="mt-2 text-sm leading-relaxed text-cyan-50/85 md:text-base">
+                    Track exposure, installments, due dates, and collections across your live approved mortgage portfolio.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2 text-xs text-cyan-100/90">
+                    <span className="rounded-lg bg-white/10 px-2.5 py-1">Dashboard</span>
+                    <span className="text-cyan-200/50">/</span>
+                    <span className="rounded-lg bg-white/10 px-2.5 py-1">Mortgages</span>
+                    <span className="text-cyan-200/50">/</span>
+                    <span className="rounded-lg bg-cyan-400/20 px-2.5 py-1 font-semibold text-white">Portfolio</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => router.push('/dashboard')}
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20"
+                  >
+                    Dashboard
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.back()}
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/15"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push('/dashboard/mortgages/create')}
+                    className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/30 transition hover:brightness-110"
+                  >
+                    <Plus className="h-4 w-4" />
+                    New Mortgage
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Stats */}
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+            {[
+              { icon: Briefcase, label: 'Accounts', value: stats.totalAccounts, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
+              { icon: Wallet, label: 'Portfolio Value', value: formatAmount(stats.totalApprovedAmount), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
+              { icon: TrendingUp, label: 'Avg Installment', value: formatAmount(stats.averageInstallment), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
+              { icon: Clock, label: 'Avg Rate', value: `${stats.averageRate.toFixed(2)}%`, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
+              { icon: AlertTriangle, label: 'Overdue', value: stats.overdueCount, tone: 'text-rose-700', bg: 'from-rose-500/10 to-red-500/5' },
+              { icon: Banknote, label: 'Total Arrears', value: formatAmount(stats.totalArrears), tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
+            ].map((item) => (
+              <div
+                key={item.label}
+                className={`group relative overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-[0_16px_40px_-28px_rgba(14,116,144,0.55)] backdrop-blur transition hover:-translate-y-0.5 hover:shadow-[0_22px_50px_-24px_rgba(14,116,144,0.6)]`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
+                    <p className={`mt-2 text-2xl font-black ${item.tone}`}>{item.value}</p>
+                  </div>
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/80 text-slate-700 shadow-sm">
+                    <item.icon className="h-5 w-5" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </section>
+
+          {/* Filters */}
+          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/90 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl">
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              className="flex w-full items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 text-left transition hover:bg-slate-50/80"
+            >
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Smart Filters</p>
+                <p className="mt-1 text-sm text-slate-600">Refine approved mortgages by branch, identity, and collateral markers.</p>
+              </div>
+              <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-800">
+                {filtersOpen ? 'Hide' : 'Show'}
+              </span>
+            </button>
+
+            {filtersOpen && (
+              <div className="space-y-4 p-5">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Status</label>
+                    <select value="approved" disabled className={`${inputClass} bg-cyan-50/60`}>
+                      <option value="approved">Approved</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Branch ID</label>
+                    <input value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} placeholder="e.g. 1" className={inputClass} />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Mortgage ID</label>
+                    <input value={searchId} onChange={(e) => setSearchId(e.target.value)} placeholder="e.g. 2" className={inputClass} />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Customer NIC</label>
+                    <input value={searchNic} onChange={(e) => setSearchNic(e.target.value)} placeholder="e.g. 992233445V" className={inputClass} />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Mobile</label>
+                    <input value={searchMobile} onChange={(e) => setSearchMobile(e.target.value)} placeholder="e.g. 0771234567" className={inputClass} />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Vehicle Reg No</label>
+                    <input value={searchVehicle} onChange={(e) => setSearchVehicle(e.target.value)} placeholder="e.g. CA-1234" className={inputClass} />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Deed No</label>
+                    <input value={searchDeed} onChange={(e) => setSearchDeed(e.target.value)} placeholder="e.g. D123" className={inputClass} />
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => token && fetchMortgages(token, 1)}
+                    className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-cyan-500/25 transition hover:from-cyan-700 hover:to-blue-700"
+                  >
+                    <Search className="h-4 w-4" />
+                    Apply Filters
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Portfolio list */}
+          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+            <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-lg font-extrabold text-slate-900">Portfolio Accounts</h2>
+                <p className="text-sm text-slate-500">
+                  {totalRows} record{totalRows === 1 ? '' : 's'} • Page {currentPage} of {lastPage}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('cards')}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                      viewMode === 'cards' ? 'bg-white text-cyan-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5" />
+                    Cards
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('table')}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                      viewMode === 'table' ? 'bg-white text-cyan-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <List className="h-3.5 w-3.5" />
+                    Table
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => token && fetchMortgages(token, currentPage)}
+                  disabled={loading}
+                  className="inline-flex items-center gap-2 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-2 text-sm font-semibold text-cyan-800 transition hover:bg-cyan-100 disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-20">
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-cyan-200 border-t-cyan-600" />
+                <p className="text-sm font-medium text-slate-500">Loading portfolio accounts...</p>
+              </div>
+            ) : mortgages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-700">
+                  <Briefcase className="h-8 w-8" />
+                </div>
+                <h3 className="mt-4 text-lg font-bold text-slate-900">No approved mortgages found</h3>
+                <p className="mt-1 max-w-md text-sm text-slate-500">Try clearing filters or create a new mortgage application.</p>
+                <button
+                  type="button"
+                  onClick={() => router.push('/dashboard/mortgages/create')}
+                  className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md"
+                >
+                  <Plus className="h-4 w-4" />
+                  Create Mortgage
+                </button>
+              </div>
+            ) : viewMode === 'cards' ? (
+              <div className="grid grid-cols-1 gap-4 p-5 lg:grid-cols-2">
+                {mortgages.map((m) => {
+                  const overdueDays = daysOverdue(m.due_date);
+                  const typeMeta = mortgageTypeMeta(m.mortgage_type);
+                  const TypeIcon = typeMeta.icon;
+                  const { installmentAmount, interestAmount } = computeInstallmentFigures(m);
+                  const customerName = `${m.customer?.first_name || ''} ${m.customer?.last_name || ''}`.trim() || '—';
+                  const isOverdue = (overdueDays ?? 0) > 0;
+
+                  return (
+                    <article
+                      key={m.id}
+                      className="group relative overflow-hidden rounded-2xl border border-slate-200/90 bg-gradient-to-br from-white to-slate-50/80 p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-200 hover:shadow-[0_20px_45px_-28px_rgba(14,116,144,0.55)]"
+                    >
+                      <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${typeMeta.color}`} />
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <div className={`flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br ${typeMeta.color} text-white shadow-md`}>
+                            <TypeIcon className="h-5 w-5" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">#{m.id} • {typeMeta.label}</p>
+                            <h3 className="mt-1 text-lg font-extrabold text-slate-900">{customerName}</h3>
+                            <p className="text-sm text-slate-500">{m.customer?.phone || '—'} • {m.customer?.nic_passport || '—'}</p>
+                          </div>
+                        </div>
+                        <Badge label={m.status} variant={statusTone(m.status)} />
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                        <div className="rounded-xl border border-slate-100 bg-white/80 p-3">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Principal</p>
+                          <p className="mt-1 font-bold text-cyan-700">{formatAmount(m.approved_amount ?? m.requested_amount)}</p>
+                        </div>
+                        <div className="rounded-xl border border-slate-100 bg-white/80 p-3">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Installment</p>
+                          <p className="mt-1 font-bold text-indigo-700">
+                            {formatAmount(installmentAmount)} <span className="text-xs font-medium text-slate-500">({frequencyLabel(m.installment_frequency)})</span>
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-slate-100 bg-white/80 p-3">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Due Date</p>
+                          <p className="mt-1 font-bold text-slate-900">{formatDate(m.due_date)}</p>
+                          <p className={`mt-0.5 text-xs font-semibold ${isOverdue ? 'text-rose-600' : 'text-emerald-600'}`}>
+                            {isOverdue ? `${overdueDays} day${overdueDays === 1 ? '' : 's'} overdue` : 'On schedule'}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-slate-100 bg-white/80 p-3">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Arrears</p>
+                          <p className="mt-1 font-bold text-rose-700">{formatAmount(m.arrears_amount ?? 0)}</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1">{m.interest_rate}% {m.interest_type}</span>
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1">{m.tenure_months} months</span>
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1">Interest {formatAmount(interestAmount)}</span>
+                      </div>
+
+                      <div className="mt-4 border-t border-slate-100 pt-4">{renderMortgageActions(m.id, true)}</div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-[1400px] w-full">
+                  <thead>
+                    <tr className="bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-900 text-left text-[11px] font-bold uppercase tracking-[0.14em] text-white">
+                      <th className="sticky left-0 z-10 bg-slate-900 px-4 py-3">Account</th>
+                      <th className="px-4 py-3">Customer</th>
+                      <th className="px-4 py-3">Collateral</th>
+                      <th className="px-4 py-3">Principal</th>
+                      <th className="px-4 py-3">Rate</th>
+                      <th className="px-4 py-3">Due Date</th>
+                      <th className="px-4 py-3">Arrears</th>
+                      <th className="px-4 py-3">Due Principal</th>
+                      <th className="px-4 py-3">Due Interest</th>
+                      <th className="px-4 py-3">Installment</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {mortgages.map((m, index) => {
+                      const overdueDays = daysOverdue(m.due_date);
+                      const typeMeta = mortgageTypeMeta(m.mortgage_type);
+                      const TypeIcon = typeMeta.icon;
+                      const { installmentAmount } = computeInstallmentFigures(m);
+                      const customerName = `${m.customer?.first_name || ''} ${m.customer?.last_name || ''}`.trim() || '—';
+
+                      return (
+                        <tr
+                          key={m.id}
+                          className={`transition hover:bg-cyan-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}
+                        >
+                          <td className="sticky left-0 z-10 whitespace-nowrap bg-inherit px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className={`flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br ${typeMeta.color} text-white`}>
+                                <TypeIcon className="h-4 w-4" />
+                              </div>
+                              <div>
+                                <p className="text-sm font-bold text-slate-900">#{m.id}</p>
+                                <p className="text-xs capitalize text-slate-500">{typeMeta.label}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            <p className="font-semibold text-slate-900">{customerName}</p>
+                            <p className="text-xs text-slate-500">{m.customer?.phone || '—'}</p>
+                            <p className="text-xs text-slate-500">{m.customer?.nic_passport || '—'}</p>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-slate-700">
+                            {m.asset?.vehicle_reg_no || m.asset?.deed_number || m.asset?.description || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-bold text-cyan-700">{formatAmount(m.approved_amount ?? m.requested_amount)}</td>
+                          <td className="px-4 py-3 text-sm text-slate-700">
+                            {m.interest_rate}% <span className="text-xs">({m.interest_type})</span>
+                            <div className="text-xs text-slate-500">{m.tenure_months} mo</div>
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            <p className="font-semibold text-slate-900">{formatDate(m.due_date)}</p>
+                            {(overdueDays ?? 0) > 0 ? (
+                              <p className="text-xs font-semibold text-rose-600">{overdueDays}d overdue</p>
+                            ) : (
+                              <p className="text-xs text-emerald-600">On schedule</p>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-semibold text-rose-700">{formatAmount(m.arrears_amount ?? 0)}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-slate-800">{formatAmount(m.due_amount ?? 0)}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-slate-800">{formatAmount(m.due_interest_amount ?? 0)}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-indigo-700">
+                            {formatAmount(installmentAmount)}
+                            <div className="text-xs font-medium text-slate-500">{frequencyLabel(m.installment_frequency)}</div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <Badge label={m.status} variant={statusTone(m.status)} />
+                          </td>
+                          <td className="px-4 py-3">{renderMortgageActions(m.id)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {totalRows > 0 && (
+              <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-4 md:flex-row md:items-center md:justify-between">
+                <p className="text-sm font-medium text-slate-600">
+                  Showing <span className="font-bold text-slate-900">{mortgages.length}</span> on this page •{' '}
+                  <span className="font-bold text-slate-900">{totalRows}</span> total
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={loading || currentPage <= 1}
+                    onClick={() => token && fetchMortgages(token, currentPage - 1)}
+                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Prev
+                  </button>
+                  <span className="rounded-xl border border-cyan-100 bg-white px-4 py-2 text-sm font-bold text-cyan-800">
+                    {currentPage} / {lastPage}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={loading || currentPage >= lastPage}
+                    onClick={() => token && fetchMortgages(token, currentPage + 1)}
+                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+
+        {/* Payment toast */}
+        {paymentToast && (
+          <div className="fixed bottom-24 right-5 z-[60] rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 shadow-xl">
+            {paymentToast}
+          </div>
+        )}
+
+        <Modal isOpen={paymentOpen} onClose={() => setPaymentOpen(false)} title="Collect Payment" size="md">
+          <div className="grid grid-cols-1 gap-4">
+            {paymentMortgage && (
+              <div className="rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50 to-blue-50 p-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-cyan-700">Period interest due</p>
+                <p className="mt-1 text-2xl font-black text-slate-900">
+                  {formatAmount(computeInstallmentFigures(paymentMortgage).interestAmount)}
+                </p>
+                <p className="mt-2 text-xs text-slate-600">
+                  {frequencyLabel(paymentMortgage.interest_calculation_frequency || 'monthly')} • {paymentMortgage.interest_type} rate
+                </p>
+              </div>
+            )}
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-slate-700">Amount</label>
+              <input value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} placeholder="e.g. 25000.00" className={inputClass} />
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-slate-700">Date</label>
+                <input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} className={inputClass} />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-slate-700">Method</label>
+                <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className={inputClass}>
+                  <option value="cash">Cash</option>
+                  <option value="bank">Bank Transfer</option>
+                  <option value="card">Card</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-slate-700">Note</label>
+              <textarea value={paymentNote} onChange={(e) => setPaymentNote(e.target.value)} placeholder="Optional remarks" className={inputClass} rows={3} />
+            </div>
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <ActionButton label="Cancel" variant="default" onClick={() => setPaymentOpen(false)} />
+            <ActionButton label={paymentSubmitting ? 'Submitting...' : 'Record Payment'} variant="success" onClick={submitPayment} disabled={paymentSubmitting} />
+          </div>
+        </Modal>
+      </div>
+    </ClientMountGate>
   );
 }

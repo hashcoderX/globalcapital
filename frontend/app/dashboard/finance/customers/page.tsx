@@ -117,7 +117,7 @@ export default function FinanceCustomersPage() {
     const run = async () => {
       setLoading(true);
       try {
-        const response = await fetch('http://localhost:8000/api/finances?per_page=1000', {
+        const response = await fetch('/api/finances?per_page=1000', {
           headers: {
             Authorization: `Bearer ${token}`,
             Accept: 'application/json',
@@ -221,7 +221,7 @@ export default function FinanceCustomersPage() {
     setSelectedRecord(null);
 
     try {
-      const response = await fetch(`http://localhost:8000/api/finances/${id}`, {
+      const response = await fetch(`/api/finances/${id}`, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',

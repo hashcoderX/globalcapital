@@ -29,7 +29,7 @@ export default function MortgageSchedule() {
 
   const fetchSchedule = async (authToken: string) => {
     try {
-      const res = await axios.get(`http://localhost:8000/api/mortgages/${id}/schedule`, {
+      const res = await axios.get(`/api/mortgages/${id}/schedule`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const data = res.data.data || res.data;
@@ -41,7 +41,7 @@ export default function MortgageSchedule() {
 
   const fetchMortgage = async (authToken: string) => {
     try {
-      const res = await axios.get(`http://localhost:8000/api/mortgages/${id}`, {
+      const res = await axios.get(`/api/mortgages/${id}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       setMortgage(res.data);

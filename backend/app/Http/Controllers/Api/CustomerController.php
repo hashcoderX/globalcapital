@@ -9,13 +9,14 @@ use App\Models\Customer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class CustomerController extends Controller
 {
     public function generateCode(): JsonResponse
     {
         return response()->json([
-            'customer_no' => $this->generateDateTimeBasedCustomerCode(),
+            'customer_no' => Customer::generateUniqueCustomerCode(),
         ]);
     }
 
@@ -50,8 +51,15 @@ class CustomerController extends Controller
         $payload['tenant_id'] = $user->tenant_id ?? 1;
         $payload['branch_id'] = $user->branch_id ?? 1;
         $payload['created_by'] = $user->id;
-        $payload['customer_code'] = $payload['customer_code'] ?? $this->generateDateTimeBasedCustomerCode();
-        
+
+        $submittedCode = strtoupper(trim((string) ($payload['customer_code'] ?? '')));
+        $nic = strtoupper(trim((string) ($payload['nic_passport'] ?? '')));
+        if ($submittedCode === '' || ($nic !== '' && $submittedCode === $nic)) {
+            $payload['customer_code'] = Customer::generateUniqueCustomerCode();
+        } else {
+            $payload['customer_code'] = $submittedCode;
+        }
+
         try {
             $customer = Customer::create($payload);
             return response()->json($customer, 201);
@@ -87,7 +95,32 @@ class CustomerController extends Controller
             ], 404);
         }
 
-        return response()->json($customer);
+        $customer->repairCustomerCodeIfNeeded();
+
+        return response()->json($customer->fresh());
+    }
+
+    public function uploadPhotoByCode(Request $request, string $customerCode): JsonResponse
+    {
+        $request->validate([
+            'photo' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ]);
+
+        $customer = $this->findCustomerByCodeOrSerial($customerCode);
+        if (!$customer) {
+            return response()->json([
+                'message' => 'Customer not found for provided Customer No.',
+            ], 404);
+        }
+
+        if ($customer->photo_path) {
+            Storage::disk('public')->delete($customer->photo_path);
+        }
+
+        $path = $request->file('photo')->store('customer_photos', 'public');
+        $customer->update(['photo_path' => $path]);
+
+        return response()->json($customer->fresh());
     }
 
     private function findCustomerByCodeOrSerial(string $input): ?Customer
@@ -104,7 +137,12 @@ class CustomerController extends Controller
                 ->first();
         }
 
-        return Customer::whereRaw('UPPER(customer_code) = ?', [$normalized])->first();
+        $byCode = Customer::whereRaw('UPPER(customer_code) = ?', [$normalized])->first();
+        if ($byCode) {
+            return $byCode;
+        }
+
+        return Customer::whereRaw('UPPER(nic_passport) = ?', [$normalized])->first();
     }
 
     public function update(UpdateCustomerRequest $request, Customer $customer): JsonResponse
@@ -117,19 +155,5 @@ class CustomerController extends Controller
     {
         $customer->delete();
         return response()->json(null, 204);
-    }
-
-    private function generateDateTimeBasedCustomerCode(): string
-    {
-        $prefix = 'CUS-' . now()->format('ymd') . '-';
-
-        // Generate a random 5-digit suffix and verify uniqueness before returning.
-        do {
-            $randomPart = str_pad((string) random_int(1, 99999), 5, '0', STR_PAD_LEFT);
-            $candidate = $prefix . $randomPart;
-            $exists = Customer::where('customer_code', $candidate)->exists();
-        } while ($exists);
-
-        return $candidate;
     }
 }

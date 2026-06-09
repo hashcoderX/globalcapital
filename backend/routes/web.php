@@ -3,6 +3,9 @@
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use App\Models\Candidate;
+use App\Models\Customer;
+use App\Models\MicrofinanceLoanRequestDocument;
+use App\Support\StoredFile;
 use App\Http\Controllers\Reports\LoanRepaymentReportController;
 
 Route::get('/', function () {
@@ -19,6 +22,22 @@ Route::get('/media/candidates/{candidate}/photo', function (Candidate $candidate
     }
     return response()->file(Storage::disk('public')->path($candidate->photo_path));
 })->name('candidate.photo');
+
+Route::get('/media/customers/{customer}/photo', function (Customer $customer) {
+    if (!$customer->photo_path) {
+        abort(404);
+    }
+
+    return StoredFile::response($customer->photo_path);
+})->name('customer.photo');
+
+Route::get('/media/loan-documents/{document}', function (MicrofinanceLoanRequestDocument $document) {
+    if (!$document->file_path) {
+        abort(404);
+    }
+
+    return StoredFile::response($document->file_path);
+})->name('loan-document.media');
 
 Route::get('/reports/loan-repayment', [LoanRepaymentReportController::class, 'index'])
     ->name('reports.loan-repayment');

@@ -1,8 +1,10 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
+import { AlertTriangle, ArrowLeft, Building2, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 
 interface Department {
   id: number;
@@ -12,14 +14,89 @@ interface Department {
   updated_at: string;
 }
 
+type CompanyProfileState = 'loading' | 'missing' | 'incomplete' | 'ready';
+
+type CompanyRow = {
+  id: number;
+  name?: string | null;
+  email?: string | null;
+  address?: string | null;
+  phone?: string | null;
+};
+
+const inputClass =
+  'w-full px-4 py-3 border border-gray-200 rounded-xl bg-white text-sm text-black shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 placeholder:text-gray-400';
+
+function isCompanyComplete(company: CompanyRow | null | undefined): boolean {
+  if (!company) return false;
+  return (
+    String(company.name || '').trim() !== '' &&
+    String(company.email || '').trim() !== '' &&
+    String(company.address || '').trim() !== '' &&
+    String(company.phone || '').trim() !== ''
+  );
+}
+
+function extractApiMessage(error: unknown, fallback: string): string {
+  if (!axios.isAxiosError(error)) {
+    return fallback;
+  }
+
+  const data = error.response?.data;
+  if (typeof data === 'string') {
+    return sanitizeMessage(data, fallback);
+  }
+
+  if (data && typeof data === 'object') {
+    const record = data as Record<string, unknown>;
+    if (typeof record.message === 'string') {
+      return sanitizeMessage(record.message, fallback);
+    }
+    if (typeof record.error === 'string') {
+      return sanitizeMessage(record.error, fallback);
+    }
+    if (record.errors && typeof record.errors === 'object') {
+      const first = Object.values(record.errors as Record<string, unknown>)[0];
+      if (Array.isArray(first) && typeof first[0] === 'string') {
+        return sanitizeMessage(first[0], fallback);
+      }
+    }
+  }
+
+  return fallback;
+}
+
+function sanitizeMessage(raw: string, fallback: string): string {
+  const message = raw.trim();
+  if (!message) return fallback;
+
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('sqlstate') ||
+    lower.includes('integrity constraint violation') ||
+    lower.includes('foreign key constraint') ||
+    lower.includes('duplicate entry') ||
+    lower.includes('connection: mysql') ||
+    lower.includes('insert into')
+  ) {
+    return fallback;
+  }
+
+  return message;
+}
+
 export default function Departments() {
+  const router = useRouter();
+  const apiBase = getApiBaseUrl();
+
   const [token, setToken] = useState('');
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
   const [departments, setDepartments] = useState<Department[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [companyProfileState, setCompanyProfileState] = useState<CompanyProfileState>('loading');
+  const [companyProfileMessage, setCompanyProfileMessage] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -27,19 +104,20 @@ export default function Departments() {
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [noticeTitle, setNoticeTitle] = useState('Notice');
   const [noticeMessage, setNoticeMessage] = useState('');
-  const router = useRouter();
 
-  // Form fields
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+
+  const canManageDepartments = companyProfileState === 'ready';
 
   const filteredDepartments = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
     if (!keyword) return departments;
 
-    return departments.filter((department) =>
-      department.name?.toLowerCase().includes(keyword) ||
-      String(department.description || '').toLowerCase().includes(keyword)
+    return departments.filter(
+      (department) =>
+        department.name?.toLowerCase().includes(keyword) ||
+        String(department.description || '').toLowerCase().includes(keyword)
     );
   }, [departments, searchTerm]);
 
@@ -59,37 +137,78 @@ export default function Departments() {
     setCurrentPage(1);
   }, [searchTerm]);
 
+  const checkCompanyProfile = useCallback(
+    async (authToken: string) => {
+      try {
+        const response = await axios.get(`${apiBase}/companies`, {
+          headers: { Authorization: `Bearer ${authToken}`, Accept: 'application/json' },
+        });
+        const rows = Array.isArray(response.data?.data)
+          ? response.data.data
+          : Array.isArray(response.data)
+            ? response.data
+            : [];
+        const company = (rows as CompanyRow[])[0] || null;
+
+        if (!company) {
+          setCompanyProfileState('missing');
+          setCompanyProfileMessage(
+            'No company profile found. Register your company in Company Settings before creating departments.'
+          );
+          return;
+        }
+
+        if (!isCompanyComplete(company)) {
+          setCompanyProfileState('incomplete');
+          setCompanyProfileMessage(
+            'Company profile is incomplete. Add name, email, address, and phone in Company Settings before creating departments.'
+          );
+          return;
+        }
+
+        setCompanyProfileState('ready');
+        setCompanyProfileMessage('');
+      } catch {
+        setCompanyProfileState('missing');
+        setCompanyProfileMessage(
+          'Unable to verify company profile. Complete Company Settings before creating departments.'
+        );
+      }
+    },
+    [apiBase]
+  );
+
+  const fetchDepartments = useCallback(
+    async (authToken?: string) => {
+      const tokenToUse = authToken || token;
+      if (!tokenToUse) return;
+
+      try {
+        const response = await axios.get(`${apiBase}/hr/departments`, {
+          headers: { Authorization: `Bearer ${tokenToUse}`, Accept: 'application/json' },
+        });
+        setDepartments(response.data.data || []);
+        setCurrentPage(1);
+        setApiError(null);
+      } catch (error) {
+        setApiError(extractApiMessage(error, 'Failed to load departments. Please try again.'));
+      }
+    },
+    [apiBase, token]
+  );
+
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
       router.push('/');
-    } else {
-      setToken(storedToken);
-      setApiError(null);
-      fetchDepartments(storedToken);
+      return;
     }
-  }, [router]);
 
-  const fetchDepartments = async (authToken?: string) => {
-    const tokenToUse = authToken || token;
-    if (!tokenToUse) return;
-    
-    try {
-      const response = await axios.get(`${API_URL}/api/hr/departments`, {
-        headers: { Authorization: `Bearer ${tokenToUse}`, Accept: 'application/json' },
-      });
-      setDepartments(response.data.data || []);
-      setCurrentPage(1);
-    } catch (error) {
-      const err: any = error;
-      console.error('Error fetching departments:', err?.response?.status, err?.response?.data || err?.message);
-      setApiError(
-        err?.response?.data?.message ||
-        err?.response?.data?.error ||
-        `Failed to fetch departments (${err?.response?.status || 'network error'})`
-      );
-    }
-  };
+    setToken(storedToken);
+    setApiError(null);
+    checkCompanyProfile(storedToken);
+    fetchDepartments(storedToken);
+  }, [router, checkCompanyProfile, fetchDepartments]);
 
   const resetForm = () => {
     setName('');
@@ -109,36 +228,48 @@ export default function Departments() {
     setNoticeMessage('');
   };
 
+  const openCreateForm = () => {
+    if (!canManageDepartments) {
+      openNotice('Company profile required', companyProfileMessage);
+      return;
+    }
+    resetForm();
+    setShowForm(true);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!canManageDepartments) {
+      openNotice('Company profile required', companyProfileMessage);
+      return;
+    }
+
     setLoading(true);
 
-    const departmentData = {
-      name,
-      description,
-    };
+    const departmentData = { name: name.trim(), description: description.trim() || null };
 
     try {
       if (editingDepartment) {
-        await axios.put(`${API_URL}/api/hr/departments/${editingDepartment.id}`, departmentData, {
+        await axios.put(`${apiBase}/hr/departments/${editingDepartment.id}`, departmentData, {
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         });
       } else {
-        await axios.post(`${API_URL}/api/hr/departments`, departmentData, {
+        await axios.post(`${apiBase}/hr/departments`, departmentData, {
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         });
       }
-      fetchDepartments();
+      await fetchDepartments();
       setShowForm(false);
       resetForm();
+      openNotice('Success', editingDepartment ? 'Department updated successfully.' : 'Department created successfully.');
     } catch (error) {
-      const err: any = error;
-      console.error('Error saving department:', err?.response?.status, err?.response?.data || err?.message);
       openNotice(
-        'Save Failed',
-        err?.response?.data?.message ||
-        err?.response?.data?.error ||
-        'Failed to save department. Please try again.'
+        'Save failed',
+        extractApiMessage(
+          error,
+          'Failed to save department. Complete your company profile in Company Settings and try again.'
+        )
       );
     } finally {
       setLoading(false);
@@ -166,133 +297,114 @@ export default function Departments() {
     if (!pendingDeleteDepartmentId) return;
 
     try {
-      await axios.delete(`${API_URL}/api/hr/departments/${pendingDeleteDepartmentId}`, {
+      await axios.delete(`${apiBase}/hr/departments/${pendingDeleteDepartmentId}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
-      fetchDepartments();
+      await fetchDepartments();
       closeConfirm();
     } catch (error) {
-      const err: any = error;
-      console.error('Error deleting department:', err?.response?.status, err?.response?.data || err?.message);
-      openNotice(
-        'Delete Failed',
-        err?.response?.data?.message || err?.response?.data?.error || 'Failed to delete department. Please try again.'
-      );
+      openNotice('Delete failed', extractApiMessage(error, 'Failed to delete department. Please try again.'));
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    router.push('/');
-  };
-
   if (!token) {
-    return <div>Loading...</div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
+      </div>
+    );
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 relative overflow-hidden">
-      {/* Background Pattern */}
-      <div className="absolute inset-0 opacity-20">
-        <div className="absolute top-20 left-20 w-72 h-72 bg-blue-200 rounded-full mix-blend-multiply filter blur-xl animate-pulse"></div>
-        <div className="absolute top-40 right-20 w-72 h-72 bg-cyan-200 rounded-full mix-blend-multiply filter blur-xl animate-pulse animation-delay-2000"></div>
-        <div className="absolute -bottom-8 left-40 w-72 h-72 bg-teal-200 rounded-full mix-blend-multiply filter blur-xl animate-pulse animation-delay-4000"></div>
+      <div className="absolute inset-0 opacity-20 pointer-events-none">
+        <div className="absolute top-20 left-20 w-72 h-72 bg-blue-200 rounded-full mix-blend-multiply filter blur-xl" />
+        <div className="absolute top-40 right-20 w-72 h-72 bg-cyan-200 rounded-full mix-blend-multiply filter blur-xl" />
       </div>
 
-      {/* Modern Navigation */}
-      <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
-        <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col sm:flex-row justify-between sm:items-center h-auto sm:h-16 py-3 gap-3">
-            <div className="flex items-center justify-between sm:justify-start gap-3">
-              <button
-                onClick={() => router.push('/dashboard/hrm')}
-                className="flex items-center space-x-2 text-gray-700 hover:text-blue-600 transition-colors duration-300"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-                <span className="font-medium text-sm sm:text-base">Back to HRM</span>
-              </button>
-            </div>
-            <div className="flex items-center">
-              <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
-                  🏢
-                </div>
-                <span className="font-medium text-gray-900">Department Management</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-end">
-              <button
-                onClick={handleLogout}
-                className="bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white px-6 py-2 rounded-full text-sm font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl"
-              >
-                Logout
-              </button>
-            </div>
+      <nav className="relative z-10 bg-white/85 backdrop-blur-lg shadow-lg border-b border-white/20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => router.push('/dashboard/hrm')}
+            className="inline-flex items-center gap-2 text-gray-700 hover:text-blue-600 transition-colors text-sm font-medium"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to HRM
+          </button>
+          <div className="inline-flex items-center gap-2 text-gray-900 font-semibold">
+            <Building2 className="h-5 w-5 text-blue-600" />
+            Department Management
           </div>
         </div>
       </nav>
 
-      <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        {apiError && (
-          <div className="mb-6 rounded-xl border border-red-200 bg-red-50 text-red-700 px-4 py-3">
-            {apiError}
-          </div>
-        )}
-        <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
-          <div>
-            <div className="flex items-center space-x-3 mb-4">
-              <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center text-2xl shadow-lg">
-                🏢
-              </div>
-              <div>
-                <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-900">Department Management</h2>
-                <p className="text-sm sm:text-base md:text-lg text-gray-600">Organize your company structure with modern controls</p>
-              </div>
+      <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8 space-y-6">
+        <div className="rounded-3xl border border-white/80 bg-white/90 shadow-xl overflow-hidden">
+          <div className="bg-gradient-to-r from-blue-600 via-cyan-600 to-teal-600 px-6 py-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-blue-100">Human resources</p>
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-white mt-1">Departments</h1>
+              <p className="text-sm text-blue-50 mt-1">Organize teams and structure before assigning employees.</p>
             </div>
-            <div className="flex flex-col sm:flex-row gap-4 sm:space-x-6 sm:gap-0 mt-2 sm:mt-4">
-              <div className="text-center">
-                <div className="text-xl sm:text-2xl font-bold text-blue-600">{departments.length}</div>
-                <div className="text-sm text-gray-500">Total Departments</div>
+            <div className="flex items-center gap-3">
+              <div className="rounded-2xl bg-white/15 px-4 py-3 text-center min-w-[100px]">
+                <p className="text-2xl font-extrabold text-white">{departments.length}</p>
+                <p className="text-[10px] uppercase tracking-wide text-blue-100">Total</p>
               </div>
+              <button
+                type="button"
+                onClick={openCreateForm}
+                disabled={!canManageDepartments}
+                className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-60 disabled:cursor-not-allowed transition"
+              >
+                <Plus className="h-4 w-4" />
+                Add department
+              </button>
             </div>
-          </div>
-          <div className="md:flex-shrink-0">
-            <button
-              onClick={() => {
-                resetForm();
-                setShowForm(true);
-              }}
-              className="w-full md:w-auto bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-6 py-3 rounded-xl text-sm font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center justify-center space-x-2"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-              </svg>
-              <span>Add Department</span>
-            </button>
           </div>
         </div>
+
+        {!canManageDepartments && companyProfileState !== 'loading' && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-bold text-amber-900">Company profile required</p>
+                <p className="text-sm text-amber-800 mt-1">{companyProfileMessage}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => router.push('/dashboard/company-settings')}
+              className="shrink-0 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700 transition"
+            >
+              Open Company Settings
+            </button>
+          </div>
+        )}
+
+        {apiError && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 text-red-700 px-4 py-3 text-sm">{apiError}</div>
+        )}
 
         {showForm && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
               <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">🏢</div>
-                    <div>
-                      <h3 className="text-xl font-bold text-white">
-                        {editingDepartment ? 'Edit Department' : 'Add New Department'}
-                      </h3>
-                      <p className="text-white/80">
-                        {editingDepartment ? 'Update department information' : 'Create a new department'}
-                      </p>
-                    </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xl font-bold text-white">
+                      {editingDepartment ? 'Edit department' : 'Add department'}
+                    </h3>
+                    <p className="text-white/85 text-sm mt-1">
+                      {editingDepartment ? 'Update department details' : 'Create a department for your company'}
+                    </p>
                   </div>
                   <button
+                    type="button"
                     onClick={() => setShowForm(false)}
-                    className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-white hover:bg-white/30 transition-colors"
+                    className="w-10 h-10 bg-white/20 rounded-xl text-white hover:bg-white/30"
                   >
                     ✕
                   </button>
@@ -301,38 +413,38 @@ export default function Departments() {
               <div className="p-6">
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Department Name *</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Department name *</label>
                     <input
                       type="text"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500"
+                      className={inputClass}
                       required
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Description</label>
                     <textarea
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
                       rows={3}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-gray-900 placeholder-gray-500"
+                      className={inputClass}
                     />
                   </div>
-                  <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
+                  <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
                     <button
                       type="button"
                       onClick={() => setShowForm(false)}
-                      className="px-6 py-3 text-gray-600 border border-gray-300 rounded-xl hover:bg-gray-50 transition-all duration-200 font-medium"
+                      className="px-5 py-2.5 text-gray-700 border border-gray-200 rounded-xl hover:bg-gray-50 font-medium"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={loading}
-                      className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-6 py-3 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                      className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-500 text-white font-semibold disabled:opacity-50"
                     >
-                      {loading ? 'Saving...' : (editingDepartment ? 'Update Department' : 'Create Department')}
+                      {loading ? 'Saving…' : editingDepartment ? 'Update' : 'Create'}
                     </button>
                   </div>
                 </form>
@@ -345,23 +457,13 @@ export default function Departments() {
           <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
             <div className="absolute inset-0 bg-black/40" onClick={closeConfirm} />
             <div className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
-              <h3 className="text-lg font-semibold text-gray-900">Confirm Delete</h3>
-              <p className="mt-2 text-sm text-gray-700">
-                Are you sure you want to delete this department?
-              </p>
+              <h3 className="text-lg font-semibold text-gray-900">Confirm delete</h3>
+              <p className="mt-2 text-sm text-gray-700">Are you sure you want to delete this department?</p>
               <div className="mt-5 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={closeConfirm}
-                  className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100"
-                >
+                <button type="button" onClick={closeConfirm} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700">
                   Cancel
                 </button>
-                <button
-                  type="button"
-                  onClick={confirmDeleteDepartment}
-                  className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700"
-                >
+                <button type="button" onClick={confirmDeleteDepartment} className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700">
                   Delete
                 </button>
               </div>
@@ -374,13 +476,19 @@ export default function Departments() {
             <div className="absolute inset-0 bg-black/30" onClick={closeNotice} />
             <div className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl border border-gray-200 p-5">
               <h3 className="text-lg font-semibold text-gray-900">{noticeTitle}</h3>
-              <p className="mt-2 text-sm text-gray-700">{noticeMessage}</p>
-              <div className="mt-5 flex justify-end">
-                <button
-                  type="button"
-                  onClick={closeNotice}
-                  className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-                >
+              <p className="mt-2 text-sm text-gray-700 leading-relaxed">{noticeMessage}</p>
+              <div className="mt-5 flex justify-end gap-2">
+                {(noticeTitle === 'Save failed' || noticeTitle === 'Company profile required') &&
+                  !canManageDepartments && (
+                    <button
+                      type="button"
+                      onClick={() => router.push('/dashboard/company-settings')}
+                      className="px-4 py-2 rounded-lg bg-amber-600 text-white hover:bg-amber-700"
+                    >
+                      Company Settings
+                    </button>
+                  )}
+                <button type="button" onClick={closeNotice} className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700">
                   OK
                 </button>
               </div>
@@ -388,116 +496,94 @@ export default function Departments() {
           </div>
         )}
 
-        <div className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-xl border border-white/20 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-cyan-50">
-            <h3 className="text-lg font-semibold text-gray-900 flex items-center space-x-2">
-              <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-              </svg>
-              <span>Department List</span>
-            </h3>
-          </div>
-
-          <div className="px-6 py-4 border-b border-gray-200 bg-white/70">
-            <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+        <div className="bg-white/90 backdrop-blur-lg rounded-2xl shadow-xl border border-white/20 overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-cyan-50 flex items-center justify-between gap-3 flex-wrap">
+            <h3 className="text-lg font-semibold text-gray-900">Department list</h3>
+            <div className="relative w-full sm:w-80">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Filter by department name or description"
-                className="w-full sm:max-w-md px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500"
+                placeholder="Search departments…"
+                className={`${inputClass} pl-10 py-2.5`}
               />
-              <button
-                type="button"
-                onClick={() => setSearchTerm('')}
-                className="px-3 py-2 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-100"
-              >
-                Reset
-              </button>
             </div>
           </div>
 
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gradient-to-r from-gray-50 to-gray-100">
+              <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
-                    Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
-                    Description
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
-                    Created
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
-                    Actions
-                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Name</th>
+                  <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Description</th>
+                  <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Created</th>
+                  <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Actions</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {paginatedDepartments.map((department) => (
-                  <tr key={department.id} className="hover:bg-gray-50 transition-colors duration-200">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
-                      {department.name}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {department.description || 'No description'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {new Date(department.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <button
-                        onClick={() => handleEdit(department)}
-                        className="inline-flex items-center px-3 py-1 rounded-lg text-blue-600 hover:text-blue-800 hover:bg-blue-50 transition-colors duration-200 mr-2"
-                      >
-                        <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(department.id)}
-                        className="inline-flex items-center px-3 py-1 rounded-lg text-red-600 hover:text-red-800 hover:bg-red-50 transition-colors duration-200"
-                      >
-                        <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                        Delete
-                      </button>
+              <tbody className="bg-white divide-y divide-gray-100">
+                {paginatedDepartments.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-12 text-center text-sm text-gray-500">
+                      {searchTerm ? 'No departments match your search.' : 'No departments yet.'}
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  paginatedDepartments.map((department) => (
+                    <tr key={department.id} className="hover:bg-blue-50/40 transition-colors">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">{department.name}</td>
+                      <td className="px-6 py-4 text-sm text-gray-800">{department.description || 'No description'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                        {new Date(department.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEdit(department)}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 transition hover:border-blue-300 hover:bg-blue-100"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(department.id)}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 transition hover:border-rose-300 hover:bg-rose-100"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
 
-          <div className="px-6 py-4 border-t border-gray-200 bg-white/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="px-6 py-4 border-t border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <p className="text-sm text-gray-600">
-              Showing {filteredDepartments.length === 0 ? 0 : startIndex + 1} to {endIndex} of {filteredDepartments.length} departments
-              {filteredDepartments.length !== departments.length ? ` (filtered from ${departments.length})` : ''}
+              Showing {filteredDepartments.length === 0 ? 0 : startIndex + 1} to {endIndex} of {filteredDepartments.length}
             </p>
-
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
                 disabled={currentPage === 1}
-                className="px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1.5 rounded-md border border-gray-300 text-sm disabled:opacity-50"
               >
                 Previous
               </button>
-
-              <span className="text-sm text-gray-700 px-2">
+              <span className="text-sm text-gray-700">
                 Page {currentPage} of {totalPages}
               </span>
-
               <button
                 type="button"
                 onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
                 disabled={currentPage === totalPages}
-                className="px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1.5 rounded-md border border-gray-300 text-sm disabled:opacity-50"
               >
                 Next
               </button>

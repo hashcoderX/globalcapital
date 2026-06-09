@@ -65,7 +65,7 @@ function csvEscape(value: unknown): string {
 export default function MaturityReportPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const API_URL = '' /* use /api via getApiBaseUrl in new code */;
 
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
@@ -113,7 +113,7 @@ export default function MaturityReportPage() {
 
     setLoading(true);
     try {
-      const response = await axios.get(`${API_URL}/api/savings-accounts/reports/maturity`, {
+      const response = await axios.get(`/api/savings-accounts/reports/maturity`, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',

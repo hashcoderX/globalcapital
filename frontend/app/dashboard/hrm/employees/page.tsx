@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
 
 interface EmployeeAllowanceDeduction {
   id: number;
@@ -139,6 +140,7 @@ const DEFAULT_LEAVE_TYPES: LeaveType[] = [
 ];
 
 export default function Employees() {
+  const apiBase = getApiBaseUrl();
   const [token, setToken] = useState('');
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -409,7 +411,7 @@ export default function Employees() {
     if (!tokenToUse) return;
     
     try {
-      const response = await axios.get('http://localhost:8000/api/hr/employees', {
+      const response = await axios.get(`${apiBase}/hr/employees`, {
         headers: { Authorization: `Bearer ${tokenToUse}` },
       });
 
@@ -438,7 +440,7 @@ export default function Employees() {
     if (!tokenToUse) return;
     
     try {
-      const response = await axios.get('http://localhost:8000/api/hr/departments', {
+      const response = await axios.get(`${apiBase}/hr/departments`, {
         headers: { Authorization: `Bearer ${tokenToUse}` },
       });
       setDepartments(response.data.data || []);
@@ -453,10 +455,10 @@ export default function Employees() {
     
     try {
       const [designationRes, roleRes] = await Promise.all([
-        axios.get('http://localhost:8000/api/hr/designations', {
+        axios.get(`${apiBase}/hr/designations`, {
           headers: { Authorization: `Bearer ${tokenToUse}` },
         }),
-        axios.get('http://localhost:8000/api/roles', {
+        axios.get(`${apiBase}/roles`, {
           headers: { Authorization: `Bearer ${tokenToUse}` },
           params: { per_page: 1000 },
         }),
@@ -506,7 +508,7 @@ export default function Employees() {
     if (!tokenToUse) return;
     
     try {
-      const response = await axios.get('http://localhost:8000/api/companies', {
+      const response = await axios.get(`${apiBase}/companies`, {
         headers: { Authorization: `Bearer ${tokenToUse}` },
       });
       setBranches(response.data || []);
@@ -520,7 +522,7 @@ export default function Employees() {
     if (!tokenToUse) return;
 
     try {
-      const response = await axios.get('http://localhost:8000/api/hr/leave-types', {
+      const response = await axios.get(`${apiBase}/hr/leave-types`, {
         headers: { Authorization: `Bearer ${tokenToUse}` },
         params: { per_page: 1000 }
       });
@@ -622,11 +624,11 @@ export default function Employees() {
 
     try {
       if (editingEmployee) {
-        await axios.put(`http://localhost:8000/api/hr/employees/${editingEmployee.id}`, employeeData, {
+        await axios.put(`${apiBase}/hr/employees/${editingEmployee.id}`, employeeData, {
           headers: { Authorization: `Bearer ${token}` },
         });
       } else {
-        await axios.post('http://localhost:8000/api/hr/employees', employeeData, {
+        await axios.post(`${apiBase}/hr/employees`, employeeData, {
           headers: { Authorization: `Bearer ${token}` },
         });
       }
@@ -684,7 +686,7 @@ export default function Employees() {
     if (!token) return;
     try {
       setLoading(true);
-      const response = await axios.get(`http://localhost:8000/api/hr/employees/${employee.id}` , {
+      const response = await axios.get(`${apiBase}/hr/employees/${employee.id}` , {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -723,7 +725,7 @@ export default function Employees() {
 
   const handleDelete = async (id: number) => {
     try {
-      await axios.delete(`http://localhost:8000/api/hr/employees/${id}`, {
+      await axios.delete(`${apiBase}/hr/employees/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       fetchEmployees();
@@ -748,7 +750,7 @@ export default function Employees() {
     try {
       setProfileLoading(true);
       setShowProfileModal(true);
-      const response = await axios.get(`http://localhost:8000/api/hr/employees/${employee.id}`, {
+      const response = await axios.get(`${apiBase}/hr/employees/${employee.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setProfileEmployee(response.data as EmployeeFull);
@@ -800,7 +802,7 @@ export default function Employees() {
     if (!token) return;
     try {
       await axios.post(
-        'http://localhost:8000/api/hr/attendance/mark',
+        `${apiBase}/hr/attendance/mark`,
         { employee_id: employee.id, status },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -865,7 +867,7 @@ export default function Employees() {
 
   const fetchEmployeeDocuments = async (employeeId: number) => {
     try {
-      const response = await axios.get(`http://localhost:8000/api/hr/employees/${employeeId}/documents`, {
+      const response = await axios.get(`${apiBase}/hr/employees/${employeeId}/documents`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setDocuments(response.data || []);
@@ -876,7 +878,7 @@ export default function Employees() {
 
   const fetchEmployeeEducation = async (employeeId: number) => {
     try {
-      const response = await axios.get(`http://localhost:8000/api/hr/employees/${employeeId}/education`, {
+      const response = await axios.get(`${apiBase}/hr/employees/${employeeId}/education`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setEducations(response.data || []);
@@ -887,7 +889,7 @@ export default function Employees() {
 
   const fetchEmployeeExperience = async (employeeId: number) => {
     try {
-      const response = await axios.get(`http://localhost:8000/api/hr/employees/${employeeId}/experience`, {
+      const response = await axios.get(`${apiBase}/hr/employees/${employeeId}/experience`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setExperiences(response.data || []);
@@ -906,7 +908,7 @@ export default function Employees() {
     if (docNotes) formData.append('notes', docNotes);
 
     try {
-      await axios.post(`http://localhost:8000/api/hr/employees/${activeEmployee.id}/documents`, formData, {
+      await axios.post(`${apiBase}/hr/employees/${activeEmployee.id}/documents`, formData, {
         headers: { Authorization: `Bearer ${token}` },
       });
       fetchEmployeeDocuments(activeEmployee.id);
@@ -934,7 +936,7 @@ export default function Employees() {
     };
 
     try {
-      await axios.post(`http://localhost:8000/api/hr/employees/${activeEmployee.id}/education`, educationData, {
+      await axios.post(`${apiBase}/hr/employees/${activeEmployee.id}/education`, educationData, {
         headers: { Authorization: `Bearer ${token}` },
       });
       fetchEmployeeEducation(activeEmployee.id);
@@ -967,7 +969,7 @@ export default function Employees() {
     };
 
     try {
-      await axios.post(`http://localhost:8000/api/hr/employees/${activeEmployee.id}/experience`, experienceData, {
+      await axios.post(`${apiBase}/hr/employees/${activeEmployee.id}/experience`, experienceData, {
         headers: { Authorization: `Bearer ${token}` },
       });
       fetchEmployeeExperience(activeEmployee.id);
@@ -987,7 +989,7 @@ export default function Employees() {
 
   const downloadDocument = async (doc: EmployeeDocument) => {
     try {
-      const response = await axios.get(`http://localhost:8000/api/hr/employees/${activeEmployee?.id}/documents/${doc.id}/download`, {
+      const response = await axios.get(`${apiBase}/hr/employees/${activeEmployee?.id}/documents/${doc.id}/download`, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob',
       });
@@ -1008,7 +1010,7 @@ export default function Employees() {
   // Allowances and Deductions functions
   const fetchAllowancesDeductions = async (employeeId: number) => {
     try {
-      const response = await axios.get(`http://localhost:8000/api/hr/employees/${employeeId}/allowances-deductions`, {
+      const response = await axios.get(`${apiBase}/hr/employees/${employeeId}/allowances-deductions`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setAllowancesDeductions(response.data);
@@ -1031,12 +1033,12 @@ export default function Employees() {
 
     try {
       if (editingAllowanceDeduction) {
-        await axios.put(`http://localhost:8000/api/hr/employees/${activeEmployee.id}/allowances-deductions/${editingAllowanceDeduction.id}`, allowanceDeductionData, {
+        await axios.put(`${apiBase}/hr/employees/${activeEmployee.id}/allowances-deductions/${editingAllowanceDeduction.id}`, allowanceDeductionData, {
           headers: { Authorization: `Bearer ${token}` },
         });
         showNotice('Success', 'Allowance/Deduction updated successfully!', 'success');
       } else {
-        await axios.post(`http://localhost:8000/api/hr/employees/${activeEmployee.id}/allowances-deductions`, allowanceDeductionData, {
+        await axios.post(`${apiBase}/hr/employees/${activeEmployee.id}/allowances-deductions`, allowanceDeductionData, {
           headers: { Authorization: `Bearer ${token}` },
         });
         showNotice('Success', 'Allowance/Deduction added successfully!', 'success');
@@ -1060,7 +1062,7 @@ export default function Employees() {
   const handleDeleteAllowanceDeduction = async (allowanceDeduction: EmployeeAllowanceDeduction) => {
     if (!activeEmployee) return;
     try {
-      await axios.delete(`http://localhost:8000/api/hr/employees/${activeEmployee.id}/allowances-deductions/${allowanceDeduction.id}`, {
+      await axios.delete(`${apiBase}/hr/employees/${activeEmployee.id}/allowances-deductions/${allowanceDeduction.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       fetchAllowancesDeductions(activeEmployee.id);

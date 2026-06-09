@@ -1,8 +1,27 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import ClientMountGate from '@/app/components/ClientMountGate';
+import { getApiBaseUrl } from '@/lib/api';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  Banknote,
+  BarChart3,
+  CheckCircle2,
+  ChevronRight,
+  ClipboardList,
+  FileText,
+  Home,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  TrendingUp,
+  Wallet,
+} from 'lucide-react';
 
 type MortgageStatusRow = {
   id: number;
@@ -11,11 +30,24 @@ type MortgageStatusRow = {
 
 type DashboardStats = {
   total: number;
+  draft: number;
   submitted: number;
   approved: number;
   active: number;
   arrears: number;
   settled: number;
+  released: number;
+};
+
+type HubModule = {
+  title: string;
+  description: string;
+  tag: string;
+  path: string;
+  icon: typeof Plus;
+  color: string;
+  bg: string;
+  accent: string;
 };
 
 export default function MortgagesDashboard() {
@@ -24,11 +56,13 @@ export default function MortgagesDashboard() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats>({
     total: 0,
+    draft: 0,
     submitted: 0,
     approved: 0,
     active: 0,
     arrears: 0,
     settled: 0,
+    released: 0,
   });
 
   useEffect(() => {
@@ -37,201 +71,331 @@ export default function MortgagesDashboard() {
       router.push('/');
       return;
     }
-
     setToken(storedToken);
   }, [router]);
 
+  const loadStats = useCallback(async (authToken: string) => {
+    setLoading(true);
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/mortgages`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+        params: { per_page: 1000 },
+      });
+
+      const rows = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data)
+          ? response.data
+          : [];
+
+      const normalized = rows as MortgageStatusRow[];
+      const count = (status: string) =>
+        normalized.filter((m) => String(m.status || '').toLowerCase() === status).length;
+
+      setStats({
+        total: normalized.length,
+        draft: count('draft'),
+        submitted: count('submitted'),
+        approved: count('approved'),
+        active: count('active'),
+        arrears: count('arrears'),
+        settled: count('settled'),
+        released: count('released'),
+      });
+    } catch {
+      setStats({
+        total: 0,
+        draft: 0,
+        submitted: 0,
+        approved: 0,
+        active: 0,
+        arrears: 0,
+        settled: 0,
+        released: 0,
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!token) return;
+    loadStats(token);
+  }, [token, loadStats]);
 
-    const loadStats = async () => {
-      setLoading(true);
-      try {
-        const response = await axios.get('http://localhost:8000/api/mortgages', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/json',
-          },
-          params: { per_page: 1000 },
-        });
-
-        const rows = Array.isArray(response.data?.data)
-          ? response.data.data
-          : Array.isArray(response.data)
-            ? response.data
-            : [];
-
-        const normalized = rows as MortgageStatusRow[];
-        setStats({
-          total: normalized.length,
-          submitted: normalized.filter((m) => String(m.status || '').toLowerCase() === 'submitted').length,
-          approved: normalized.filter((m) => String(m.status || '').toLowerCase() === 'approved').length,
-          active: normalized.filter((m) => String(m.status || '').toLowerCase() === 'active').length,
-          arrears: normalized.filter((m) => String(m.status || '').toLowerCase() === 'arrears').length,
-          settled: normalized.filter((m) => String(m.status || '').toLowerCase() === 'settled').length,
-        });
-      } catch {
-        setStats({ total: 0, submitted: 0, approved: 0, active: 0, arrears: 0, settled: 0 });
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadStats();
-  }, [token]);
-
-  const options = useMemo(
+  const modules = useMemo<HubModule[]>(
     () => [
       {
         title: 'Create Mortgage',
-        description: 'Register a new mortgage request and collateral details.',
-        icon: '📝',
+        description: 'Register a new mortgage request with customer profile, collateral, and documents.',
         tag: 'Origination',
-        color: 'from-blue-500 to-cyan-500',
-        bg: 'from-blue-50 to-cyan-50',
         path: '/dashboard/mortgages/create',
+        icon: Plus,
+        color: 'from-cyan-500 to-blue-600',
+        bg: 'from-cyan-50/90 to-blue-50/60',
+        accent: 'from-cyan-500 to-blue-500',
       },
       {
         title: 'Mortgage Approvals',
-        description: 'Review and process pending mortgage approvals.',
-        icon: '✅',
+        description: 'Review pending applications, approve or reject, and move accounts to release.',
         tag: 'Approval Desk',
-        color: 'from-emerald-500 to-teal-500',
-        bg: 'from-emerald-50 to-teal-50',
         path: '/dashboard/mortgages/approvals',
+        icon: CheckCircle2,
+        color: 'from-emerald-500 to-teal-600',
+        bg: 'from-emerald-50/90 to-teal-50/60',
+        accent: 'from-emerald-500 to-teal-500',
       },
       {
         title: 'Mortgage Portfolio',
-        description: 'View all mortgages, filters, schedules, and collections.',
-        icon: '📊',
+        description: 'Browse all mortgages with filters, schedules, status tracking, and account actions.',
         tag: 'Portfolio',
-        color: 'from-indigo-500 to-violet-500',
-        bg: 'from-indigo-50 to-violet-50',
         path: '/dashboard/mortgages/portfolio',
+        icon: BarChart3,
+        color: 'from-indigo-500 to-violet-600',
+        bg: 'from-indigo-50/90 to-violet-50/60',
+        accent: 'from-indigo-500 to-violet-500',
       },
       {
         title: 'Collection Management',
-        description: 'Track due collections, post payments, and monitor arrears flow.',
-        icon: '💳',
+        description: 'Post collections, monitor arrears, adjust interest, and print payment receipts.',
         tag: 'Collections',
-        color: 'from-teal-500 to-cyan-600',
-        bg: 'from-teal-50 to-cyan-50',
         path: '/dashboard/mortgages/collections',
+        icon: Wallet,
+        color: 'from-teal-500 to-cyan-600',
+        bg: 'from-teal-50/90 to-cyan-50/60',
+        accent: 'from-teal-500 to-cyan-500',
       },
       {
         title: 'Mortgage Reports',
-        description: 'View mortgage-only analytics, repayment insights, and status distribution.',
-        icon: '📈',
+        description: 'Collection, profit, arrears, and portfolio analytics with export-ready views.',
         tag: 'Reports',
-        color: 'from-rose-500 to-red-500',
-        bg: 'from-rose-50 to-red-50',
         path: '/dashboard/mortgages/reports',
+        icon: FileText,
+        color: 'from-rose-500 to-orange-600',
+        bg: 'from-rose-50/90 to-orange-50/60',
+        accent: 'from-rose-500 to-orange-500',
       },
     ],
     []
   );
 
-  if (!token || loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
+  const runningBook = stats.active + stats.arrears + stats.released;
+
+  const pageFallback = (
+    <div className="flex min-h-screen items-center justify-center bg-[#071a22]">
+      <div className="flex flex-col items-center gap-4">
+        <div className="h-14 w-14 animate-spin rounded-full border-2 border-cyan-400/30 border-t-cyan-400" />
+        <p className="text-sm font-medium text-cyan-100/80">Loading mortgage hub...</p>
       </div>
-    );
+    </div>
+  );
+
+  if (!token) {
+    return <ClientMountGate fallback={pageFallback}>{pageFallback}</ClientMountGate>;
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
-      </div>
-
-      <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
-                Mortgage Desk
-              </span>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Mortgage Dashboard</h1>
-              <p className="text-sm text-slate-600 mt-1">
-                Access mortgage operations through separate pages for creation, approvals, portfolio, and dedicated mortgage reports.
-              </p>
-            </div>
-
-            <button
-              onClick={() => router.push('/dashboard')}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
-            >
-              Back
-            </button>
-          </div>
-
-          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Total</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{stats.total}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Submitted</p>
-              <p className="text-2xl font-extrabold text-amber-700 mt-1">{stats.submitted}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Approved</p>
-              <p className="text-2xl font-extrabold text-cyan-700 mt-1">{stats.approved}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Active</p>
-              <p className="text-2xl font-extrabold text-emerald-700 mt-1">{stats.active}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Arrears</p>
-              <p className="text-2xl font-extrabold text-rose-700 mt-1">{stats.arrears}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Settled</p>
-              <p className="text-2xl font-extrabold text-indigo-700 mt-1">{stats.settled}</p>
-            </div>
-          </div>
+    <ClientMountGate fallback={pageFallback}>
+      <div className="relative min-h-screen overflow-hidden bg-[#f3f8fb]">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute -left-24 top-0 h-96 w-96 rounded-full bg-cyan-400/20 blur-3xl" />
+          <div className="absolute right-0 top-16 h-[28rem] w-[28rem] rounded-full bg-blue-500/12 blur-3xl" />
+          <div className="absolute bottom-0 left-1/4 h-72 w-72 rounded-full bg-teal-400/10 blur-3xl" />
+          <div
+            className="absolute inset-0 opacity-[0.3]"
+            style={{
+              backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(14,116,144,0.1) 1px, transparent 0)',
+              backgroundSize: '26px 26px',
+            }}
+          />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-          {options.map((option) => (
-            <button
-              key={option.title}
-              type="button"
-              onClick={() => router.push(option.path)}
-              className="group relative text-left bg-white/80 backdrop-blur-sm rounded-3xl shadow-[0_20px_40px_-30px_rgba(8,47,73,0.85)] hover:shadow-[0_28px_55px_-28px_rgba(8,47,73,0.75)] transition-all duration-500 cursor-pointer border border-white/50 overflow-hidden transform hover:-translate-y-2"
-            >
-              <div className={`absolute inset-0 bg-gradient-to-br ${option.bg} opacity-40 group-hover:opacity-100 transition-opacity duration-500`}></div>
-
-              <div className="relative p-6">
-                <div className="flex items-start justify-between mb-4">
-                  <div className={`h-14 w-14 bg-gradient-to-r ${option.color} rounded-xl flex items-center justify-center text-2xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
-                    {option.icon}
-                  </div>
-                  <span className="inline-flex items-center rounded-full border border-white/70 bg-white/70 px-3 py-1 text-[11px] font-semibold text-slate-700">
-                    {option.tag}
+        <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+          <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#0a1a24] via-[#0f3a52] to-[#0c5a7a] text-white shadow-[0_30px_80px_-24px_rgba(14,116,144,0.8)]">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.25),transparent_42%)]" />
+            <div className="relative p-6 md:p-8">
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+                <div className="max-w-2xl">
+                  <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-100">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Mortgage Command Center
                   </span>
+                  <h1 className="mt-4 text-3xl font-black tracking-tight md:text-4xl">Mortgage Operations Hub</h1>
+                  <p className="mt-2 text-sm leading-relaxed text-cyan-50/90 md:text-base">
+                    Originate applications, process approvals, manage collections, and analyze portfolio performance from one workspace.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2 text-xs text-cyan-100/90">
+                    <span className="rounded-lg bg-white/10 px-2.5 py-1">Dashboard</span>
+                    <span className="text-cyan-200/50">/</span>
+                    <span className="rounded-lg bg-cyan-400/20 px-2.5 py-1 font-semibold text-white">Mortgages</span>
+                  </div>
                 </div>
-
-                <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">{option.title}</h3>
-                <p className="mt-2 text-sm text-slate-600 leading-relaxed">{option.description}</p>
-
-                <div className="mt-5 flex items-center gap-2 text-sm font-semibold text-slate-700 group-hover:text-slate-900">
-                  Open Page
-                  <svg className="w-4 h-4 transition-transform duration-300 group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => router.push('/dashboard/mortgages/create')}
+                    className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 to-blue-400 px-4 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/30 transition hover:brightness-110"
+                  >
+                    <Plus className="h-4 w-4" />
+                    New Application
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push('/dashboard')}
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/15"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    Dashboard
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => token && loadStats(token)}
+                    disabled={loading}
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20 disabled:opacity-60"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </button>
                 </div>
-
-                <div className="absolute bottom-0 left-0 h-1 w-0 bg-gradient-to-r from-cyan-500 to-blue-500 group-hover:w-full transition-all duration-500"></div>
               </div>
-            </button>
-          ))}
+
+              <div className="mt-6 flex flex-wrap gap-2">
+                {[
+                  { label: 'Approvals', href: '/dashboard/mortgages/approvals' },
+                  { label: 'Portfolio', href: '/dashboard/mortgages/portfolio' },
+                  { label: 'Collections', href: '/dashboard/mortgages/collections' },
+                  { label: 'Reports', href: '/dashboard/mortgages/reports' },
+                ].map((link) => (
+                  <button
+                    key={link.href}
+                    type="button"
+                    onClick={() => router.push(link.href)}
+                    className="rounded-xl border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/15"
+                  >
+                    {link.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+            {[
+              { icon: ClipboardList, label: 'Total Accounts', value: loading ? '—' : stats.total, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
+              { icon: FileText, label: 'Draft', value: loading ? '—' : stats.draft, tone: 'text-slate-600', bg: 'from-slate-400/10 to-zinc-500/5' },
+              { icon: TrendingUp, label: 'Submitted', value: loading ? '—' : stats.submitted, tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
+              { icon: CheckCircle2, label: 'Approved', value: loading ? '—' : stats.approved, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
+              { icon: Banknote, label: 'Running Book', value: loading ? '—' : runningBook, tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
+              { icon: AlertTriangle, label: 'Arrears', value: loading ? '—' : stats.arrears, tone: 'text-rose-700', bg: 'from-rose-500/10 to-red-500/5' },
+              { icon: Home, label: 'Settled', value: loading ? '—' : stats.settled, tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
+              { icon: Wallet, label: 'Released', value: loading ? '—' : stats.released, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
+            ].map((item) => (
+              <div
+                key={item.label}
+                className={`overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
+                    <p className={`mt-2 text-2xl font-black ${item.tone}`}>{item.value}</p>
+                  </div>
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/80 shadow-sm">
+                    <item.icon className="h-5 w-5 text-slate-600" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </section>
+
+          <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            {[
+              {
+                icon: Plus,
+                title: 'Start Application',
+                desc: 'Capture customer, financials, collateral, and supporting documents.',
+                color: 'text-cyan-700',
+                href: '/dashboard/mortgages/create',
+              },
+              {
+                icon: CheckCircle2,
+                title: 'Approval Queue',
+                desc: `${stats.submitted} submitted application${stats.submitted === 1 ? '' : 's'} awaiting review.`,
+                color: 'text-emerald-700',
+                href: '/dashboard/mortgages/approvals',
+              },
+              {
+                icon: AlertTriangle,
+                title: 'Arrears Focus',
+                desc: `${stats.arrears} account${stats.arrears === 1 ? '' : 's'} currently in arrears status.`,
+                color: 'text-rose-700',
+                href: '/dashboard/mortgages/collections',
+              },
+            ].map((item) => (
+              <button
+                key={item.title}
+                type="button"
+                onClick={() => router.push(item.href)}
+                className="rounded-2xl border border-white/90 bg-white/95 p-4 text-left shadow-sm backdrop-blur transition hover:-translate-y-0.5 hover:border-cyan-200 hover:shadow-lg"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <item.icon className={`h-5 w-5 ${item.color}`} />
+                    <p className="font-bold text-slate-900">{item.title}</p>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-slate-400" />
+                </div>
+                <p className="mt-2 text-sm text-slate-600">{item.desc}</p>
+              </button>
+            ))}
+          </section>
+
+          <section>
+            <div className="mb-4 flex items-end justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Modules</p>
+                <h2 className="mt-1 text-lg font-extrabold text-slate-900">Mortgage Workspaces</h2>
+                <p className="text-sm text-slate-500">Open a dedicated page for each mortgage operation.</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {modules.map((option) => {
+                const Icon = option.icon;
+                return (
+                  <button
+                    key={option.title}
+                    type="button"
+                    onClick={() => router.push(option.path)}
+                    className="group relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 text-left shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur transition hover:-translate-y-1 hover:shadow-[0_28px_60px_-30px_rgba(14,116,144,0.55)]"
+                  >
+                    <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${option.accent}`} />
+                    <div className={`absolute inset-0 bg-gradient-to-br ${option.bg} opacity-0 transition group-hover:opacity-100`} />
+                    <div className="relative p-6">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className={`flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br ${option.color} text-white shadow-lg transition group-hover:scale-105`}>
+                          <Icon className="h-7 w-7" />
+                        </div>
+                        <span className="rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">
+                          {option.tag}
+                        </span>
+                      </div>
+                      <h3 className="mt-4 text-xl font-black tracking-tight text-slate-900">{option.title}</h3>
+                      <p className="mt-2 text-sm leading-relaxed text-slate-600">{option.description}</p>
+                      <div className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-cyan-800 transition group-hover:gap-3">
+                        Open workspace
+                        <ArrowRight className="h-4 w-4" />
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
         </div>
       </div>
-    </div>
+    </ClientMountGate>
   );
 }

@@ -1,32 +1,53 @@
 'use client';
 
 import { useEffect } from 'react';
+import { argsLookLikeExtensionNoise, isExtensionNoise } from './extensionNoisePatterns';
 
-const isExtensionNoise = (value: unknown) => {
-  const message = String(
-    value instanceof Error ? value.message : value ?? ''
-  ).toLowerCase();
+const CONSOLE_METHODS = ['log', 'warn', 'error', 'info', 'debug'] as const;
+const originalConsoleMethods = new Map<(typeof CONSOLE_METHODS)[number], typeof console.log>();
 
-  return (
-    message.includes('message channel closed before a response was received') ||
-    message.includes('extension context invalidated')
-  );
-};
+function patchConsole() {
+  CONSOLE_METHODS.forEach((method) => {
+    if (!originalConsoleMethods.has(method)) {
+      originalConsoleMethods.set(method, console[method].bind(console));
+    }
+
+    console[method] = (...args: unknown[]) => {
+      if (argsLookLikeExtensionNoise(args)) return;
+      originalConsoleMethods.get(method)?.(...args);
+    };
+  });
+}
+
+function patchPromiseRejections() {
+  const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    if (!isExtensionNoise(event.reason)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation?.();
+  };
+
+  const onWindowError = (event: ErrorEvent) => {
+    if (!isExtensionNoise(event.error ?? event.message)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation?.();
+  };
+
+  window.addEventListener('unhandledrejection', onUnhandledRejection, true);
+  window.addEventListener('error', onWindowError, true);
+
+  return () => {
+    window.removeEventListener('unhandledrejection', onUnhandledRejection, true);
+    window.removeEventListener('error', onWindowError, true);
+  };
+}
 
 /**
- * Suppresses known benign errors injected by browser extensions (e.g. copy helpers).
- * Does not hide application errors from this codebase.
+ * Suppresses benign noise from browser extensions (copy helpers, Chrome messaging).
  */
 export default function ExtensionNoiseFilter() {
   useEffect(() => {
-    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
-      if (isExtensionNoise(event.reason)) {
-        event.preventDefault();
-      }
-    };
-
-    window.addEventListener('unhandledrejection', onUnhandledRejection);
-    return () => window.removeEventListener('unhandledrejection', onUnhandledRejection);
+    patchConsole();
+    return patchPromiseRejections();
   }, []);
 
   return null;

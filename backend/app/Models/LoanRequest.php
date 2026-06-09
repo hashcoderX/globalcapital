@@ -36,6 +36,9 @@ class LoanRequest extends Model
         'last_action_by',
         'last_action_at',
         'approval_note',
+        'due_date',
+        'next_due_date',
+        'total_collected',
     ];
 
     protected $casts = [
@@ -50,10 +53,19 @@ class LoanRequest extends Model
         'customer_details' => 'array',
         'guarantor_details' => 'array',
         'last_action_at' => 'datetime',
+        'due_date' => 'date',
+        'next_due_date' => 'date',
+        'total_collected' => 'decimal:2',
     ];
 
     public function documents(): HasMany
     {
         return $this->hasMany(LoanRequestDocument::class);
     }
+
+    public function collections(): HasMany
+    {
+        return $this->hasMany(LoanRequestCollection::class);
+    }
 }
+

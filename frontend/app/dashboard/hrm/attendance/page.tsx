@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
 
 interface Employee {
   id: number;
@@ -30,6 +31,7 @@ interface AttendanceRecord {
 }
 
 export default function AttendancePage() {
+  const apiBase = getApiBaseUrl();
   type NoticeTone = 'success' | 'error' | 'info';
 
   const [token, setToken] = useState('');
@@ -75,7 +77,7 @@ export default function AttendancePage() {
     const tokenToUse = authToken || token;
     if (!tokenToUse) return;
     try {
-      const response = await axios.get('http://localhost:8000/api/hr/employees', {
+      const response = await axios.get(`${apiBase}/hr/employees`, {
         headers: { Authorization: `Bearer ${tokenToUse}` },
       });
       const rows = Array.isArray(response.data)
@@ -96,7 +98,7 @@ export default function AttendancePage() {
     if (!tokenToUse) return;
     try {
       const today = new Date().toISOString().split('T')[0];
-      const response = await axios.get(`http://localhost:8000/api/hr/attendance?date=${today}`, {
+      const response = await axios.get(`${apiBase}/hr/attendance?date=${today}`, {
         headers: { Authorization: `Bearer ${tokenToUse}` },
       });
       const attendanceMap: {[key: number]: AttendanceRecord} = {};
@@ -129,7 +131,7 @@ export default function AttendancePage() {
       if (notes) payload.notes = notes;
 
       await axios.post(
-        'http://localhost:8000/api/hr/attendance/mark',
+        `${apiBase}/hr/attendance/mark`,
         payload,
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -201,7 +203,7 @@ export default function AttendancePage() {
       if (notes) payload.notes = notes;
 
       await axios.post(
-        'http://localhost:8000/api/hr/attendance/mark-out',
+        `${apiBase}/hr/attendance/mark-out`,
         payload,
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -240,7 +242,7 @@ export default function AttendancePage() {
 
     try {
       const response = await axios.post(
-        'http://localhost:8000/api/hr/attendance/upload-csv',
+        `${apiBase}/hr/attendance/upload-csv`,
         formData,
         {
           headers: {
@@ -273,7 +275,7 @@ export default function AttendancePage() {
       if (endDate) params.append('end_date', endDate);
 
       const response = await axios.get(
-        `http://localhost:8000/api/hr/attendance/employee/${selectedEmployee.id}?${params.toString()}`,
+        `${apiBase}/hr/attendance/employee/${selectedEmployee.id}?${params.toString()}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       setAttendanceHistory(response.data.attendance);

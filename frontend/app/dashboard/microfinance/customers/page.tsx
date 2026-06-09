@@ -1,6 +1,7 @@
 'use client';
 
 import axios from 'axios';
+import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import jsPDF from 'jspdf';
@@ -41,7 +42,7 @@ type AuthUser = {
   designation?: { id: number; name: string } | null;
 };
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = getApiBaseUrl();
 
 export default function MicrofinanceCustomersPage() {
   const router = useRouter();

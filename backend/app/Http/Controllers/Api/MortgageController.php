@@ -12,6 +12,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use App\Models\MortgageSchedule;
 use App\Models\MortgagePayment;
 use App\Models\MortgageDocument;
@@ -41,6 +42,40 @@ class MortgageController extends Controller
         foreach ($user->roles()->pluck('name') as $roleName) {
             $normalized = strtolower(trim((string) $roleName));
             if ($normalized !== '' && str_contains($normalized, 'admin')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function canDeleteMortgage(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isSystemAdmin') && $user->isSystemAdmin()) {
+            return true;
+        }
+
+        $matchesRole = static function (string $name): bool {
+            $normalized = strtolower(trim($name));
+
+            return in_array($normalized, ['admin', 'superadmin', 'super admin'], true);
+        };
+
+        $designationName = (string) optional($user->designation)->name;
+        if ($matchesRole($designationName)) {
+            return true;
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        foreach ($user->roles()->pluck('name') as $roleName) {
+            if ($matchesRole((string) $roleName)) {
                 return true;
             }
         }
@@ -136,6 +171,10 @@ class MortgageController extends Controller
 
         if ($request->filled('status')) {
             $query->where('status', (string) $request->get('status'));
+        }
+
+        if ($request->boolean('with_payment_totals')) {
+            $query->withSum('payments as total_paid_amount', 'amount');
         }
 
         $data = $query->paginate($perPage);
@@ -282,7 +321,44 @@ class MortgageController extends Controller
     public function show(Request $request, int $id): JsonResponse
     {
         $mortgage = $this->resolveMortgageOrFail($request, $id, ['asset', 'valuation', 'guarantors']);
+        $mortgage->loadSum('payments as total_paid_amount', 'amount');
+
         return response()->json($mortgage);
+    }
+
+    public function destroy(Request $request, int $id): JsonResponse
+    {
+        if (!$this->canDeleteMortgage($request->user())) {
+            return response()->json([
+                'message' => 'Only Admin or Super Admin can delete mortgages.',
+            ], 403);
+        }
+
+        $mortgage = $this->resolveMortgageOrFail($request, $id);
+        $mortgageId = (int) $mortgage->id;
+
+        $deletedPayments = 0;
+        $deletedSchedules = 0;
+
+        DB::transaction(function () use ($mortgage, $mortgageId, &$deletedPayments, &$deletedSchedules): void {
+            foreach (MortgageDocument::where('mortgage_id', $mortgageId)->get() as $document) {
+                $path = trim((string) $document->file_path);
+                if ($path !== '' && Storage::disk('public')->exists($path)) {
+                    Storage::disk('public')->delete($path);
+                }
+            }
+
+            $deletedPayments = MortgagePayment::where('mortgage_id', $mortgageId)->delete();
+            $deletedSchedules = MortgageSchedule::where('mortgage_id', $mortgageId)->delete();
+
+            $mortgage->delete();
+        });
+
+        return response()->json([
+            'message' => 'Mortgage and related payment history deleted successfully.',
+            'deleted_payments' => $deletedPayments,
+            'deleted_schedules' => $deletedSchedules,
+        ]);
     }
 
     private function calculateInstallmentAmount(array $validated): float
@@ -447,6 +523,200 @@ class MortgageController extends Controller
 
         return response()->json([
             'summary' => $summary,
+            'data' => $records,
+        ]);
+    }
+
+    /**
+     * Effective profit per mortgage_payments row (interest realized on collection).
+     */
+    private function mortgagePaymentEffectiveProfitSql(string $table = 'mortgage_payments'): string
+    {
+        return "COALESCE(NULLIF({$table}.profit_amount, 0), {$table}.interest_amount, 0)";
+    }
+
+    private function applyMortgagePaymentReportFilters($query, array $validated, Request $request): void
+    {
+        $profitSql = $this->mortgagePaymentEffectiveProfitSql();
+
+        $branchId = $this->scopedBranchId($request);
+        if ($branchId !== null) {
+            $query->where(function ($branchQuery) use ($branchId) {
+                $branchQuery
+                    ->where('mortgage_payments.branch_id', $branchId)
+                    ->orWhereHas('mortgage', function ($mortgageQuery) use ($branchId) {
+                        $mortgageQuery->where('branch_id', $branchId);
+                    });
+            });
+        }
+
+        if (!empty($validated['from_date'])) {
+            $query->whereDate('mortgage_payments.paid_date', '>=', $validated['from_date']);
+        }
+
+        if (!empty($validated['to_date'])) {
+            $query->whereDate('mortgage_payments.paid_date', '<=', $validated['to_date']);
+        }
+
+        if (!empty($validated['payment_method'])) {
+            $query->where('mortgage_payments.payment_method', $validated['payment_method']);
+        }
+
+        if (!empty($validated['mortgage_type'])) {
+            $type = strtolower(trim((string) $validated['mortgage_type']));
+            $query->whereHas('mortgage', function ($mortgageQuery) use ($type) {
+                $mortgageQuery->whereRaw('LOWER(mortgage_type) = ?', [$type]);
+            });
+        }
+
+        if (!empty($validated['status'])) {
+            $status = strtolower(trim((string) $validated['status']));
+            $query->whereHas('mortgage', function ($mortgageQuery) use ($status) {
+                $mortgageQuery->whereRaw('LOWER(status) = ?', [$status]);
+            });
+        }
+
+        if (!empty($validated['search'])) {
+            $search = trim((string) $validated['search']);
+            $query->where(function ($searchQuery) use ($search) {
+                $searchQuery
+                    ->where('mortgage_payments.id', 'like', "%{$search}%")
+                    ->orWhere('mortgage_payments.mortgage_id', 'like', "%{$search}%")
+                    ->orWhere('mortgage_payments.remarks', 'like', "%{$search}%")
+                    ->orWhereHas('mortgage', function ($mortgageQuery) use ($search) {
+                        $mortgageQuery
+                            ->where('mortgage_type', 'like', "%{$search}%")
+                            ->orWhere('status', 'like', "%{$search}%")
+                            ->orWhereHas('customer', function ($customerQuery) use ($search) {
+                                $customerQuery
+                                    ->where('customer_code', 'like', "%{$search}%")
+                                    ->orWhere('first_name', 'like', "%{$search}%")
+                                    ->orWhere('last_name', 'like', "%{$search}%")
+                                    ->orWhere('nic_passport', 'like', "%{$search}%")
+                                    ->orWhere('phone', 'like', "%{$search}%");
+                            });
+                    });
+            });
+        }
+
+        if (isset($validated['min_profit']) && $validated['min_profit'] !== null && $validated['min_profit'] !== '') {
+            $query->whereRaw("({$profitSql}) >= ?", [(float) $validated['min_profit']]);
+        }
+    }
+
+    public function profitReport(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'branch_id' => ['nullable', 'integer', 'min:1'],
+            'from_date' => ['nullable', 'date'],
+            'to_date' => ['nullable', 'date'],
+            'payment_method' => ['nullable', 'in:cash,bank,transfer,cheque,card'],
+            'mortgage_type' => ['nullable', 'string', 'max:80'],
+            'status' => ['nullable', 'string', 'max:50'],
+            'search' => ['nullable', 'string', 'max:120'],
+            'min_profit' => ['nullable', 'numeric', 'min:0'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:200'],
+            'page' => ['nullable', 'integer', 'min:1'],
+        ]);
+
+        $perPage = (int) ($validated['per_page'] ?? 25);
+        $profitSql = $this->mortgagePaymentEffectiveProfitSql();
+
+        $filteredQuery = MortgagePayment::query();
+        $this->applyMortgagePaymentReportFilters($filteredQuery, $validated, $request);
+
+        $summaryQuery = (clone $filteredQuery)->reorder();
+
+        $totalAmount = (float) ((clone $summaryQuery)->sum('mortgage_payments.amount') ?: 0);
+        $totalProfit = (float) ((clone $summaryQuery)->selectRaw("COALESCE(SUM({$profitSql}), 0) as aggregate")->value('aggregate') ?: 0);
+        $totalInterest = (float) ((clone $summaryQuery)->sum('mortgage_payments.interest_amount') ?: 0);
+        $totalPrincipal = (float) ((clone $summaryQuery)->sum('mortgage_payments.principal_amount') ?: 0);
+
+        $summary = [
+            'total_collections' => (int) (clone $summaryQuery)->count('mortgage_payments.id'),
+            'total_amount' => $totalAmount,
+            'total_principal' => $totalPrincipal,
+            'total_interest' => $totalInterest,
+            'total_profit' => $totalProfit,
+            'unique_mortgages' => (int) (clone $summaryQuery)->distinct('mortgage_payments.mortgage_id')->count('mortgage_payments.mortgage_id'),
+            'average_profit_per_collection' => 0,
+            'profit_share_of_collections' => 0,
+        ];
+
+        if ($summary['total_collections'] > 0) {
+            $summary['average_profit_per_collection'] = round($totalProfit / $summary['total_collections'], 2);
+        }
+
+        if ($totalAmount > 0) {
+            $summary['profit_share_of_collections'] = round(($totalProfit / $totalAmount) * 100, 2);
+        }
+
+        $byMethod = (clone $summaryQuery)
+            ->selectRaw("mortgage_payments.payment_method as payment_method, COUNT(*) as collections, COALESCE(SUM(mortgage_payments.amount), 0) as total_amount, COALESCE(SUM({$profitSql}), 0) as total_profit")
+            ->groupBy('mortgage_payments.payment_method')
+            ->orderByDesc('total_profit')
+            ->get()
+            ->map(fn ($row) => [
+                'payment_method' => (string) ($row->payment_method ?: 'unknown'),
+                'collections' => (int) $row->collections,
+                'total_amount' => (float) $row->total_amount,
+                'total_profit' => (float) $row->total_profit,
+            ])
+            ->values();
+
+        $byMonth = (clone $summaryQuery)
+            ->selectRaw("DATE_FORMAT(mortgage_payments.paid_date, '%Y-%m') as period, COUNT(*) as collections, COALESCE(SUM({$profitSql}), 0) as total_profit, COALESCE(SUM(mortgage_payments.amount), 0) as total_amount")
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get()
+            ->map(fn ($row) => [
+                'period' => (string) $row->period,
+                'collections' => (int) $row->collections,
+                'total_profit' => (float) $row->total_profit,
+                'total_amount' => (float) $row->total_amount,
+            ])
+            ->values();
+
+        $byMortgageType = (clone $summaryQuery)
+            ->join('mortgages', 'mortgages.id', '=', 'mortgage_payments.mortgage_id')
+            ->selectRaw("mortgages.mortgage_type as mortgage_type, COUNT(*) as collections, COALESCE(SUM({$profitSql}), 0) as total_profit")
+            ->groupBy('mortgages.mortgage_type')
+            ->orderByDesc('total_profit')
+            ->get()
+            ->map(fn ($row) => [
+                'mortgage_type' => (string) ($row->mortgage_type ?: 'unknown'),
+                'collections' => (int) $row->collections,
+                'total_profit' => (float) $row->total_profit,
+            ])
+            ->values();
+
+        $records = (clone $filteredQuery)
+            ->with([
+                'mortgage:id,mortgage_type,status,customer_id',
+                'mortgage.customer:id,customer_code,first_name,last_name,nic_passport,phone',
+            ])
+            ->orderByDesc('mortgage_payments.profit_amount')
+            ->orderByDesc('mortgage_payments.paid_date')
+            ->orderByDesc('mortgage_payments.id')
+            ->paginate($perPage);
+
+        $records->getCollection()->transform(function (MortgagePayment $payment) {
+            $effectiveProfit = (float) ($payment->profit_amount ?? 0);
+            if ($effectiveProfit <= 0 && (float) ($payment->interest_amount ?? 0) > 0) {
+                $effectiveProfit = (float) $payment->interest_amount;
+            }
+            $payment->setAttribute('profit_amount', round($effectiveProfit, 2));
+
+            return $payment;
+        });
+
+        return response()->json([
+            'summary' => $summary,
+            'breakdown' => [
+                'by_payment_method' => $byMethod,
+                'by_month' => $byMonth,
+                'by_mortgage_type' => $byMortgageType,
+            ],
             'data' => $records,
         ]);
     }
@@ -749,6 +1019,8 @@ class MortgageController extends Controller
         $map = [
             'draft' => [
                 'submit' => 'submitted',
+                'approve' => 'approved',
+                'reject' => 'rejected',
             ],
             'submitted' => [
                 'approve' => 'approved',
@@ -759,12 +1031,12 @@ class MortgageController extends Controller
             ],
         ];
 
-        $current = $mortgage->status ?? 'draft';
+        $current = strtolower(trim((string) ($mortgage->status ?? 'draft')));
         $action = $validated['action'];
 
         if (!isset($map[$current]) || !isset($map[$current][$action])) {
             return response()->json([
-                'message' => 'Invalid transition',
+                'message' => "Cannot {$action} mortgage while status is \"{$current}\".",
                 'current' => $current,
                 'action' => $action,
             ], 422);

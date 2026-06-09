@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
 
 interface Employee {
   id: number;
@@ -63,6 +64,7 @@ const DEFAULT_LEAVE_TYPES: LeaveType[] = [
 ];
 
 export default function Leaves() {
+  const apiBase = getApiBaseUrl();
   const [token, setToken] = useState('');
   const [leaves, setLeaves] = useState<Leave[]>([]);
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
@@ -118,7 +120,7 @@ export default function Leaves() {
     const tokenToUse = authToken || token;
     if (!tokenToUse) return;
     try {
-      const response = await axios.get('http://localhost:8000/api/hr/leaves', {
+      const response = await axios.get(`${apiBase}/hr/leaves`, {
         headers: { Authorization: `Bearer ${tokenToUse}` },
         params: { per_page: 1000 }
       });
@@ -133,7 +135,7 @@ export default function Leaves() {
     const tokenToUse = authToken || token;
     if (!tokenToUse) return;
     try {
-      const response = await axios.get('http://localhost:8000/api/hr/leave-types', {
+      const response = await axios.get(`${apiBase}/hr/leave-types`, {
         headers: { Authorization: `Bearer ${tokenToUse}` },
         params: { per_page: 1000 }
       });
@@ -161,7 +163,7 @@ export default function Leaves() {
     const tokenToUse = authToken || token;
     if (!tokenToUse) return;
     try {
-      const response = await axios.get('http://localhost:8000/api/hr/employees', {
+      const response = await axios.get(`${apiBase}/hr/employees`, {
         headers: { Authorization: `Bearer ${tokenToUse}` },
         params: { per_page: 1000 }
       });
@@ -186,12 +188,12 @@ export default function Leaves() {
       };
 
       if (editingLeave) {
-        await axios.put(`http://localhost:8000/api/hr/leaves/${editingLeave.id}`, leaveData, {
+        await axios.put(`${apiBase}/hr/leaves/${editingLeave.id}`, leaveData, {
           headers: { Authorization: `Bearer ${token}` }
         });
         showNotice('Success', 'Leave request updated successfully!', 'success');
       } else {
-        await axios.post('http://localhost:8000/api/hr/leaves', leaveData, {
+        await axios.post(`${apiBase}/hr/leaves`, leaveData, {
           headers: { Authorization: `Bearer ${token}` }
         });
         showNotice('Success', 'Leave request submitted successfully!', 'success');
@@ -229,12 +231,12 @@ export default function Leaves() {
       };
 
       if (editingLeaveType) {
-        await axios.put(`http://localhost:8000/api/hr/leave-types/${editingLeaveType.id}`, typeData, {
+        await axios.put(`${apiBase}/hr/leave-types/${editingLeaveType.id}`, typeData, {
           headers: { Authorization: `Bearer ${token}` }
         });
         showNotice('Success', 'Leave type updated successfully!', 'success');
       } else {
-        await axios.post('http://localhost:8000/api/hr/leave-types', typeData, {
+        await axios.post(`${apiBase}/hr/leave-types`, typeData, {
           headers: { Authorization: `Bearer ${token}` }
         });
         showNotice('Success', 'Leave type created successfully!', 'success');
@@ -262,7 +264,7 @@ export default function Leaves() {
         ? `section-head-approve`
         : `hr-approve`;
 
-      await axios.post(`http://localhost:8000/api/hr/leaves/${currentLeave.id}/${endpoint}`, approvalData, {
+      await axios.post(`${apiBase}/hr/leaves/${currentLeave.id}/${endpoint}`, approvalData, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -336,7 +338,7 @@ export default function Leaves() {
     setConfirmMessage(`Are you sure you want to delete the leave request for ${leave.employee.first_name} ${leave.employee.last_name}?`);
     setConfirmAction(() => async () => {
       try {
-        await axios.delete(`http://localhost:8000/api/hr/leaves/${leave.id}`, {
+        await axios.delete(`${apiBase}/hr/leaves/${leave.id}`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         showNotice('Success', 'Leave request deleted successfully!', 'success');
@@ -354,7 +356,7 @@ export default function Leaves() {
     setConfirmMessage(`Are you sure you want to delete the leave type "${leaveType.name}"?`);
     setConfirmAction(() => async () => {
       try {
-        await axios.delete(`http://localhost:8000/api/hr/leave-types/${leaveType.id}`, {
+        await axios.delete(`${apiBase}/hr/leave-types/${leaveType.id}`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         showNotice('Success', 'Leave type deleted successfully!', 'success');

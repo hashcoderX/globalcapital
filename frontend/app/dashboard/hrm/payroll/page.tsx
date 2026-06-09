@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
 
 interface Payroll {
   id: number;
@@ -79,6 +80,7 @@ interface Branch {
 }
 
 export default function Payroll() {
+  const apiBase = getApiBaseUrl();
   const [token, setToken] = useState('');
   const [payrolls, setPayrolls] = useState<Payroll[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -131,7 +133,7 @@ export default function Payroll() {
       if (filterMonth) params.month_year = filterMonth;
       if (filterBranch) params.branch_id = filterBranch;
 
-      const response = await axios.get('http://localhost:8000/api/hr/payrolls', {
+      const response = await axios.get(`${apiBase}/hr/payrolls`, {
         headers: { Authorization: `Bearer ${authToken}` },
         params: { ...params, per_page: 1000 }
       });
@@ -148,7 +150,7 @@ export default function Payroll() {
 
   const fetchEmployees = async (authToken: string) => {
     try {
-      const response = await axios.get('http://localhost:8000/api/hr/employees', {
+      const response = await axios.get(`${apiBase}/hr/employees`, {
         headers: { Authorization: `Bearer ${authToken}` },
         params: { per_page: 1000 }
       });
@@ -163,7 +165,7 @@ export default function Payroll() {
 
   const fetchBranches = async (authToken: string) => {
     try {
-      const response = await axios.get('http://localhost:8000/api/companies', {
+      const response = await axios.get(`${apiBase}/companies`, {
         headers: { Authorization: `Bearer ${authToken}` },
         params: { per_page: 1000 }
       });
@@ -182,7 +184,7 @@ export default function Payroll() {
     try {
       setGenerateLoading(true);
 
-      const response = await axios.post('http://localhost:8000/api/hr/payrolls/generate', {
+      const response = await axios.post(`${apiBase}/hr/payrolls/generate`, {
         branch_id: parseInt(selectedBranch),
         month_year: selectedMonth,
       }, {
@@ -221,7 +223,7 @@ export default function Payroll() {
     if (!token) return;
 
     try {
-      await axios.put(`http://localhost:8000/api/hr/payrolls/${payrollId}`, {
+      await axios.put(`${apiBase}/hr/payrolls/${payrollId}`, {
         status: newStatus,
         processed_at: newStatus === 'processed' ? new Date().toISOString().split('T')[0] : null,
       }, {
@@ -262,7 +264,7 @@ export default function Payroll() {
         payload.branch_id = parseInt(filterBranch, 10);
       }
 
-      const response = await axios.post('http://localhost:8000/api/hr/payrolls/recalculate', payload, {
+      const response = await axios.post(`${apiBase}/hr/payrolls/recalculate`, payload, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -305,7 +307,7 @@ export default function Payroll() {
     if (!token) return;
 
     try {
-      const response = await axios.get(`http://localhost:8000/api/hr/payrolls/${payroll.id}/payslip`, {
+      const response = await axios.get(`${apiBase}/hr/payrolls/${payroll.id}/payslip`, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob'
       });

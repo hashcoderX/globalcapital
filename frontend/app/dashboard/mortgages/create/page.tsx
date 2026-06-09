@@ -3,8 +3,29 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
-import ModuleHeader from "../_components/ModuleHeader";
-import SectionCard from "../_components/SectionCard";
+import ClientMountGate from "@/app/components/ClientMountGate";
+import { getApiBaseUrl } from "@/lib/api";
+import {
+  ArrowLeft,
+  Building2,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Circle,
+  FileText,
+  Home,
+  Sparkles,
+  User,
+  Users,
+  Wallet,
+} from "lucide-react";
+
+const inputClass =
+  "w-full rounded-xl border border-slate-200/90 bg-white/95 px-3 py-2.5 text-sm text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-200/70";
+
+const labelClass = "mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500";
+
+const sectionTitleClass = "mb-3 text-xs font-bold uppercase tracking-[0.16em] text-cyan-700";
 
 type Step =
   | "profile"
@@ -27,6 +48,14 @@ const STEP_LABELS: Record<Step, string> = {
   coBorrower: "Guarantor",
   loanCollateral: "Loan & Collateral",
   documentsReview: "Documents & Review",
+};
+
+const STEP_ICONS: Record<Step, typeof User> = {
+  profile: User,
+  financial: Wallet,
+  coBorrower: Users,
+  loanCollateral: Building2,
+  documentsReview: FileText,
 };
 
 const hasText = (value: string) => value.trim().length > 0;
@@ -91,9 +120,6 @@ export default function CreateMortgage() {
   const [coBorrowerIncome, setCoBorrowerIncome] = useState("");
 
   // Mortgage Loan Details
-  const [mortgageType, setMortgageType] = useState<
-    "land" | "house" | "vehicle" | "gold" | "other"
-  >("land");
   const [requestedAmount, setRequestedAmount] = useState("");
   const [approvedAmount, setApprovedAmount] = useState("");
   const [interestRate, setInterestRate] = useState("");
@@ -295,10 +321,10 @@ export default function CreateMortgage() {
 
       try {
         const custRes = await axios.post(
-          "http://localhost:8000/api/customers",
+          `${getApiBaseUrl()}/customers`,
           customerPayload,
           {
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
           }
         );
         createdCustomerId = custRes.data.id;
@@ -321,8 +347,8 @@ export default function CreateMortgage() {
           throw customerError;
         }
 
-        const existingRes = await axios.get("http://localhost:8000/api/customers", {
-          headers: { Authorization: `Bearer ${token}` },
+        const existingRes = await axios.get(`${getApiBaseUrl()}/customers`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
           params: { q: lookupValue, per_page: 100 },
         });
 
@@ -355,10 +381,10 @@ export default function CreateMortgage() {
         fd.append("document_type", doc.type);
         fd.append("file", doc.file);
         await axios.post(
-          `http://localhost:8000/api/customers/${createdCustomerId}/documents`,
+          `${getApiBaseUrl()}/customers/${createdCustomerId}/documents`,
           fd,
           {
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
           }
         );
       }
@@ -370,7 +396,7 @@ export default function CreateMortgage() {
       const hasPhysical = assetAddress || landSizeOrBuildingArea || boundaries;
       const normalizedAssetDescription = assetDescription.trim() || `${assetType} collateral`;
 
-      const normalizedMortgageType = mortgageType;
+      const normalizedMortgageType = assetType;
 
       const mortgagePayload: any = {
         customer_id: createdCustomerId,
@@ -444,10 +470,10 @@ export default function CreateMortgage() {
       console.log('Mortgage Payload:', mortgagePayload);
 
       const mortRes = await axios.post(
-        "http://localhost:8000/api/mortgages",
+        `${getApiBaseUrl()}/mortgages`,
         mortgagePayload,
         {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         }
       );
       const mortgageId = mortRes.data.id;
@@ -458,10 +484,10 @@ export default function CreateMortgage() {
         fd.append("document_type", doc.type);
         fd.append("file", doc.file);
         await axios.post(
-          `http://localhost:8000/api/mortgages/${mortgageId}/documents`,
+          `${getApiBaseUrl()}/mortgages/${mortgageId}/documents`,
           fd,
           {
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
           }
         );
       }
@@ -472,10 +498,10 @@ export default function CreateMortgage() {
         fd.append("document_type", doc.type);
         fd.append("file", doc.file);
         await axios.post(
-          `http://localhost:8000/api/mortgages/${mortgageId}/documents`,
+          `${getApiBaseUrl()}/mortgages/${mortgageId}/documents`,
           fd,
           {
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
           }
         );
       }
@@ -506,152 +532,247 @@ export default function CreateMortgage() {
     openModal("confirm", "Confirm Submission", "Are you sure you want to submit this mortgage application?");
   };
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-40">
-        <div className="absolute -top-24 left-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute top-24 right-8 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute -bottom-24 left-1/3 h-80 w-80 rounded-full bg-teal-300 blur-3xl"></div>
-      </div>
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <ModuleHeader
-          title="New Mortgage Application"
-          subtitle="Step-by-step guided form"
-          breadcrumbs={[
-            { label: 'Dashboard', href: '/dashboard' },
-            { label: 'Mortgages', href: '/dashboard/mortgages' },
-            { label: 'New' },
-          ]}
-          actions={(
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="rounded-lg bg-gradient-to-r from-slate-600 to-gray-800 px-4 py-2 text-white shadow-sm transition hover:opacity-95"
-              >
-                Dashboard
-              </button>
-              <button
-                onClick={() => router.back()}
-                className="rounded-lg bg-gradient-to-r from-gray-500 to-zinc-700 px-4 py-2 text-white shadow-sm transition hover:opacity-95"
-              >
-                Back
-              </button>
-            </div>
-          )}
-        />
-      </div>
+  const progressStats = useMemo(() => {
+    const completedSteps = STEP_ORDER.filter((s) => isStepComplete(s)).length;
+    const totalDocs = customerDocuments.length + assetDocuments.length + legalDocuments.length;
+    return {
+      completedSteps,
+      totalSteps: STEP_ORDER.length,
+      progressPercent: Math.round((completedSteps / STEP_ORDER.length) * 100),
+      totalDocs,
+    };
+  }, [
+    isProfileStepComplete,
+    isFinancialStepComplete,
+    isCoBorrowerStepComplete,
+    isLoanCollateralStepComplete,
+    customerDocuments.length,
+    assetDocuments.length,
+    legalDocuments.length,
+  ]);
 
-      <div className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* Step indicator */}
-        <div className="rounded-2xl border border-white/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_16px_40px_-24px_rgba(14,116,144,0.55)]">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
-            {STEP_ORDER.map((key, i) => {
-              const active = i <= currentStepIndex;
-              const isCurrent = i === currentStepIndex;
-              const isLocked = i > maxReachableIndex;
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => {
-                  if (!isLocked) setStep(key);
-                }}
-                disabled={isLocked}
-                className={`rounded-xl border px-3 py-2 text-left transition ${
-                  isCurrent
-                    ? "border-cyan-300 bg-gradient-to-r from-cyan-100 to-blue-100"
-                    : active
-                    ? "border-cyan-100 bg-cyan-50/60"
-                    : "border-slate-200 bg-slate-50"
-                } ${isLocked ? "cursor-not-allowed opacity-50" : ""}`}
-              >
-                <div className="flex items-center gap-2">
-                <div
-                  className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold ${
-                    isCurrent
-                      ? "bg-gradient-to-br from-cyan-600 to-blue-700 text-white shadow-sm"
-                      : active
-                      ? "bg-cyan-500 text-white"
-                      : "bg-gray-200 text-gray-600"
-                  }`}
-                >
-                  {i + 1}
-                </div>
-                  <div>
-                    <p className={`text-xs font-semibold uppercase tracking-wide ${isCurrent ? "text-cyan-800" : "text-slate-600"}`}>
-                      {STEP_LABELS[key]}
-                    </p>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-          </div>
+  const pageFallback = (
+    <div className="flex min-h-screen items-center justify-center bg-[#071a22]">
+      <div className="flex flex-col items-center gap-4">
+        <div className="h-14 w-14 animate-spin rounded-full border-2 border-cyan-400/30 border-t-cyan-400" />
+        <p className="text-sm font-medium text-cyan-100/80">Loading application form...</p>
+      </div>
+    </div>
+  );
+
+  if (!token) {
+    return <ClientMountGate fallback={pageFallback}>{pageFallback}</ClientMountGate>;
+  }
+
+  return (
+    <ClientMountGate fallback={pageFallback}>
+      <div className="relative min-h-screen overflow-hidden bg-[#f3f8fb]">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute -left-24 top-0 h-96 w-96 rounded-full bg-cyan-400/20 blur-3xl" />
+          <div className="absolute right-0 top-16 h-[28rem] w-[28rem] rounded-full bg-blue-500/12 blur-3xl" />
+          <div className="absolute bottom-0 left-1/4 h-72 w-72 rounded-full bg-teal-400/10 blur-3xl" />
+          <div
+            className="absolute inset-0 opacity-[0.3]"
+            style={{
+              backgroundImage: "radial-gradient(circle at 1px 1px, rgba(14,116,144,0.1) 1px, transparent 0)",
+              backgroundSize: "26px 26px",
+            }}
+          />
         </div>
 
-        {/* Step content */}
-        <SectionCard
-          title={stepTitle}
-          description="Provide the required information for this step"
-          className="border border-white/70 bg-white/85 backdrop-blur-xl shadow-[0_18px_45px_-28px_rgba(14,116,144,0.55)]"
-        >
-          <div className="space-y-6 [&_input]:rounded-xl [&_input]:border-cyan-100 [&_input]:bg-white [&_input]:px-3 [&_input]:py-2 [&_input]:text-black [&_input]:shadow-sm [&_input]:outline-none [&_input]:transition [&_input]:focus:border-cyan-300 [&_input]:focus:ring-2 [&_input]:focus:ring-cyan-200 [&_select]:rounded-xl [&_select]:border-cyan-100 [&_select]:bg-white [&_select]:px-3 [&_select]:py-2 [&_select]:text-black [&_select]:shadow-sm [&_select]:outline-none [&_select]:transition [&_select]:focus:border-cyan-300 [&_select]:focus:ring-2 [&_select]:focus:ring-cyan-200 [&_textarea]:rounded-xl [&_textarea]:border-cyan-100 [&_textarea]:bg-white [&_textarea]:px-3 [&_textarea]:py-2 [&_textarea]:text-black [&_textarea]:shadow-sm [&_textarea]:outline-none [&_textarea]:transition [&_textarea]:focus:border-cyan-300 [&_textarea]:focus:ring-2 [&_textarea]:focus:ring-cyan-200">
+        <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+          <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#0a1a24] via-[#0f3a52] to-[#0c5a7a] text-white shadow-[0_30px_80px_-24px_rgba(14,116,144,0.8)]">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.25),transparent_42%)]" />
+            <div className="relative p-6 md:p-8">
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+                <div className="max-w-2xl">
+                  <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-100">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    New Application
+                  </span>
+                  <h1 className="mt-4 text-3xl font-black tracking-tight md:text-4xl">Mortgage Application</h1>
+                  <p className="mt-2 text-sm leading-relaxed text-cyan-50/90 md:text-base">
+                    Guided multi-step onboarding for customer profile, financials, collateral, and document capture.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2 text-xs text-cyan-100/90">
+                    <span className="rounded-lg bg-white/10 px-2.5 py-1">Mortgages</span>
+                    <span className="text-cyan-200/50">/</span>
+                    <span className="rounded-lg bg-cyan-400/20 px-2.5 py-1 font-semibold text-white">Create</span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => router.push("/dashboard/mortgages")}
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/15"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    Mortgages Hub
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push("/dashboard")}
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20"
+                  >
+                    <Home className="h-4 w-4" />
+                    Dashboard
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              { label: "Current Step", value: STEP_LABELS[step], tone: "text-cyan-700", bg: "from-cyan-500/10 to-blue-500/5" },
+              { label: "Steps Complete", value: `${progressStats.completedSteps}/${progressStats.totalSteps}`, tone: "text-emerald-700", bg: "from-emerald-500/10 to-green-500/5" },
+              { label: "Progress", value: `${progressStats.progressPercent}%`, tone: "text-indigo-700", bg: "from-indigo-500/10 to-violet-500/5" },
+              { label: "Documents Added", value: progressStats.totalDocs, tone: "text-amber-700", bg: "from-amber-500/10 to-orange-500/5" },
+            ].map((item) => (
+              <div
+                key={item.label}
+                className={`overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
+              >
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
+                <p className={`mt-2 text-xl font-black capitalize ${item.tone}`}>{item.value}</p>
+              </div>
+            ))}
+          </section>
+
+          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 p-4 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl sm:p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Application Steps</p>
+                <p className="mt-1 text-sm text-slate-600">Complete each section to unlock the next step.</p>
+              </div>
+              <div className="hidden h-2 w-40 overflow-hidden rounded-full bg-slate-100 sm:block">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-blue-600 transition-all"
+                  style={{ width: `${progressStats.progressPercent}%` }}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+              {STEP_ORDER.map((key, i) => {
+                const active = i <= currentStepIndex;
+                const isCurrent = i === currentStepIndex;
+                const isLocked = i > maxReachableIndex;
+                const complete = isStepComplete(key);
+                const StepIcon = STEP_ICONS[key];
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => {
+                      if (!isLocked) setStep(key);
+                    }}
+                    disabled={isLocked}
+                    className={`rounded-2xl border px-3 py-3 text-left transition ${
+                      isCurrent
+                        ? "border-cyan-300 bg-gradient-to-r from-cyan-50 to-blue-50 shadow-sm"
+                        : complete
+                          ? "border-emerald-200 bg-emerald-50/70"
+                          : active
+                            ? "border-cyan-100 bg-cyan-50/60"
+                            : "border-slate-200 bg-slate-50"
+                    } ${isLocked ? "cursor-not-allowed opacity-50" : "hover:-translate-y-0.5 hover:shadow-md"}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div
+                        className={`flex h-9 w-9 items-center justify-center rounded-xl ${
+                          isCurrent
+                            ? "bg-gradient-to-br from-cyan-600 to-blue-700 text-white shadow-sm"
+                            : complete
+                              ? "bg-emerald-600 text-white"
+                              : active
+                                ? "bg-cyan-500 text-white"
+                                : "bg-slate-200 text-slate-600"
+                        }`}
+                      >
+                        {complete && !isCurrent ? <CheckCircle2 className="h-4 w-4" /> : <StepIcon className="h-4 w-4" />}
+                      </div>
+                      <div>
+                        <p className={`text-[11px] font-bold uppercase tracking-wide ${isCurrent ? "text-cyan-800" : "text-slate-600"}`}>
+                          Step {i + 1}
+                        </p>
+                        <p className={`text-sm font-semibold ${isCurrent ? "text-slate-900" : "text-slate-700"}`}>{STEP_LABELS[key]}</p>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+            <div className="border-b border-slate-100 bg-gradient-to-r from-cyan-50/80 to-blue-50/50 px-5 py-4 md:px-6">
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Step {currentStepIndex + 1} of {STEP_ORDER.length}</p>
+              <h2 className="mt-1 text-xl font-extrabold text-slate-900">{stepTitle}</h2>
+              <p className="mt-1 text-sm text-slate-600">Provide the required information for this step.</p>
+              {!isCurrentStepComplete && (
+                <p className="mt-2 inline-flex items-center gap-1 rounded-lg bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                  <Circle className="h-3 w-3 fill-amber-500 text-amber-500" />
+                  Required fields incomplete
+                </p>
+              )}
+            </div>
+            <div className="space-y-6 p-5 md:p-6">
           {step === "profile" && (
             <>
             <div>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Customer</p>
+              <p className={sectionTitleClass}>Customer</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Full Name
                 </label>
                 <input
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                   placeholder="e.g. John Doe"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   File Code
                 </label>
                 <input
                   value={fileCode}
                   onChange={(e) => setFileCode(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                   placeholder="e.g. CUS-2026-001"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   NIC / Passport
                 </label>
                 <input
                   value={nic}
                   onChange={(e) => setNic(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Date of Birth
                 </label>
                 <input
                   type="date"
                   value={dateOfBirth}
                   onChange={(e) => setDateOfBirth(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Gender
                 </label>
                 <select
                   value={gender}
                   onChange={(e) => setGender(e.target.value as any)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 >
                   <option value="male">Male</option>
                   <option value="female">Female</option>
@@ -659,13 +780,13 @@ export default function CreateMortgage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Marital Status
                 </label>
                 <select
                   value={maritalStatus}
                   onChange={(e) => setMaritalStatus(e.target.value as any)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 >
                   <option value="single">Single</option>
                   <option value="married">Married</option>
@@ -674,60 +795,60 @@ export default function CreateMortgage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Nationality
                 </label>
                 <input
                   value={nationality}
                   onChange={(e) => setNationality(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
             </div>
             </div>
 
             <div>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Contact</p>
+              <p className={sectionTitleClass}>Contact</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Permanent Address
                   </label>
                   <textarea
                     value={permanentAddress}
                     onChange={(e) => setPermanentAddress(e.target.value)}
-                    className="w-full"
+                    className={inputClass}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Current Address
                   </label>
                   <textarea
                     value={currentAddress}
                     onChange={(e) => setCurrentAddress(e.target.value)}
-                    className="w-full"
+                    className={inputClass}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Mobile Number
                   </label>
                   <input
                     value={mobileNumber}
                     onChange={(e) => setMobileNumber(e.target.value)}
-                    className="w-full"
+                    className={inputClass}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Email
                   </label>
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full"
+                    className={inputClass}
                   />
                 </div>
               </div>
@@ -738,16 +859,16 @@ export default function CreateMortgage() {
           {step === "financial" && (
             <>
             <div>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Employment & Income</p>
+              <p className={sectionTitleClass}>Employment & Income</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Employment Type
                 </label>
                 <select
                   value={employmentType}
                   onChange={(e) => setEmploymentType(e.target.value as any)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 >
                   <option value="salaried">Salaried</option>
                   <option value="self_employed">Self-employed</option>
@@ -755,86 +876,86 @@ export default function CreateMortgage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Employer / Business Name
                 </label>
                 <input
                   value={employerName}
                   onChange={(e) => setEmployerName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Job Title / Business Type
                 </label>
                 <input
                   value={jobTitle}
                   onChange={(e) => setJobTitle(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Monthly Income
                 </label>
                 <input
                   value={monthlyIncome}
                   onChange={(e) => setMonthlyIncome(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Other Income Sources
                 </label>
                 <textarea
                   value={otherIncomeSources}
                   onChange={(e) => setOtherIncomeSources(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
             </div>
             </div>
 
             <div>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Credit & Risk</p>
+              <p className={sectionTitleClass}>Credit & Risk</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Existing Loans
                 </label>
                 <select
                   value={existingLoans ? "yes" : "no"}
                   onChange={(e) => setExistingLoans(e.target.value === "yes")}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 >
                   <option value="no">No</option>
                   <option value="yes">Yes</option>
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Monthly Loan Obligations
                 </label>
                 <input
                   value={monthlyLoanObligations}
                   onChange={(e) => setMonthlyLoanObligations(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Credit Score (if available)
                 </label>
                 <input
                   value={creditScore}
                   onChange={(e) => setCreditScore(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Bank Statements (uploads)
                 </label>
                 <input type="file" multiple />
@@ -845,148 +966,135 @@ export default function CreateMortgage() {
           )}
 
           {step === "coBorrower" && (
+            <>
+            <div className="rounded-2xl border border-cyan-100 bg-cyan-50/60 px-4 py-3 text-sm text-slate-600">
+              Guarantor details are optional. Leave blank to skip this step, or complete all fields if adding a co-borrower.
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Full Name
                 </label>
                 <input
                   value={coBorrowerName}
                   onChange={(e) => setCoBorrowerName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   NIC / Passport
                 </label>
                 <input
                   value={coBorrowerNic}
                   onChange={(e) => setCoBorrowerNic(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Relationship to Borrower
                 </label>
                 <input
                   value={coBorrowerRelationship}
                   onChange={(e) => setCoBorrowerRelationship(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Address
                 </label>
                 <textarea
                   value={coBorrowerAddress}
                   onChange={(e) => setCoBorrowerAddress(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Contact Number
                 </label>
                 <input
                   value={coBorrowerContact}
                   onChange={(e) => setCoBorrowerContact(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Income Details (Monthly)
                 </label>
                 <input
                   value={coBorrowerIncome}
                   onChange={(e) => setCoBorrowerIncome(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
             </div>
+            </>
           )}
 
           {step === "loanCollateral" && (
             <>
             <div>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Loan Terms</p>
+              <p className={sectionTitleClass}>Loan Terms & Repayment</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  Mortgage Type
-                </label>
-                <select
-                  value={mortgageType}
-                  onChange={(e) => setMortgageType(e.target.value as any)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
-                >
-                  {["land", "house", "vehicle", "gold", "other"].map(
-                    (t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    )
-                  )}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Requested Amount
                 </label>
                 <input
                   value={requestedAmount}
                   onChange={(e) => setRequestedAmount(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Approved Amount
                 </label>
                 <input
                   value={approvedAmount}
                   onChange={(e) => setApprovedAmount(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Interest Rate (%)
                 </label>
                 <input
                   value={interestRate}
                   onChange={(e) => setInterestRate(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Interest Type
                 </label>
                 <select
                   value={interestType}
                   onChange={(e) => setInterestType(e.target.value as any)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 >
                   <option value="fixed">Fixed</option>
                   <option value="reducing">Reducing Balance</option>
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Loan Tenure (months)
                 </label>
                 <input
                   value={tenureMonths}
                   onChange={(e) => setTenureMonths(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Refund Frequency
                 </label>
                 <select
@@ -994,7 +1102,7 @@ export default function CreateMortgage() {
                   onChange={(e) =>
                     setInstallmentFrequency(e.target.value as any)
                   }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 >
                   <option value="daily">Daily</option>
                   <option value="weekly">Weekly</option>
@@ -1004,7 +1112,7 @@ export default function CreateMortgage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Interest Calculation Frequency
                 </label>
                 <select
@@ -1012,7 +1120,7 @@ export default function CreateMortgage() {
                   onChange={(e) =>
                     setInterestCalculationFrequency(e.target.value as any)
                   }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 >
                   <option value="daily">Daily</option>
                   <option value="weekly">Weekly</option>
@@ -1021,66 +1129,66 @@ export default function CreateMortgage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Processing Fee
                 </label>
                 <input
                   value={processingFee}
                   onChange={(e) => setProcessingFee(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Insurance Fee
                 </label>
                 <input
                   value={insuranceFee}
                   onChange={(e) => setInsuranceFee(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Penalty Rate (%)
                 </label>
                 <input
                   value={penaltyRate}
                   onChange={(e) => setPenaltyRate(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
             </div>
             </div>
 
             <div>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">Collateral</p>
+              <p className={sectionTitleClass}>Collateral Details</p>
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    Asset Type
+                  <label className={labelClass}>
+                    Collateral Type
                   </label>
                   <select
                     value={assetType}
                     onChange={(e) => setAssetType(e.target.value as any)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   >
                     {["land", "house", "vehicle", "gold", "other"].map((t) => (
                       <option key={t} value={t}>
-                        {t}
+                        {t.charAt(0).toUpperCase() + t.slice(1)}
                       </option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Ownership Type
                   </label>
                   <select
                     value={ownershipType}
                     onChange={(e) => setOwnershipType(e.target.value as any)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   >
                     <option value="single">Single</option>
                     <option value="joint">Joint</option>
@@ -1088,146 +1196,146 @@ export default function CreateMortgage() {
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">
+                <label className={labelClass}>
                   Asset Description
                 </label>
                 <textarea
                   value={assetDescription}
                   onChange={(e) => setAssetDescription(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                  className={inputClass}
                 />
               </div>
 
-              <h4 className="text-sm font-semibold text-gray-800">Legal Details</h4>
+              <p className={sectionTitleClass}>Legal Details</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Deed Number
                   </label>
                   <input
                     value={deedNumber}
                     onChange={(e) => setDeedNumber(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Deed Date
                   </label>
                   <input
                     type="date"
                     value={deedDate}
                     onChange={(e) => setDeedDate(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Survey Plan Number
                   </label>
                   <input
                     value={surveyPlanNumber}
                     onChange={(e) => setSurveyPlanNumber(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Registration Office
                   </label>
                   <input
                     value={registrationOffice}
                     onChange={(e) => setRegistrationOffice(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Lawyer Name
                   </label>
                   <input
                     value={lawyerName}
                     onChange={(e) => setLawyerName(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
               </div>
 
-              <h4 className="text-sm font-semibold text-gray-800">Valuation Details</h4>
+              <p className={sectionTitleClass}>Valuation Details</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Market Value
                   </label>
                   <input
                     value={marketValue}
                     onChange={(e) => setMarketValue(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Forced Sale Value
                   </label>
                   <input
                     value={forcedSaleValue}
                     onChange={(e) => setForcedSaleValue(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Valuation Date
                   </label>
                   <input
                     type="date"
                     value={valuationDate}
                     onChange={(e) => setValuationDate(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Valuer Name
                   </label>
                   <input
                     value={valuerName}
                     onChange={(e) => setValuerName(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
               </div>
 
-              <h4 className="text-sm font-semibold text-gray-800">Physical Details</h4>
+              <p className={sectionTitleClass}>Physical Details</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Address / Location
                   </label>
                   <input
                     value={assetAddress}
                     onChange={(e) => setAssetAddress(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Land Size / Building Area
                   </label>
                   <input
                     value={landSizeOrBuildingArea}
                     onChange={(e) => setLandSizeOrBuildingArea(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Boundaries / Identification marks
                   </label>
                   <textarea
                     value={boundaries}
                     onChange={(e) => setBoundaries(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    className={inputClass}
                   />
                 </div>
               </div>
@@ -1235,43 +1343,43 @@ export default function CreateMortgage() {
               {assetType === "vehicle" && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">
+                    <label className={labelClass}>
                       Registration Number
                     </label>
                     <input
                       value={vehicleRegNo}
                       onChange={(e) => setVehicleRegNo(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                      className={inputClass}
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">
+                    <label className={labelClass}>
                       Engine Number
                     </label>
                     <input
                       value={vehicleEngineNo}
                       onChange={(e) => setVehicleEngineNo(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                      className={inputClass}
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">
+                    <label className={labelClass}>
                       Chassis Number
                     </label>
                     <input
                       value={vehicleChassisNo}
                       onChange={(e) => setVehicleChassisNo(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                      className={inputClass}
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">
+                    <label className={labelClass}>
                       Manufacture Year
                     </label>
                     <input
                       value={vehicleManufactureYear}
                       onChange={(e) => setVehicleManufactureYear(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                      className={inputClass}
                     />
                   </div>
                 </div>
@@ -1283,12 +1391,10 @@ export default function CreateMortgage() {
 
           {step === "documentsReview" && (
             <div className="space-y-6">
-              <h4 className="text-sm font-semibold text-gray-800">
-                Customer Documents
-              </h4>
+              <p className={sectionTitleClass}>Customer Documents</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     NIC / Passport copy
                   </label>
                   <input
@@ -1303,7 +1409,7 @@ export default function CreateMortgage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Address verification
                   </label>
                   <input
@@ -1321,7 +1427,7 @@ export default function CreateMortgage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Salary slips (last 3 months)
                   </label>
                   <input
@@ -1337,7 +1443,7 @@ export default function CreateMortgage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Bank statements
                   </label>
                   <input
@@ -1354,12 +1460,10 @@ export default function CreateMortgage() {
                 </div>
               </div>
 
-              <h4 className="text-sm font-semibold text-gray-800">
-                Mortgage Asset Documents
-              </h4>
+              <p className={sectionTitleClass}>Mortgage Asset Documents</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Deed copy
                   </label>
                   <input
@@ -1374,7 +1478,7 @@ export default function CreateMortgage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Survey plan
                   </label>
                   <input
@@ -1389,7 +1493,7 @@ export default function CreateMortgage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Valuation report
                   </label>
                   <input
@@ -1404,7 +1508,7 @@ export default function CreateMortgage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Insurance policy
                   </label>
                   <input
@@ -1420,12 +1524,10 @@ export default function CreateMortgage() {
                 </div>
               </div>
 
-              <h4 className="text-sm font-semibold text-gray-800">
-                Legal & Internal Docs
-              </h4>
+              <p className={sectionTitleClass}>Legal & Internal Docs</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Mortgage agreement (PDF)
                   </label>
                   <input
@@ -1440,7 +1542,7 @@ export default function CreateMortgage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Approval note
                   </label>
                   <input
@@ -1455,7 +1557,7 @@ export default function CreateMortgage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={labelClass}>
                     Release letter (after settlement)
                   </label>
                   <input
@@ -1470,88 +1572,98 @@ export default function CreateMortgage() {
                   />
                 </div>
               </div>
-              <div className="rounded-xl border border-cyan-100 bg-cyan-50/60 p-4">
-                <p className="text-sm font-medium text-slate-800">Review</p>
+              <div className="rounded-2xl border border-cyan-200 bg-gradient-to-br from-cyan-50 to-blue-50/60 p-5">
+                <p className="text-sm font-extrabold text-slate-900">Ready to submit</p>
                 <p className="mt-1 text-sm text-slate-600">
-                  Review your mortgage details and submit.
+                  Review customer, loan, collateral, and uploaded documents before submitting for approval.
+                </p>
+                <p className="mt-3 text-xs font-semibold text-cyan-800">
+                  {progressStats.totalDocs} document{progressStats.totalDocs === 1 ? "" : "s"} attached
                 </p>
               </div>
             </div>
           )}
-          </div>
-        </SectionCard>
+            </div>
+          </section>
 
-        <div className="flex justify-between">
-          <button
-            onClick={prevStep}
-            disabled={isSubmitting || currentStepIndex === 0}
-            className="px-6 py-2 rounded-lg border border-gray-300 text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Back
-          </button>
-          {step === "documentsReview" ? (
+          <section className="flex flex-col gap-3 rounded-3xl border border-white/90 bg-white/95 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:p-5">
             <button
-              onClick={requestSubmit}
-              disabled={isSubmitting || !isCurrentStepComplete}
-              className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-2 text-white shadow-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
+              type="button"
+              onClick={prevStep}
+              disabled={isSubmitting || currentStepIndex === 0}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isSubmitting ? 'Submitting...' : 'Submit Application'}
+              <ChevronLeft className="h-4 w-4" />
+              Back
             </button>
-          ) : (
-            <button
-              onClick={nextStep}
-              disabled={isSubmitting || !isCurrentStepComplete}
-              className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-2 text-white shadow-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Next
-            </button>
-          )}
+            {step === "documentsReview" ? (
+              <button
+                type="button"
+                onClick={requestSubmit}
+                disabled={isSubmitting || !isCurrentStepComplete}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-6 py-2.5 text-sm font-bold text-white shadow-md transition hover:from-cyan-700 hover:to-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSubmitting ? "Submitting..." : "Submit Application"}
+                <CheckCircle2 className="h-4 w-4" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={nextStep}
+                disabled={isSubmitting || !isCurrentStepComplete}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-6 py-2.5 text-sm font-bold text-white shadow-md transition hover:from-cyan-700 hover:to-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Next Step
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            )}
+          </section>
         </div>
-      </div>
 
-      {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-cyan-100 bg-white shadow-2xl">
-            <div className="border-b border-cyan-100 bg-gradient-to-r from-cyan-50 to-blue-50 px-5 py-4">
-              <h3 className="text-lg font-bold text-slate-900">{modalTitle}</h3>
-            </div>
-            <div className="px-5 py-4">
-              <p className="whitespace-pre-line text-sm text-slate-700">{modalMessage}</p>
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t border-cyan-100 bg-slate-50 px-5 py-4">
-              {modalKind === "confirm" ? (
-                <>
+        {modalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-md overflow-hidden rounded-3xl border border-cyan-100 bg-white shadow-2xl">
+              <div className="border-b border-cyan-100 bg-gradient-to-r from-cyan-50 to-blue-50 px-6 py-4">
+                <h3 className="text-lg font-extrabold text-slate-900">{modalTitle}</h3>
+              </div>
+              <div className="px-6 py-4">
+                <p className="whitespace-pre-line text-sm leading-relaxed text-slate-700">{modalMessage}</p>
+              </div>
+              <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-6 py-4">
+                {modalKind === "confirm" ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={closeModal}
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        closeModal();
+                        await handleSubmit();
+                      }}
+                      className="rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm"
+                    >
+                      Confirm Submit
+                    </button>
+                  </>
+                ) : (
                   <button
                     type="button"
                     onClick={closeModal}
-                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+                    className="rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm"
                   >
-                    Cancel
+                    OK
                   </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      closeModal();
-                      await handleSubmit();
-                    }}
-                    className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-2 text-sm font-semibold text-white"
-                  >
-                    Confirm
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-2 text-sm font-semibold text-white"
-                >
-                  OK
-                </button>
-              )}
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </ClientMountGate>
   );
 }

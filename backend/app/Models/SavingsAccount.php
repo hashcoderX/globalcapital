@@ -20,6 +20,7 @@ class SavingsAccount extends Model
         'opening_deposit',
         'balance',
         'interest_rate',
+        'interest_type',
         'opened_at',
         'status',
         'created_by',

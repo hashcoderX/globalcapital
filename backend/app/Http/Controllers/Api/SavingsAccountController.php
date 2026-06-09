@@ -12,6 +12,30 @@ use Illuminate\Support\Facades\DB;
 
 class SavingsAccountController extends Controller
 {
+    /** @var list<string> */
+    private const ACCOUNT_TYPES = ['savings', 'current', 'fixed_deposit', 'investment'];
+
+    /** @var list<string> */
+    private const INTEREST_TYPES = [
+        'simple_interest',
+        'compound_interest',
+        'monthly_payout',
+        'quarterly_payout',
+        'annual_payout',
+        'maturity_payout',
+        'tiered_interest',
+        'auto_sweep_interest',
+    ];
+
+    private function defaultInterestTypeForAccount(string $accountType): string
+    {
+        return match ($accountType) {
+            'fixed_deposit' => 'maturity_payout',
+            'investment' => 'compound_interest',
+            default => 'simple_interest',
+        };
+    }
+
     private function isAdminUser(?object $user): bool
     {
         if (!$user) {
@@ -126,7 +150,8 @@ class SavingsAccountController extends Controller
         $validated = $request->validate([
             'customer_id' => ['nullable', 'integer', 'exists:customers,id'],
             'customer_no' => ['nullable', 'string', 'max:60'],
-            'account_type' => ['required', 'in:savings,current,fixed_deposit'],
+            'account_type' => ['required', 'in:' . implode(',', self::ACCOUNT_TYPES)],
+            'interest_type' => ['nullable', 'in:' . implode(',', self::INTEREST_TYPES)],
             'opening_deposit' => ['nullable', 'numeric', 'min:0'],
             'interest_rate' => ['nullable', 'numeric', 'min:0'],
             'opened_at' => ['nullable', 'date'],
@@ -166,6 +191,7 @@ class SavingsAccountController extends Controller
             'opening_deposit' => $openingDeposit,
             'balance' => $openingDeposit,
             'interest_rate' => round((float) ($validated['interest_rate'] ?? 0), 4),
+            'interest_type' => (string) ($validated['interest_type'] ?? $this->defaultInterestTypeForAccount($accountType)),
             'opened_at' => $validated['opened_at'] ?? now()->toDateString(),
             'status' => (string) ($validated['status'] ?? 'active'),
             'created_by' => $request->user()?->id,
@@ -206,7 +232,7 @@ class SavingsAccountController extends Controller
         $validated = $request->validate([
             'from_date' => ['nullable', 'date'],
             'to_date' => ['nullable', 'date'],
-            'account_type' => ['nullable', 'in:savings,current,fixed_deposit'],
+            'account_type' => ['nullable', 'in:' . implode(',', self::ACCOUNT_TYPES)],
             'status' => ['nullable', 'in:active,dormant,closed'],
             'transaction_type' => ['nullable', 'in:deposit,withdrawal'],
             'search' => ['nullable', 'string', 'max:120'],
@@ -309,7 +335,7 @@ class SavingsAccountController extends Controller
         $validated = $request->validate([
             'from_date' => ['nullable', 'date'],
             'to_date' => ['nullable', 'date'],
-            'account_type' => ['nullable', 'in:savings,current,fixed_deposit'],
+            'account_type' => ['nullable', 'in:' . implode(',', self::ACCOUNT_TYPES)],
             'status' => ['nullable', 'in:active,dormant,closed'],
             'group_by' => ['nullable', 'in:day,month'],
             'search' => ['nullable', 'string', 'max:120'],
@@ -665,6 +691,7 @@ class SavingsAccountController extends Controller
         $prefix = match ($accountType) {
             'current' => 'CUR',
             'fixed_deposit' => 'FD',
+            'investment' => 'INV',
             default => 'SAV',
         };
 

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
 
 interface Candidate {
   id: number;
@@ -93,7 +94,8 @@ type CandidateFull = Candidate & {
 
 export default function Candidates() {
   const [token, setToken] = useState('');
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const apiBase = getApiBaseUrl();
+  const backendOrigin = getBackendOrigin();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [designations, setDesignations] = useState<Designation[]>([]);
@@ -233,7 +235,7 @@ export default function Candidates() {
     if (!tokenToUse) return;
 
     try {
-      const response = await axios.get(`${API_URL}/api/hr/candidates`, {
+      const response = await axios.get(`${apiBase}/hr/candidates`, {
         headers: { Authorization: `Bearer ${tokenToUse}`, Accept: 'application/json' },
       });
       setCandidates(response.data.data || []);
@@ -252,7 +254,7 @@ export default function Candidates() {
     try {
       setProfileLoading(true);
       setShowProfileModal(true);
-      const res = await axios.get(`${API_URL}/api/hr/candidates/${candidate.id}`, {
+      const res = await axios.get(`${apiBase}/hr/candidates/${candidate.id}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       setProfileCandidate(res.data as CandidateFull);
@@ -270,7 +272,7 @@ export default function Candidates() {
     const tokenToUse = authToken || token;
     if (!tokenToUse) return;
     try {
-      const res = await axios.get(`${API_URL}/api/hr/interviews/upcoming`, {
+      const res = await axios.get(`${apiBase}/hr/interviews/upcoming`, {
         headers: { Authorization: `Bearer ${tokenToUse}`, Accept: 'application/json' },
       });
       setUpcomingInterviews(res.data || []);
@@ -284,7 +286,7 @@ export default function Candidates() {
     if (!tokenToUse) return;
 
     try {
-      const response = await axios.get(`${API_URL}/api/hr/departments`, {
+      const response = await axios.get(`${apiBase}/hr/departments`, {
         headers: { Authorization: `Bearer ${tokenToUse}`, Accept: 'application/json' },
       });
       setDepartments(response.data.data || []);
@@ -299,7 +301,7 @@ export default function Candidates() {
     if (!tokenToUse) return;
 
     try {
-      const response = await axios.get(`${API_URL}/api/hr/designations`, {
+      const response = await axios.get(`${apiBase}/hr/designations`, {
         headers: { Authorization: `Bearer ${tokenToUse}`, Accept: 'application/json' },
       });
       setDesignations(response.data.data || []);
@@ -314,7 +316,7 @@ export default function Candidates() {
     if (!tokenToUse) return;
 
     try {
-      const response = await axios.get(`${API_URL}/api/companies`, {
+      const response = await axios.get(`${apiBase}/companies`, {
         headers: { Authorization: `Bearer ${tokenToUse}`, Accept: 'application/json' },
       });
       setBranches(response.data || []);
@@ -329,7 +331,7 @@ export default function Candidates() {
     if (!tokenToUse) return;
 
     try {
-      const response = await axios.get(`${API_URL}/api/hr/employees`, {
+      const response = await axios.get(`${apiBase}/hr/employees`, {
         headers: { Authorization: `Bearer ${tokenToUse}`, Accept: 'application/json' },
       });
       const items = (response.data.data || response.data || []).map((e: any) => ({
@@ -368,7 +370,7 @@ export default function Candidates() {
         interviewers: selectedInterviewers,
       };
       await axios.post(
-        `${API_URL}/api/hr/candidates/${activeCandidate.id}/interviews`,
+        `${apiBase}/hr/candidates/${activeCandidate.id}/interviews`,
         payload,
         { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' } }
       );
@@ -390,7 +392,7 @@ export default function Candidates() {
     setActiveCandidate(candidate);
     setShowDocsModal(true);
     try {
-      const res = await axios.get(`${API_URL}/api/hr/candidates/${candidate.id}/documents`, {
+      const res = await axios.get(`${apiBase}/hr/candidates/${candidate.id}/documents`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       setDocuments(res.data || []);
@@ -407,7 +409,7 @@ export default function Candidates() {
       fd.append('type', docType);
       fd.append('file', docFile);
       if (docNotes) fd.append('notes', docNotes);
-      await axios.post(`${API_URL}/api/hr/candidates/${activeCandidate.id}/documents`, fd, {
+      await axios.post(`${apiBase}/hr/candidates/${activeCandidate.id}/documents`, fd, {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'multipart/form-data' },
       });
       // refresh
@@ -424,7 +426,7 @@ export default function Candidates() {
     if (!activeCandidate) return;
     if (!confirm('Delete this document?')) return;
     try {
-      await axios.delete(`${API_URL}/api/hr/candidates/${activeCandidate.id}/documents/${doc.id}`, {
+      await axios.delete(`${apiBase}/hr/candidates/${activeCandidate.id}/documents/${doc.id}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
@@ -437,7 +439,7 @@ export default function Candidates() {
     if (!activeCandidate) return;
     try {
       const response = await axios.get(
-        `${API_URL}/api/hr/candidates/${activeCandidate.id}/documents/${doc.id}/download`,
+        `${apiBase}/hr/candidates/${activeCandidate.id}/documents/${doc.id}/download`,
         { headers: { Authorization: `Bearer ${token}` }, responseType: 'blob' }
       );
       const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -456,7 +458,7 @@ export default function Candidates() {
     setActiveCandidate(candidate);
     setShowEduModal(true);
     try {
-      const res = await axios.get(`${API_URL}/api/hr/candidates/${candidate.id}/educations`, {
+      const res = await axios.get(`${apiBase}/hr/candidates/${candidate.id}/educations`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       setEducations(res.data || []);
@@ -478,7 +480,7 @@ export default function Candidates() {
         grade: eduGrade || undefined,
         description: eduDescription || undefined,
       };
-      const res = await axios.post(`${API_URL}/api/hr/candidates/${activeCandidate.id}/educations`, payload, {
+      const res = await axios.post(`${apiBase}/hr/candidates/${activeCandidate.id}/educations`, payload, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       setEducations((prev) => [res.data, ...prev]);
@@ -499,7 +501,7 @@ export default function Candidates() {
     if (!activeCandidate) return;
     if (!confirm('Remove this education?')) return;
     try {
-      await axios.delete(`${API_URL}/api/hr/candidates/${activeCandidate.id}/educations/${edu.id}`, {
+      await axios.delete(`${apiBase}/hr/candidates/${activeCandidate.id}/educations/${edu.id}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       setEducations((prev) => prev.filter((e) => e.id !== edu.id));
@@ -512,7 +514,7 @@ export default function Candidates() {
     setActiveCandidate(candidate);
     setShowExpModal(true);
     try {
-      const res = await axios.get(`${API_URL}/api/hr/candidates/${candidate.id}/experiences`, {
+      const res = await axios.get(`${apiBase}/hr/candidates/${candidate.id}/experiences`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       setExperiences(res.data || []);
@@ -534,7 +536,7 @@ export default function Candidates() {
         responsibilities: expResp || undefined,
         achievements: expAch || undefined,
       };
-      const res = await axios.post(`${API_URL}/api/hr/candidates/${activeCandidate.id}/experiences`, payload, {
+      const res = await axios.post(`${apiBase}/hr/candidates/${activeCandidate.id}/experiences`, payload, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       setExperiences((prev) => [res.data, ...prev]);
@@ -555,7 +557,7 @@ export default function Candidates() {
     if (!activeCandidate) return;
     if (!confirm('Remove this experience?')) return;
     try {
-      await axios.delete(`${API_URL}/api/hr/candidates/${activeCandidate.id}/experiences/${exp.id}`, {
+      await axios.delete(`${apiBase}/hr/candidates/${activeCandidate.id}/experiences/${exp.id}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       setExperiences((prev) => prev.filter((e) => e.id !== exp.id));
@@ -625,14 +627,14 @@ export default function Candidates() {
     try {
       if (editingCandidate) {
         formData.append('_method', 'PUT');
-        await axios.post(`${API_URL}/api/hr/candidates/${editingCandidate.id}`, formData, {
+        await axios.post(`${apiBase}/hr/candidates/${editingCandidate.id}`, formData, {
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'multipart/form-data',
           },
         });
       } else {
-        await axios.post(`${API_URL}/api/hr/candidates`, formData, {
+        await axios.post(`${apiBase}/hr/candidates`, formData, {
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'multipart/form-data',
@@ -671,7 +673,7 @@ export default function Candidates() {
 
   const handleUpdateStatus = async (candidateId: number, newStatus: string) => {
     try {
-      await axios.put(`${API_URL}/api/hr/candidates/${candidateId}`, {
+      await axios.put(`${apiBase}/hr/candidates/${candidateId}`, {
         status: newStatus,
       }, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
@@ -686,7 +688,7 @@ export default function Candidates() {
 
   const handleGenerateAppointmentLetter = async (candidate: Candidate) => {
     try {
-      await axios.post(`${API_URL}/api/hr/candidates/${candidate.id}/generate-appointment-letter`, {}, {
+      await axios.post(`${apiBase}/hr/candidates/${candidate.id}/generate-appointment-letter`, {}, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       fetchCandidates();
@@ -715,7 +717,7 @@ export default function Candidates() {
     };
 
     try {
-      await axios.post(`${API_URL}/api/hr/candidates/${convertingCandidate.id}/convert-to-employee`, convertData, {
+      await axios.post(`${apiBase}/hr/candidates/${convertingCandidate.id}/convert-to-employee`, convertData, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       fetchCandidates();
@@ -735,7 +737,7 @@ export default function Candidates() {
     if (!confirm('Are you sure you want to delete this candidate?')) return;
 
     try {
-      await axios.delete(`${API_URL}/api/hr/candidates/${id}`, {
+      await axios.delete(`${apiBase}/hr/candidates/${id}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
       fetchCandidates();
@@ -748,7 +750,7 @@ export default function Candidates() {
 
   const downloadCv = async (candidate: Candidate) => {
     try {
-      const response = await axios.get(`${API_URL}/api/hr/candidates/${candidate.id}/download-cv`, {
+      const response = await axios.get(`${apiBase}/hr/candidates/${candidate.id}/download-cv`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         responseType: 'blob',
       });
@@ -768,7 +770,7 @@ export default function Candidates() {
 
   const downloadAppointmentLetter = async (candidate: Candidate) => {
     try {
-      const response = await axios.get(`${API_URL}/api/hr/candidates/${candidate.id}/download-appointment-letter`, {
+      const response = await axios.get(`${apiBase}/hr/candidates/${candidate.id}/download-appointment-letter`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         responseType: 'blob',
       });
@@ -1479,7 +1481,7 @@ export default function Candidates() {
                 <h3 className="text-xl font-semibold text-gray-900 flex items-center gap-3">
                   {(profileCandidate?.photo_url || profileCandidate?.photo_path) ? (
                     <img
-                      src={profileCandidate?.photo_url || `${API_URL}/storage/${profileCandidate?.photo_path}`}
+                      src={profileCandidate?.photo_url || `${backendOrigin}/storage/${profileCandidate?.photo_path}`}
                       alt="avatar"
                       className="w-10 h-10 rounded-full object-cover border border-gray-200"
                     />
@@ -1722,7 +1724,7 @@ export default function Candidates() {
                                   defaultValue={iv.score ?? ''}
                                   onBlur={async (e) => {
                                     try {
-                                      await axios.put(`${API_URL}/api/hr/candidates/${profileCandidate.id}/interviews/${iv.id}`, { score: e.target.value === '' ? null : parseFloat(e.target.value) }, {
+                                      await axios.put(`${apiBase}/hr/candidates/${profileCandidate.id}/interviews/${iv.id}`, { score: e.target.value === '' ? null : parseFloat(e.target.value) }, {
                                         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
                                       });
                                     } catch (err: any) {
@@ -1738,7 +1740,7 @@ export default function Candidates() {
                                   defaultValue={iv.result || 'pending'}
                                   onChange={async (e) => {
                                     try {
-                                      await axios.put(`${API_URL}/api/hr/candidates/${profileCandidate.id}/interviews/${iv.id}`, { result: e.target.value }, {
+                                      await axios.put(`${apiBase}/hr/candidates/${profileCandidate.id}/interviews/${iv.id}`, { result: e.target.value }, {
                                         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
                                       });
                                     } catch (err: any) {
@@ -1759,7 +1761,7 @@ export default function Candidates() {
                                   className="text-indigo-600 hover:underline"
                                   onClick={async () => {
                                     try {
-                                      const res = await axios.get(`${API_URL}/api/hr/candidates/${profileCandidate.id}`, {
+                                      const res = await axios.get(`${apiBase}/hr/candidates/${profileCandidate.id}`, {
                                         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
                                       });
                                       setProfileCandidate(res.data as CandidateFull);

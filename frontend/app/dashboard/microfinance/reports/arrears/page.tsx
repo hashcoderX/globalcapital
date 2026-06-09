@@ -1,6 +1,7 @@
 'use client';
 
 import axios from 'axios';
+import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
@@ -14,6 +15,7 @@ type LoanRow = {
   field_officer?: string | null;
   due_date?: string | null;
   refundable_amount?: number | string | null;
+  installment_amount?: number | string | null;
   arrears_balance?: number | string | null;
 };
 
@@ -32,11 +34,12 @@ type ArrearsRow = {
   totalPayable: number;
   paidAmount: number;
   pendingAmount: number;
+  rawArrearsAmount: number;
   arrearsAmount: number;
   status: string;
 };
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = getApiBaseUrl();
 
 export default function ArrearsReportPage() {
   const router = useRouter();
@@ -117,10 +120,16 @@ export default function ArrearsReportPage() {
             const totalPayable = Number(loan.refundable_amount || 0);
             const paidAmount = paidByLoan.get(loanId) || 0;
             const pendingAmount = Math.max(totalPayable - paidAmount, 0);
-            const arrearsAmount = Math.max(Number(loan.arrears_balance || 0), 0);
+            const rawArrearsAmount = Math.max(Number(loan.arrears_balance || 0), 0);
+            const installmentAmount = Math.max(Number(loan.installment_amount || 0), 0);
 
             const isOverdue = overdueDays > 0 && pendingAmount > 0;
-            const status = arrearsAmount > 0 ? 'Arrears' : isOverdue ? 'Overdue' : 'Current';
+            const status = rawArrearsAmount > 0 ? 'Arrears' : isOverdue ? 'Overdue' : 'Current';
+            const arrearsAmount = rawArrearsAmount > 0
+              ? rawArrearsAmount
+              : isOverdue
+                ? (installmentAmount > 0 ? installmentAmount : pendingAmount)
+                : 0;
 
             return {
               loanId,
@@ -132,6 +141,7 @@ export default function ArrearsReportPage() {
               totalPayable,
               paidAmount,
               pendingAmount,
+              rawArrearsAmount,
               arrearsAmount,
               status,
             } as ArrearsRow;
@@ -163,7 +173,7 @@ export default function ArrearsReportPage() {
         return false;
       }
 
-      if (statusFilter === 'arrears' && row.arrearsAmount <= 0) {
+      if (statusFilter === 'arrears' && row.rawArrearsAmount <= 0) {
         return false;
       }
 
@@ -187,7 +197,7 @@ export default function ArrearsReportPage() {
     );
 
     const overdueCount = filteredRows.filter((row) => row.status === 'Overdue').length;
-    const arrearsCount = filteredRows.filter((row) => row.arrearsAmount > 0).length;
+    const arrearsCount = filteredRows.filter((row) => row.rawArrearsAmount > 0).length;
 
     return {
       ...totals,
@@ -362,11 +372,11 @@ export default function ArrearsReportPage() {
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3">
             <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Accounts</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.accountCount}</p>
+              <p className="text-xs font-extrabold text-slate-900 mt-1">{summary.accountCount}</p>
             </div>
             <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Overdue / Arrears</p>
-              <p className="text-2xl font-extrabold text-amber-700 mt-1">{summary.overdueCount} / {summary.arrearsCount}</p>
+              <p className="text-xs font-extrabold text-amber-700 mt-1">{summary.overdueCount} / {summary.arrearsCount}</p>
             </div>
             <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Pending Amount</p>

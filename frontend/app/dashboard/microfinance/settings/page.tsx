@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -54,7 +54,7 @@ type LoanLifecycleRow = {
 
 type TabType = 'routes' | 'groups' | 'centers' | 'penalty' | 'loan_lifecycle';
 
-const API_BASE = 'http://localhost:8000/api/microfinance/settings';
+const API_BASE = '/api/microfinance/settings';
 const shellCardClass =
   'bg-white/75 backdrop-blur-xl rounded-3xl border border-white/60 shadow-[0_18px_45px_-20px_rgba(14,116,144,0.45)]';
 const inputClass =
@@ -140,7 +140,7 @@ export default function MicrofinanceSettingsPage() {
         axios.get(`${API_BASE}/groups`, { headers }),
         axios.get(`${API_BASE}/centers`, { headers }),
         axios.get(`${API_BASE}/penalty-rate`, { headers }),
-        axios.get('http://localhost:8000/api/microfinance/loan-requests', { headers }),
+        axios.get('/api/microfinance/loan-requests', { headers }),
       ]);
 
       setRoutes(routeRes.data);
@@ -295,7 +295,7 @@ export default function MicrofinanceSettingsPage() {
     setLifecycleActionLoading(true);
     try {
       await axios.post(
-        `http://localhost:8000/api/microfinance/loan-requests/${lifecycleModal.loan.id}/lifecycle`,
+        `/api/microfinance/loan-requests/${lifecycleModal.loan.id}/lifecycle`,
         {
           action: lifecycleModal.action,
           reason: lifecycleModal.reason || null,
@@ -431,11 +431,11 @@ export default function MicrofinanceSettingsPage() {
 
         <div className="flex flex-wrap gap-3">
           {[
-            { key: 'routes', label: 'Routes', icon: '🛣️' },
-            { key: 'centers', label: 'Centers', icon: '🏢' },
-            { key: 'groups', label: 'Groups', icon: '👥' },
-            { key: 'penalty', label: 'Penalty Rate', icon: '⚖️' },
-            { key: 'loan_lifecycle', label: 'Loan Hold/Close', icon: '🧷' },
+            { key: 'routes', label: 'Routes', icon: '???' },
+            { key: 'centers', label: 'Centers', icon: '??' },
+            { key: 'groups', label: 'Groups', icon: '??' },
+            { key: 'penalty', label: 'Penalty Rate', icon: '??' },
+            { key: 'loan_lifecycle', label: 'Loan Hold/Close', icon: '??' },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -494,7 +494,7 @@ export default function MicrofinanceSettingsPage() {
                   <div key={item.id} className="rounded-2xl border border-cyan-100/80 bg-white/85 p-4 shadow-sm flex items-center justify-between">
                     <div>
                       <p className="font-semibold text-slate-900">{item.name}</p>
-                      <p className="text-xs text-slate-500">Code: {item.code} â€¢ {item.is_active ? 'Active' : 'Inactive'}</p>
+                      <p className="text-xs text-slate-500">Code: {item.code} • {item.is_active ? 'Active' : 'Inactive'}</p>
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => setRouteForm(item)} className="text-xs px-2.5 py-1.5 bg-amber-100 text-amber-700 rounded-lg font-semibold">Edit</button>
@@ -580,7 +580,7 @@ export default function MicrofinanceSettingsPage() {
                   <div key={item.id} className="rounded-2xl border border-cyan-100/80 bg-white/85 p-4 shadow-sm flex items-center justify-between">
                     <div>
                       <p className="font-semibold text-slate-900">{item.name}</p>
-                      <p className="text-xs text-slate-500">Code: {item.code} â€¢ Route: {item.route?.name ?? 'N/A'} â€¢ Center: {item.center?.name ?? 'N/A'}</p>
+                      <p className="text-xs text-slate-500">Code: {item.code} • Route: {item.route?.name ?? 'N/A'} • Center: {item.center?.name ?? 'N/A'}</p>
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => setGroupForm({ id: item.id, mf_route_id: item.mf_route_id, mf_center_id: item.mf_center_id, name: item.name, code: item.code, is_active: item.is_active })} className="text-xs px-2.5 py-1.5 bg-amber-100 text-amber-700 rounded-lg font-semibold">Edit</button>
@@ -653,7 +653,7 @@ export default function MicrofinanceSettingsPage() {
                   <div key={item.id} className="rounded-2xl border border-cyan-100/80 bg-white/85 p-4 shadow-sm flex items-center justify-between">
                     <div>
                       <p className="font-semibold text-slate-900">{item.name}</p>
-                      <p className="text-xs text-slate-500">Code: {item.code} â€¢ Route: {item.route?.name ?? 'N/A'} â€¢ Day: {item.meeting_day || 'N/A'}</p>
+                      <p className="text-xs text-slate-500">Code: {item.code} • Route: {item.route?.name ?? 'N/A'} • Day: {item.meeting_day || 'N/A'}</p>
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => setCenterForm({ id: item.id, mf_route_id: item.mf_route_id, name: item.name, code: item.code, meeting_day: item.meeting_day ?? '', is_active: item.is_active })} className="text-xs px-2.5 py-1.5 bg-amber-100 text-amber-700 rounded-lg font-semibold">Edit</button>
@@ -885,7 +885,7 @@ export default function MicrofinanceSettingsPage() {
                 {lifecycleModal.action === 'hold' ? 'Put Loan On Hold' : 'Close Loan'}
               </h3>
               <p className="mt-2 text-sm text-slate-600">
-                Loan: {lifecycleModal.loan.loan_code || `LR-${lifecycleModal.loan.id}`} â€¢ Customer: {lifecycleModal.loan.customer_name || '-'}
+                Loan: {lifecycleModal.loan.loan_code || `LR-${lifecycleModal.loan.id}`} • Customer: {lifecycleModal.loan.customer_name || '-'}
               </p>
               <textarea
                 className="mt-3 w-full rounded-xl border border-cyan-100 bg-white px-3 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-cyan-200"

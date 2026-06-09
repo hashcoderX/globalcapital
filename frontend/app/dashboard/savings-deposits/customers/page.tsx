@@ -56,7 +56,7 @@ export default function SavingsCustomerRegistrationPage() {
   const fetchCustomers = async (authToken: string) => {
     setLoadingCustomers(true);
     try {
-      const response = await axios.get('http://localhost:8000/api/customers', {
+      const response = await axios.get('/api/customers', {
         headers: {
           Authorization: `Bearer ${authToken}`,
           Accept: 'application/json',
@@ -90,7 +90,7 @@ export default function SavingsCustomerRegistrationPage() {
     if (!token) return;
 
     try {
-      const response = await axios.get('http://localhost:8000/api/customers/generate-code', {
+      const response = await axios.get('/api/customers/generate-code', {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
@@ -131,7 +131,7 @@ export default function SavingsCustomerRegistrationPage() {
         permanent_address: permanentAddress.trim(),
       };
 
-      const response = await axios.post('http://localhost:8000/api/customers', payload, {
+      const response = await axios.post('/api/customers', payload, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',

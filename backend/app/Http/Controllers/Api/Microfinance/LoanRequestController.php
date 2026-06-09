@@ -1025,7 +1025,88 @@ class LoanRequestController extends Controller
             $query->whereRaw('LOWER(TRIM(field_officer)) = ?', [mb_strtolower($fieldOfficer)]);
         }
 
-        return response()->json($query->get());
+        $loans = $query->get();
+        $this->attachCustomerPhotoUrls($loans);
+
+        return response()->json($loans);
+    }
+
+    private function attachCustomerPhotoUrls($loans): void
+    {
+        if ($loans->isEmpty()) {
+            return;
+        }
+
+        $customerCodes = $loans
+            ->map(fn ($loan) => strtoupper(trim((string) $loan->customer_no)))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $nics = $loans
+            ->map(fn ($loan) => trim((string) $loan->nic))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $customersByCode = collect();
+        if ($customerCodes->isNotEmpty()) {
+            $customersByCode = Customer::query()
+                ->whereIn(DB::raw('UPPER(customer_code)'), $customerCodes->all())
+                ->whereNotNull('photo_path')
+                ->orderByDesc('id')
+                ->get()
+                ->unique(fn (Customer $customer) => strtoupper((string) $customer->customer_code))
+                ->keyBy(fn (Customer $customer) => strtoupper((string) $customer->customer_code));
+        }
+
+        $customersByNic = collect();
+        if ($nics->isNotEmpty()) {
+            $customersByNic = Customer::query()
+                ->whereIn('nic_passport', $nics->all())
+                ->whereNotNull('photo_path')
+                ->orderByDesc('id')
+                ->get()
+                ->unique('nic_passport')
+                ->keyBy('nic_passport');
+        }
+
+        foreach ($loans as $loan) {
+            $loan->setAttribute(
+                'customer_photo_url',
+                $this->resolveLoanCustomerPhotoUrl($loan, $customersByCode, $customersByNic)
+            );
+        }
+    }
+
+    private function resolveLoanCustomerPhotoUrl(
+        MicrofinanceLoanRequest $loan,
+        $customersByCode,
+        $customersByNic
+    ): ?string {
+        foreach ($loan->documents as $document) {
+            if (stripos((string) $document->document_type, 'customer photo') === false) {
+                continue;
+            }
+
+            if (!$document->file_path) {
+                continue;
+            }
+
+            return $document->file_url;
+        }
+
+        $customerCode = strtoupper(trim((string) $loan->customer_no));
+        if ($customerCode !== '' && $customersByCode->has($customerCode)) {
+            return $customersByCode->get($customerCode)?->photo_url;
+        }
+
+        $nic = trim((string) $loan->nic);
+        if ($nic !== '' && $customersByNic->has($nic)) {
+            return $customersByNic->get($nic)?->photo_url;
+        }
+
+        return null;
     }
 
     public function meta(Request $request)
@@ -1361,6 +1442,9 @@ class LoanRequestController extends Controller
             'insurance_charges' => 'nullable|numeric|min:0',
             'charge_payment_mode' => 'required|in:deduct_from_loan,hand_cash',
             'loan_request_date' => 'nullable|date',
+            'loan_end_date' => 'nullable|date',
+            'next_payment_date' => 'nullable|date',
+            'due_date' => 'nullable|date',
             'guarantors' => 'nullable|array',
             'guarantors.*.name' => 'required|string|max:255',
             'guarantors.*.nic' => 'nullable|string|max:100',
@@ -1445,6 +1529,21 @@ class LoanRequestController extends Controller
                 : $loanAmount,
             'loan_request_date' => $validated['loan_request_date'] ?? $loanRequest->loan_request_date,
         ]);
+
+        if (array_key_exists('loan_end_date', $validated)) {
+            $loanRequest->loan_end_date = $validated['loan_end_date'] ?? null;
+        }
+
+        $collectionDate = $validated['due_date'] ?? $validated['next_payment_date'] ?? null;
+        if ($collectionDate !== null && $collectionDate !== '') {
+            $loanRequest->next_payment_date = $collectionDate;
+            $loanRequest->setAttribute('due_date', $collectionDate);
+
+            $graceDays = max((int) ($loanRequest->penalty_grace_days ?? 2), 0);
+            $loanRequest->penalty_starts_on = (new \DateTimeImmutable((string) $collectionDate))
+                ->modify('+' . ($graceDays + 1) . ' days')
+                ->format('Y-m-d');
+        }
 
         $loanRequest->save();
 
@@ -1567,7 +1666,10 @@ class LoanRequestController extends Controller
         $saved = [];
 
         foreach ($documents as $index => $file) {
-            $path = $file->store('public/microfinance/loan-requests/' . $loanRequest->id . '/documents');
+            $path = $file->store(
+                'microfinance/loan-requests/' . $loanRequest->id . '/documents',
+                'public'
+            );
 
             $saved[] = $loanRequest->documents()->create([
                 'document_type' => $documentTypes[$index],

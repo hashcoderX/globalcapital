@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
 
 type AuthPermission = {
   id: number;
@@ -38,7 +39,7 @@ export default function CreditDashboardPage() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loadingPrivileges, setLoadingPrivileges] = useState(true);
   const router = useRouter();
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const apiBase = getApiBaseUrl();
 
   const normalizeText = (value: string) =>
     String(value || '')
@@ -105,7 +106,7 @@ export default function CreditDashboardPage() {
   const fetchAuthUser = async (authToken: string) => {
     setLoadingPrivileges(true);
     try {
-      const response = await axios.get(`${API_URL}/api/user`, {
+      const response = await axios.get(`${apiBase}/user`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       setAuthUser(response.data || null);
@@ -199,10 +200,29 @@ export default function CreditDashboardPage() {
           </button>
         </div>
 
+        <div
+          className="rounded-3xl border border-indigo-200 bg-gradient-to-r from-indigo-600 via-violet-600 to-cyan-600 p-6 text-white shadow-lg cursor-pointer hover:opacity-95 transition"
+          onClick={() => router.push('/dashboard/office-collections')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') router.push('/dashboard/office-collections');
+          }}
+          role="button"
+          tabIndex={0}
+        >
+          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-indigo-100">Office operations</p>
+          <h2 className="mt-1 text-2xl font-extrabold">Collection Center</h2>
+          <p className="text-sm text-indigo-50 mt-1 max-w-2xl">
+            Collect installments for credit loans, finance, micro credit, and mortgages from one desk — built for branch office collection.
+          </p>
+          <span className="mt-4 inline-flex rounded-xl bg-white px-4 py-2 text-sm font-bold text-indigo-700">
+            Open Collection Center →
+          </span>
+        </div>
+
         <div className="rounded-3xl border border-emerald-100 bg-white/85 backdrop-blur-sm p-6">
           <div className="mb-5">
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-700">Section</p>
-            <h2 className="mt-1 text-2xl font-extrabold text-slate-900">Loan Management</h2>
+            <h2 className="mt-1 text-2xl font-extrabold text-slate-900">Credit Products</h2>
             <p className="text-sm text-slate-600 mt-1">Manage lending operations across all credit products.</p>
           </div>
 

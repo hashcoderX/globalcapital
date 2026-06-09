@@ -1,10 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [forgotEmail, setForgotEmail] = useState('');
@@ -16,15 +18,29 @@ export default function Home() {
   const [showModal, setShowModal] = useState(false);
   const [showForgotModal, setShowForgotModal] = useState(false);
   const router = useRouter();
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return (
+      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-sky-100 via-cyan-100 to-emerald-100 px-4 sm:px-6 lg:px-8">
+        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-cyan-600" />
+      </div>
+    );
+  }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const response = await axios.post(`${API_URL}/api/login`, {
-        email: email.trim().toLowerCase(),
-        password: password.trim(),
+      const normalizedEmail = email.trim().toLowerCase();
+      const normalizedPassword = password.trim();
+
+      const response = await axios.post(`${getApiBaseUrl()}/login`, {
+        email: normalizedEmail,
+        password: normalizedPassword,
       });
       localStorage.setItem('token', response.data.token);
       if (response.data?.user) {
@@ -32,10 +48,25 @@ export default function Home() {
       }
       router.push('/dashboard');
     } catch (error: any) {
-      const message =
-        error?.response?.data?.message ||
-        error?.response?.data?.errors?.email?.[0] ||
-        'Login failed. Please check your credentials.';
+      const backendMessage = error?.response?.data?.message;
+      const backendErrors = error?.response?.data?.errors;
+
+      let firstValidationError = '';
+      if (backendErrors && typeof backendErrors === 'object') {
+        const firstKey = Object.keys(backendErrors)[0];
+        const firstValue = firstKey ? backendErrors[firstKey] : undefined;
+        if (Array.isArray(firstValue) && firstValue[0]) {
+          firstValidationError = String(firstValue[0]);
+        } else if (firstValue) {
+          firstValidationError = String(firstValue);
+        }
+      }
+
+      const message = String(
+        backendMessage ||
+          firstValidationError ||
+          'Login failed. Please check your credentials.'
+      );
       setModalMessage(String(message));
       setShowModal(true);
     } finally {
@@ -54,7 +85,7 @@ export default function Home() {
 
     setForgotLoading(true);
     try {
-      const response = await axios.post(`${API_URL}/api/forgot-password`, {
+      const response = await axios.post(`${getApiBaseUrl()}/forgot-password`, {
         email: forgotEmail.trim().toLowerCase(),
         password: forgotPassword,
         password_confirmation: forgotPasswordConfirm,

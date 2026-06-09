@@ -70,6 +70,19 @@ class LoanRequestController extends Controller
             $query->where('approval_level', (int) $request->get('approval_level'));
         }
 
+        if ($request->filled('q')) {
+            $search = trim((string) $request->get('q'));
+            if ($search !== '') {
+                $like = '%' . $search . '%';
+                $query->where(function ($builder) use ($like) {
+                    $builder->where('request_no', 'like', $like)
+                        ->orWhere('customer_full_name', 'like', $like)
+                        ->orWhere('customer_no', 'like', $like)
+                        ->orWhere('loan_product', 'like', $like);
+                });
+            }
+        }
+
         return response()->json($query->paginate($perPage));
     }
 
@@ -253,6 +266,18 @@ class LoanRequestController extends Controller
         $loanRequest->approval_note = $validated['note'] ?? null;
         $loanRequest->last_action_by = $request->user()?->id;
         $loanRequest->last_action_at = now();
+
+        if ($validated['action'] === 'approve' && $loanRequest->status === 'approved' && empty($loanRequest->due_date)) {
+            $startDate = now()->toDateString();
+            $loanRequest->due_date = $startDate;
+            $frequency = strtolower(trim((string) $loanRequest->installment_frequency));
+            $loanRequest->next_due_date = match ($frequency) {
+                'weekly' => now()->addWeek()->toDateString(),
+                'daily' => now()->addDay()->toDateString(),
+                default => now()->addMonth()->toDateString(),
+            };
+        }
+
         $loanRequest->save();
 
         $documentMessage = null;

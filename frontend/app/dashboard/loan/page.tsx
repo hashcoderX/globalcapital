@@ -54,6 +54,14 @@ export default function LoanDashboardPage() {
           <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
+              onClick={() => router.push("/dashboard/office-collections")}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white text-sm font-semibold shadow-sm flex items-center gap-2"
+            >
+              <Wallet className="h-4 w-4" />
+              Office Collection
+            </button>
+            <button
+              type="button"
               onClick={() => router.push("/dashboard/loan/request")}
               className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white text-sm font-semibold shadow-sm flex items-center gap-2"
             >
@@ -116,6 +124,16 @@ export default function LoanDashboardPage() {
               <ClipboardList className="h-5 w-5 text-violet-700" />
               <p className="mt-2 text-sm font-bold text-slate-900">Request Queue</p>
               <p className="mt-1 text-xs text-slate-600">Track request statuses and approval progress levels.</p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard/office-collections")}
+              className="rounded-2xl border border-indigo-200 bg-white hover:bg-indigo-50 text-left p-4 transition-colors"
+            >
+              <Wallet className="h-5 w-5 text-indigo-700" />
+              <p className="mt-2 text-sm font-bold text-slate-900">Office Collection</p>
+              <p className="mt-1 text-xs text-slate-600">Collect approved loan installments at the branch office desk.</p>
             </button>
 
             <button

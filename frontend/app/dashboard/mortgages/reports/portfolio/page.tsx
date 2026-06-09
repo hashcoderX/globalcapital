@@ -1,7 +1,7 @@
 'use client';
 
 import axios from 'axios';
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Download, Filter, Layers, PieChart, TrendingUp } from 'lucide-react';
 
@@ -109,10 +109,10 @@ function downloadCsv(fileName: string, headers: string[], rows: Array<Array<stri
   URL.revokeObjectURL(url);
 }
 
-export default function MortgagePortfolioReportPage() {
+function MortgagePortfolioReportContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const API_URL = '';
 
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
@@ -165,7 +165,7 @@ export default function MortgagePortfolioReportPage() {
 
     setLoading(true);
     try {
-      const response = await axios.get(`${API_URL}/api/mortgages/reports/portfolio`, {
+      const response = await axios.get(`/api/mortgages/reports/portfolio`, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
@@ -619,5 +619,19 @@ export default function MortgagePortfolioReportPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function MortgagePortfolioReportPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
+        </div>
+      }
+    >
+      <MortgagePortfolioReportContent />
+    </Suspense>
   );
 }

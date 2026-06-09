@@ -120,6 +120,30 @@ function formatDate(v: unknown): string {
   return d.toLocaleDateString();
 }
 
+type CustomerLike = {
+  customer_code?: string | null;
+  nic_passport?: string | null;
+} | null | undefined;
+
+function looksLikeNic(value: string): boolean {
+  const normalized = value.trim().toUpperCase();
+  if (!normalized) return false;
+  return /^\d{9}[VX]$|^\d{12}$/.test(normalized);
+}
+
+function looksLikeProperCustomerCode(value: string): boolean {
+  return /^CUS-\d{6}-\d{5}$/i.test(value.trim());
+}
+
+function displayCustomerNo(customer: CustomerLike): string {
+  const code = String(customer?.customer_code || '').trim();
+  const nic = String(customer?.nic_passport || '').trim();
+  if (!code) return '-';
+  if (nic && code.toUpperCase() === nic.toUpperCase()) return '-';
+  if (!looksLikeProperCustomerCode(code) && looksLikeNic(code)) return '-';
+  return code;
+}
+
 function isDraftProductType(productType: unknown): boolean {
   const normalized = String(productType || '')
     .toLowerCase()
@@ -218,7 +242,7 @@ export default function FinanceCollectionsPage() {
   } | null>(null);
 
   const fetchFinanceRows = async (authToken: string) => {
-    const response = await fetch('http://localhost:8000/api/finances?per_page=1000', {
+    const response = await fetch('/api/finances?per_page=1000', {
       headers: {
         Authorization: `Bearer ${authToken}`,
         Accept: 'application/json',
@@ -274,13 +298,15 @@ export default function FinanceCollectionsPage() {
 
     return statusMatched.filter((row) => {
       const customerName = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim().toLowerCase();
-      const customerCode = String(row.customer?.customer_code || '').toLowerCase();
+      const customerCode = displayCustomerNo(row.customer).toLowerCase();
+      const nic = String(row.customer?.nic_passport || '').toLowerCase();
       const phone = String(row.customer?.phone || '').toLowerCase();
       const financeId = String(row.id || '').toLowerCase();
       const product = String(row.product_type || '').toLowerCase();
       const vehicleNo = String(row.vehicle_details?.vehicle_no || '').toLowerCase();
       return customerName.includes(term)
         || customerCode.includes(term)
+        || nic.includes(term)
         || phone.includes(term)
         || financeId.includes(term)
         || product.includes(term)
@@ -315,7 +341,7 @@ export default function FinanceCollectionsPage() {
     setSelectedRecord(null);
 
     try {
-      const response = await fetch(`http://localhost:8000/api/finances/${id}`, {
+      const response = await fetch(`/api/finances/${id}`, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
@@ -367,7 +393,7 @@ export default function FinanceCollectionsPage() {
       setCollecting(true);
       setCollectionError('');
 
-      const response = await fetch(`http://localhost:8000/api/finances/${selectedRecord.id}/collections`, {
+      const response = await fetch(`/api/finances/${selectedRecord.id}/collections`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -555,7 +581,7 @@ export default function FinanceCollectionsPage() {
                     return (
                       <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
                         <td className="px-3 py-2 font-semibold text-slate-900">#{row.id}</td>
-                        <td className="px-3 py-2">{row.customer?.customer_code || '-'}</td>
+                        <td className="px-3 py-2">{displayCustomerNo(row.customer)}</td>
                         <td className="px-3 py-2">{customer || '-'}</td>
                         <td className="px-3 py-2">{row.customer?.phone || '-'}</td>
                         <td className="px-3 py-2">{row.vehicle_details?.vehicle_no || '-'}</td>
@@ -661,7 +687,7 @@ export default function FinanceCollectionsPage() {
                     <div className="rounded-xl border border-cyan-100 bg-white p-4">
                       <p className="text-[11px] font-bold uppercase tracking-wide text-cyan-700">Customer</p>
                       <p className="mt-2 text-sm font-semibold text-slate-900">{`${selectedRecord.customer?.first_name || ''} ${selectedRecord.customer?.last_name || ''}`.trim() || '-'}</p>
-                      <p className="text-xs text-slate-500 mt-1">{selectedRecord.customer?.customer_code || '-'}</p>
+                      <p className="text-xs text-slate-500 mt-1">Customer No: {displayCustomerNo(selectedRecord.customer)}</p>
                       <p className="text-xs text-slate-500">NIC: {selectedRecord.customer?.nic_passport || '-'}</p>
                       <p className="text-xs text-slate-500">Phone: {selectedRecord.customer?.phone || '-'}</p>
                       <p className="text-xs text-slate-500">Email: {selectedRecord.customer?.email || '-'}</p>

@@ -62,4 +62,14 @@ class Mortgage extends Model
     {
         return $this->belongsTo(Customer::class);
     }
+
+    public function payments()
+    {
+        return $this->hasMany(MortgagePayment::class);
+    }
+
+    public function documents()
+    {
+        return $this->hasMany(MortgageDocument::class);
+    }
 }

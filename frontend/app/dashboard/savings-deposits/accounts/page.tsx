@@ -1,9 +1,36 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
-import { ArrowLeft, PiggyBank, Search } from 'lucide-react';
+import {
+  ArrowLeft,
+  Banknote,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  CircleDollarSign,
+  Landmark,
+  Lock,
+  PiggyBank,
+  Search,
+  Sparkles,
+  TrendingUp,
+  UserCheck,
+  Wallet,
+  X,
+} from 'lucide-react';
+import {
+  DEFAULT_INTEREST_BY_ACCOUNT,
+  formatAccountTypeLabel,
+  formatInterestTypeLabel,
+  interestTypeUsage,
+  RECOMMENDED_INTEREST_BY_ACCOUNT,
+  SAVINGS_ACCOUNT_TYPES,
+  SAVINGS_INTEREST_TYPES,
+  type SavingsAccountType,
+  type SavingsInterestType,
+} from '@/lib/savingsAccountConfig';
 
 type CustomerSummary = {
   id: number;
@@ -17,7 +44,8 @@ type CustomerSummary = {
 type SavingsAccountRow = {
   id: number;
   account_number?: string | null;
-  account_type?: 'savings' | 'current' | 'fixed_deposit' | null;
+  account_type?: SavingsAccountType | string | null;
+  interest_type?: SavingsInterestType | string | null;
   opening_deposit?: number | string | null;
   balance?: number | string | null;
   interest_rate?: number | string | null;
@@ -25,15 +53,48 @@ type SavingsAccountRow = {
   customer?: CustomerSummary | null;
 };
 
+const STEPS = [
+  { id: 1, label: 'Customer', short: '1' },
+  { id: 2, label: 'Account setup', short: '2' },
+  { id: 3, label: 'Confirm', short: '3' },
+] as const;
+
+const ACCOUNT_ICONS: Record<SavingsAccountType, typeof PiggyBank> = {
+  savings: PiggyBank,
+  current: Wallet,
+  fixed_deposit: Lock,
+  investment: TrendingUp,
+};
+
+const ACCOUNT_ACCENT: Record<SavingsAccountType, string> = {
+  savings: 'from-amber-500 to-orange-500',
+  current: 'from-sky-500 to-cyan-500',
+  fixed_deposit: 'from-violet-500 to-purple-500',
+  investment: 'from-emerald-500 to-teal-500',
+};
+
+const inputClass =
+  'w-full rounded-xl border border-orange-200/80 bg-white px-3.5 py-2.5 text-sm text-black shadow-sm transition focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-200/80 [color-scheme:light] [&::-webkit-datetime-edit]:text-black';
+
 function amount(v: unknown): string {
   const n = Number(v);
   if (!Number.isFinite(n)) return '-';
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function accountTypeBadgeClass(type: string | null | undefined): string {
+  const t = String(type || '').toLowerCase();
+  if (t === 'investment') return 'bg-emerald-100 text-emerald-800 border-emerald-200';
+  if (t === 'fixed_deposit') return 'bg-violet-100 text-violet-800 border-violet-200';
+  if (t === 'current') return 'bg-sky-100 text-sky-800 border-sky-200';
+  return 'bg-amber-100 text-amber-800 border-amber-200';
+}
+
 export default function SavingsOpenAccountPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
+  const [activeStep, setActiveStep] = useState(1);
+  const [showInterestGuide, setShowInterestGuide] = useState(false);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [openingAccount, setOpeningAccount] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -44,11 +105,40 @@ export default function SavingsOpenAccountPage() {
   const [customerSearchText, setCustomerSearchText] = useState('');
   const [searchingCustomers, setSearchingCustomers] = useState(false);
   const [customerResults, setCustomerResults] = useState<CustomerSummary[]>([]);
-  const [accountType, setAccountType] = useState<'savings' | 'current' | 'fixed_deposit'>('savings');
+  const [accountType, setAccountType] = useState<SavingsAccountType>('savings');
+  const [interestType, setInterestType] = useState<SavingsInterestType>(DEFAULT_INTEREST_BY_ACCOUNT.savings);
   const [openingDeposit, setOpeningDeposit] = useState('0');
   const [interestRate, setInterestRate] = useState('4.5');
   const [openedAt, setOpenedAt] = useState('');
   const [resolvedCustomer, setResolvedCustomer] = useState<CustomerSummary | null>(null);
+
+  const selectedAccountMeta = useMemo(
+    () => SAVINGS_ACCOUNT_TYPES.find((item) => item.value === accountType),
+    [accountType]
+  );
+
+  const recommendedInterestTypes = useMemo(
+    () => RECOMMENDED_INTEREST_BY_ACCOUNT[accountType] || [],
+    [accountType]
+  );
+
+  const selectedInterestUsage = useMemo(() => interestTypeUsage(interestType), [interestType]);
+
+  const headerStats = useMemo(() => {
+    const active = accounts.filter((a) => String(a.status || '').toLowerCase() === 'active').length;
+    const totalBalance = accounts.reduce((sum, row) => {
+      const n = Number(row.balance);
+      return sum + (Number.isFinite(n) ? n : 0);
+    }, 0);
+    return { total: accounts.length, active, totalBalance };
+  }, [accounts]);
+
+  const canProceedStep1 = Boolean(resolvedCustomer);
+  const canProceedStep2 =
+    Number.isFinite(Number(openingDeposit)) &&
+    Number(openingDeposit) >= 0 &&
+    Number.isFinite(Number(interestRate)) &&
+    Number(interestRate) >= 0;
 
   useEffect(() => {
     const t = localStorage.getItem('token');
@@ -57,25 +147,22 @@ export default function SavingsOpenAccountPage() {
       return;
     }
     setToken(t);
+    const today = new Date().toISOString().slice(0, 10);
+    setOpenedAt(today);
   }, [router]);
 
   const loadAccounts = async (authToken: string) => {
     setLoadingAccounts(true);
     try {
-      const response = await axios.get('http://localhost:8000/api/savings-accounts', {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          Accept: 'application/json',
-        },
+      const response = await axios.get('/api/savings-accounts', {
+        headers: { Authorization: `Bearer ${authToken}`, Accept: 'application/json' },
         params: { per_page: 200 },
       });
-
       const rows = Array.isArray(response.data?.data)
         ? response.data.data
         : Array.isArray(response.data)
           ? response.data
           : [];
-
       setAccounts(rows as SavingsAccountRow[]);
     } catch {
       setAccounts([]);
@@ -89,32 +176,36 @@ export default function SavingsOpenAccountPage() {
     loadAccounts(token);
   }, [token]);
 
+  const handleAccountTypeChange = (nextType: SavingsAccountType) => {
+    setAccountType(nextType);
+    setInterestType(DEFAULT_INTEREST_BY_ACCOUNT[nextType]);
+  };
+
   const resolveByCustomerNo = async () => {
-    if (!token || !accountCustomerNo.trim()) {
+    const code = accountCustomerNo.trim() || customerSearchText.trim();
+    if (!token || !code) {
       setResolvedCustomer(null);
+      setErrorMessage('Enter a Customer No or NIC to verify.');
       return;
     }
 
     try {
-      const response = await axios.get(`http://localhost:8000/api/customers/by-code/${encodeURIComponent(accountCustomerNo.trim())}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-        },
+      const response = await axios.get(`/api/customers/by-code/${encodeURIComponent(code)}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
-
       setResolvedCustomer(response.data as CustomerSummary);
-      setSuccessMessage('Customer verified. You can open account(s) now.');
+      setAccountCustomerNo(String(response.data?.customer_code || code));
+      setSuccessMessage('Customer verified successfully.');
       setErrorMessage('');
+      setActiveStep(2);
     } catch {
       setResolvedCustomer(null);
-      setErrorMessage('Customer not found. Please register customer first.');
+      setErrorMessage('Customer not found. Register the customer first.');
     }
   };
 
   const searchCustomersAdvanced = async () => {
     if (!token) return;
-
     const term = customerSearchText.trim();
     if (!term) {
       setCustomerResults([]);
@@ -127,15 +218,9 @@ export default function SavingsOpenAccountPage() {
       setErrorMessage('');
       setSuccessMessage('');
 
-      const response = await axios.get('http://localhost:8000/api/customers', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-        },
-        params: {
-          per_page: 25,
-          q: term,
-        },
+      const response = await axios.get('/api/customers', {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        params: { per_page: 25, q: term },
       });
 
       const rows = Array.isArray(response.data?.data)
@@ -150,18 +235,19 @@ export default function SavingsOpenAccountPage() {
         const nic = String(row.nic_passport || '').toLowerCase();
         const name = `${row.first_name || ''} ${row.last_name || ''}`.toLowerCase();
         const phoneText = String(row.phone || '').toLowerCase();
-        return code.includes(normalized) || nic.includes(normalized) || name.includes(normalized) || phoneText.includes(normalized);
+        return (
+          code.includes(normalized) ||
+          nic.includes(normalized) ||
+          name.includes(normalized) ||
+          phoneText.includes(normalized)
+        );
       });
 
       setCustomerResults(narrowed);
-      if (narrowed.length === 0) {
-        setErrorMessage('No customers found for this Customer No / NIC.');
-      } else {
-        setSuccessMessage(`Found ${narrowed.length} customer(s). Select one below.`);
-      }
+      if (narrowed.length === 0) setErrorMessage('No customers matched your search.');
     } catch {
       setCustomerResults([]);
-      setErrorMessage('Failed to search customers.');
+      setErrorMessage('Customer search failed. Try again.');
     } finally {
       setSearchingCustomers(false);
     }
@@ -171,28 +257,36 @@ export default function SavingsOpenAccountPage() {
     const code = String(customer.customer_code || '').trim();
     setResolvedCustomer(customer);
     setAccountCustomerNo(code);
-    setCustomerSearchText(code || customerSearchText);
-    setSuccessMessage('Customer selected. You can open account(s) now.');
+    setCustomerSearchText(code);
+    setCustomerResults([]);
+    setSuccessMessage('Customer selected.');
     setErrorMessage('');
+    setActiveStep(2);
+  };
+
+  const clearCustomer = () => {
+    setResolvedCustomer(null);
+    setAccountCustomerNo('');
+    setActiveStep(1);
   };
 
   const openAccount = async () => {
     if (!token) return;
-
-    if (!accountCustomerNo.trim()) {
-      setErrorMessage('Customer No is required to open account.');
+    const customerNo = accountCustomerNo.trim() || String(resolvedCustomer?.customer_code || '').trim();
+    if (!customerNo) {
+      setErrorMessage('Select a customer before opening an account.');
+      setActiveStep(1);
       return;
     }
 
     const depositValue = Number(openingDeposit || 0);
     const rateValue = Number(interestRate || 0);
-
     if (!Number.isFinite(depositValue) || depositValue < 0) {
-      setErrorMessage('Opening deposit must be a valid non-negative amount.');
+      setErrorMessage('Opening deposit must be zero or greater.');
       return;
     }
     if (!Number.isFinite(rateValue) || rateValue < 0) {
-      setErrorMessage('Interest rate must be a valid non-negative number.');
+      setErrorMessage('Interest rate must be zero or greater.');
       return;
     }
 
@@ -202,23 +296,21 @@ export default function SavingsOpenAccountPage() {
       setSuccessMessage('');
 
       await axios.post(
-        'http://localhost:8000/api/savings-accounts',
+        '/api/savings-accounts',
         {
-          customer_no: accountCustomerNo.trim(),
+          customer_no: customerNo,
           account_type: accountType,
+          interest_type: interestType,
           opening_deposit: depositValue,
           interest_rate: rateValue,
           opened_at: openedAt || undefined,
         },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/json',
-          },
-        },
+        { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } }
       );
 
-      setSuccessMessage('Account opened successfully. You can open another account for the same customer.');
+      setSuccessMessage('Account opened successfully.');
+      setOpeningDeposit('0');
+      setActiveStep(1);
       await loadAccounts(token);
     } catch (error: unknown) {
       if (axios.isAxiosError(error)) {
@@ -233,165 +325,518 @@ export default function SavingsOpenAccountPage() {
 
   if (!token) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-yellow-50 via-orange-50 to-amber-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600"></div>
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-yellow-50 via-orange-50 to-amber-50 p-6 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-yellow-300 blur-3xl"></div>
-        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-orange-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-amber-300 blur-3xl"></div>
-      </div>
-
-      <div className="relative z-10 max-w-6xl mx-auto space-y-6">
-        <div className="bg-white/90 rounded-3xl border border-orange-100 p-6 flex items-start justify-between gap-3 flex-wrap">
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-orange-700">Savings & Deposits</p>
-            <h1 className="text-2xl font-extrabold text-slate-900 mt-1">Open Account</h1>
-            <p className="text-sm text-slate-600 mt-1">Separate page for opening savings/deposit accounts.</p>
+    <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50/80 to-yellow-50 p-4 sm:p-6">
+      <div className="max-w-7xl mx-auto space-y-5">
+        {/* Hero */}
+        <div className="rounded-3xl border border-white/80 bg-white/95 shadow-xl overflow-hidden">
+          <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-500 px-6 py-6">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+              <div className="flex items-start gap-4">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/20 backdrop-blur">
+                  <Landmark className="h-7 w-7 text-white" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-amber-100">Savings & Deposits</p>
+                  <h1 className="text-2xl sm:text-3xl font-extrabold text-white">Open Account</h1>
+                  <p className="text-sm text-amber-50/95 mt-1 max-w-xl">
+                    Register savings, current, fixed deposit, or investment accounts with the right interest structure.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => router.push('/dashboard/savings-deposits')}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/30 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 transition"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Dashboard
+              </button>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={() => router.push('/dashboard/savings-deposits')}
-            className="px-4 py-2 rounded-xl bg-white border border-orange-200 text-orange-800 text-sm font-semibold inline-flex items-center gap-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Savings Dashboard
-          </button>
+
+          <div className="grid grid-cols-3 divide-x divide-orange-100 border-t border-orange-100/80 bg-orange-50/40">
+            <div className="px-4 py-3 text-center sm:text-left">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total accounts</p>
+              <p className="text-xl font-extrabold text-slate-900 tabular-nums">{headerStats.total}</p>
+            </div>
+            <div className="px-4 py-3 text-center sm:text-left">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Active</p>
+              <p className="text-xl font-extrabold text-emerald-700 tabular-nums">{headerStats.active}</p>
+            </div>
+            <div className="px-4 py-3 text-center sm:text-left">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Portfolio balance</p>
+              <p className="text-xl font-extrabold text-orange-800 tabular-nums">{amount(headerStats.totalBalance)}</p>
+            </div>
+          </div>
         </div>
 
-        {errorMessage && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{errorMessage}</div>}
-        {successMessage && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{successMessage}</div>}
-
-        <div className="bg-white/90 rounded-3xl border border-orange-100 p-5 space-y-4">
-          <div className="flex items-center gap-2">
-            <PiggyBank className="h-5 w-5 text-orange-700" />
-            <h2 className="text-lg font-bold text-slate-900">Open Savings / Deposit Account</h2>
+        {/* Alerts */}
+        {errorMessage && (
+          <div className="flex items-start justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            <span>{errorMessage}</span>
+            <button type="button" onClick={() => setErrorMessage('')} className="text-rose-500 hover:text-rose-700">
+              <X className="h-4 w-4" />
+            </button>
           </div>
+        )}
+        {successMessage && (
+          <div className="flex items-start justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            <span className="inline-flex items-center gap-2">
+              <Check className="h-4 w-4 shrink-0" />
+              {successMessage}
+            </span>
+            <button type="button" onClick={() => setSuccessMessage('')} className="text-emerald-600 hover:text-emerald-800">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="md:col-span-2">
-              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">Customer Search (Customer No / NIC) *</label>
-              <div className="flex gap-2">
-                <input
-                  value={customerSearchText}
-                  onChange={(e) => setCustomerSearchText(e.target.value)}
-                  className="w-full rounded-xl border border-orange-100 bg-white px-3 py-2 text-sm text-slate-900"
-                  placeholder="Type Customer No or NIC"
-                />
-                <button type="button" onClick={searchCustomersAdvanced} className="px-3 py-2 rounded-lg border border-orange-200 bg-orange-50 text-xs font-semibold text-orange-800 inline-flex items-center gap-1">
-                  <Search className="h-3.5 w-3.5" />
-                  {searchingCustomers ? 'Searching...' : 'Search'}
-                </button>
-                <button type="button" onClick={resolveByCustomerNo} className="px-3 py-2 rounded-lg border border-orange-200 bg-white text-xs font-semibold text-orange-800 inline-flex items-center gap-1">
-                  Verify
-                </button>
-              </div>
-              <p className="mt-1 text-[11px] text-slate-500">You can search by exact Customer No, partial Customer No, or NIC.</p>
-              {resolvedCustomer && (
-                <p className="mt-1 text-[11px] text-emerald-700 font-semibold">
-                  Selected: {resolvedCustomer.customer_code} - {resolvedCustomer.first_name} {resolvedCustomer.last_name}
-                </p>
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-5 items-start">
+          {/* Main form */}
+          <div className="rounded-3xl border border-orange-100 bg-white/95 shadow-lg overflow-hidden">
+            {/* Stepper */}
+            <div className="flex border-b border-orange-100 bg-gradient-to-r from-orange-50/80 to-amber-50/50">
+              {STEPS.map((step) => {
+                const done = activeStep > step.id;
+                const current = activeStep === step.id;
+                return (
+                  <button
+                    key={step.id}
+                    type="button"
+                    onClick={() => {
+                      if (step.id === 1) setActiveStep(1);
+                      if (step.id === 2 && canProceedStep1) setActiveStep(2);
+                      if (step.id === 3 && canProceedStep1 && canProceedStep2) setActiveStep(3);
+                    }}
+                    className={`flex-1 px-3 py-4 text-center transition border-b-2 ${
+                      current
+                        ? 'border-orange-500 bg-white/60'
+                        : done
+                          ? 'border-transparent text-orange-700'
+                          : 'border-transparent text-slate-400'
+                    }`}
+                  >
+                    <span
+                      className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold mb-1 ${
+                        current
+                          ? 'bg-orange-600 text-white'
+                          : done
+                            ? 'bg-emerald-500 text-white'
+                            : 'bg-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {done ? <Check className="h-3.5 w-3.5" /> : step.short}
+                    </span>
+                    <span className="block text-[11px] sm:text-xs font-bold uppercase tracking-wide">{step.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="p-5 sm:p-6 space-y-6">
+              {/* Step 1 */}
+              {activeStep === 1 && (
+                <section className="space-y-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">Find customer</h2>
+                    <p className="text-sm text-slate-600 mt-0.5">Search by customer number, NIC, name, or phone.</p>
+                  </div>
+
+                  <div className="relative">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <input
+                      value={customerSearchText}
+                      onChange={(e) => setCustomerSearchText(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && searchCustomersAdvanced()}
+                      className={`${inputClass} pl-10`}
+                      placeholder="Customer No, NIC, name, or phone"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={searchCustomersAdvanced}
+                      disabled={searchingCustomers}
+                      className="inline-flex items-center gap-2 rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-60 transition"
+                    >
+                      <Search className="h-4 w-4" />
+                      {searchingCustomers ? 'Searching…' : 'Search'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resolveByCustomerNo}
+                      className="inline-flex items-center gap-2 rounded-xl border border-orange-200 bg-white px-4 py-2.5 text-sm font-semibold text-orange-800 hover:bg-orange-50 transition"
+                    >
+                      <UserCheck className="h-4 w-4" />
+                      Verify exact code
+                    </button>
+                  </div>
+
+                  {resolvedCustomer && (
+                    <div className="rounded-2xl border-2 border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4 flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3">
+                        <div className="h-11 w-11 rounded-xl bg-emerald-500 flex items-center justify-center text-white font-bold text-sm">
+                          {(resolvedCustomer.first_name?.[0] || 'C').toUpperCase()}
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Selected customer</p>
+                          <p className="text-base font-bold text-slate-900 mt-0.5">
+                            {resolvedCustomer.first_name} {resolvedCustomer.last_name}
+                          </p>
+                          <p className="text-sm text-slate-600 mt-1">
+                            <span className="font-semibold text-slate-800">{resolvedCustomer.customer_code}</span>
+                            {resolvedCustomer.nic_passport ? ` · NIC ${resolvedCustomer.nic_passport}` : ''}
+                            {resolvedCustomer.phone ? ` · ${resolvedCustomer.phone}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                      <button type="button" onClick={clearCustomer} className="text-slate-400 hover:text-slate-600 p-1">
+                        <X className="h-5 w-5" />
+                      </button>
+                    </div>
+                  )}
+
+                  {customerResults.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {customerResults.map((row) => (
+                        <button
+                          key={row.id}
+                          type="button"
+                          onClick={() => selectCustomer(row)}
+                          className="rounded-xl border border-orange-100 bg-white p-3 text-left hover:border-orange-300 hover:shadow-md transition"
+                        >
+                          <p className="font-bold text-slate-900">{row.customer_code}</p>
+                          <p className="text-sm text-slate-700 mt-0.5">
+                            {row.first_name} {row.last_name}
+                          </p>
+                          <p className="text-xs text-slate-500 mt-1">{row.nic_passport || '—'} · {row.phone || '—'}</p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end pt-2">
+                    <button
+                      type="button"
+                      disabled={!canProceedStep1}
+                      onClick={() => setActiveStep(2)}
+                      className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-slate-800 transition"
+                    >
+                      Continue to account setup
+                    </button>
+                  </div>
+                </section>
+              )}
+
+              {/* Step 2 */}
+              {activeStep === 2 && (
+                <section className="space-y-5">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">Account & interest setup</h2>
+                    <p className="text-sm text-slate-600 mt-0.5">Choose product type and how interest is calculated.</p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-3">Account type</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {SAVINGS_ACCOUNT_TYPES.map((type) => {
+                        const active = accountType === type.value;
+                        const Icon = ACCOUNT_ICONS[type.value];
+                        return (
+                          <button
+                            key={type.value}
+                            type="button"
+                            onClick={() => handleAccountTypeChange(type.value)}
+                            className={`group relative overflow-hidden rounded-2xl border p-4 text-left transition-all ${
+                              active
+                                ? 'border-orange-400 shadow-md ring-2 ring-orange-200'
+                                : 'border-orange-100 hover:border-orange-300 hover:shadow-sm'
+                            }`}
+                          >
+                            <div
+                              className={`inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br ${ACCOUNT_ACCENT[type.value]} text-white shadow-sm`}
+                            >
+                              <Icon className="h-5 w-5" />
+                            </div>
+                            <p className="mt-3 text-sm font-bold text-slate-900">{type.label}</p>
+                            <p className="text-xs text-slate-600 mt-1 leading-relaxed">{type.description}</p>
+                            {active && (
+                              <span className="absolute top-3 right-3 h-6 w-6 rounded-full bg-orange-500 flex items-center justify-center">
+                                <Check className="h-3.5 w-3.5 text-white" />
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 mb-2">
+                        Interest type
+                      </label>
+                      <select
+                        value={interestType}
+                        onChange={(e) => setInterestType(e.target.value as SavingsInterestType)}
+                        className={inputClass}
+                      >
+                        <optgroup label="Recommended">
+                          {SAVINGS_INTEREST_TYPES.filter((i) => recommendedInterestTypes.includes(i.value)).map(
+                            (item) => (
+                              <option key={`r-${item.value}`} value={item.value}>
+                                {item.label}
+                              </option>
+                            )
+                          )}
+                        </optgroup>
+                        <optgroup label="Other">
+                          {SAVINGS_INTEREST_TYPES.filter((i) => !recommendedInterestTypes.includes(i.value)).map(
+                            (item) => (
+                              <option key={item.value} value={item.value}>
+                                {item.label}
+                              </option>
+                            )
+                          )}
+                        </optgroup>
+                      </select>
+                      {selectedInterestUsage && (
+                        <div className="mt-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-900">
+                          <span className="font-semibold">Typical use:</span> {selectedInterestUsage}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 mb-2">
+                        Interest rate (%)
+                      </label>
+                      <input
+                        value={interestRate}
+                        onChange={(e) => setInterestRate(e.target.value)}
+                        className={inputClass}
+                        placeholder="4.5"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 mb-2">
+                        Opening deposit (LKR)
+                      </label>
+                      <input
+                        value={openingDeposit}
+                        onChange={(e) => setOpeningDeposit(e.target.value)}
+                        className={inputClass}
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 mb-2">
+                        Opened date
+                      </label>
+                      <input type="date" value={openedAt} onChange={(e) => setOpenedAt(e.target.value)} className={inputClass} />
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowInterestGuide((v) => !v)}
+                    className="w-full flex items-center justify-between rounded-xl border border-orange-100 bg-orange-50/50 px-4 py-3 text-sm font-semibold text-orange-900 hover:bg-orange-50 transition"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <Sparkles className="h-4 w-4" />
+                      Interest type reference guide
+                    </span>
+                    {showInterestGuide ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  </button>
+
+                  {showInterestGuide && (
+                    <div className="rounded-2xl border border-orange-100 overflow-hidden divide-y divide-orange-50">
+                      {SAVINGS_INTEREST_TYPES.map((item) => (
+                        <button
+                          key={item.value}
+                          type="button"
+                          onClick={() => setInterestType(item.value)}
+                          className={`w-full flex items-center justify-between gap-3 px-4 py-3 text-left transition ${
+                            interestType === item.value ? 'bg-orange-50' : 'bg-white hover:bg-orange-50/40'
+                          }`}
+                        >
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{item.label}</p>
+                            <p className="text-xs text-slate-600 mt-0.5">{item.usage}</p>
+                          </div>
+                          {interestType === item.value && <Check className="h-4 w-4 text-orange-600 shrink-0" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex justify-between pt-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveStep(1)}
+                      className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canProceedStep2}
+                      onClick={() => setActiveStep(3)}
+                      className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40 hover:bg-slate-800"
+                    >
+                      Review & confirm
+                    </button>
+                  </div>
+                </section>
+              )}
+
+              {/* Step 3 */}
+              {activeStep === 3 && (
+                <section className="space-y-5">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">Review & open account</h2>
+                    <p className="text-sm text-slate-600 mt-0.5">Confirm details before creating the account.</p>
+                  </div>
+
+                  <dl className="rounded-2xl border border-orange-100 divide-y divide-orange-50 overflow-hidden">
+                    {[
+                      ['Customer', `${resolvedCustomer?.customer_code} — ${resolvedCustomer?.first_name} ${resolvedCustomer?.last_name}`],
+                      ['Account type', selectedAccountMeta?.label || formatAccountTypeLabel(accountType)],
+                      ['Interest type', formatInterestTypeLabel(interestType)],
+                      ['Interest usage', selectedInterestUsage],
+                      ['Interest rate', `${interestRate}%`],
+                      ['Opening deposit', `LKR ${amount(openingDeposit)}`],
+                      ['Opened date', openedAt || 'Today'],
+                    ].map(([label, value]) => (
+                      <div key={label} className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 px-4 py-3 bg-white">
+                        <dt className="text-xs font-bold uppercase tracking-wide text-slate-500 sm:w-36 shrink-0">{label}</dt>
+                        <dd className="text-sm font-semibold text-slate-900">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+
+                  <div className="flex flex-col sm:flex-row justify-between gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveStep(2)}
+                      className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Edit setup
+                    </button>
+                    <button
+                      type="button"
+                      disabled={openingAccount}
+                      onClick={openAccount}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 px-6 py-3 text-sm font-bold text-white shadow-lg shadow-orange-200/50 hover:from-amber-700 hover:to-orange-700 disabled:opacity-60 transition"
+                    >
+                      <PiggyBank className="h-5 w-5" />
+                      {openingAccount ? 'Opening account…' : 'Open account now'}
+                    </button>
+                  </div>
+                </section>
               )}
             </div>
-
-            {customerResults.length > 0 && (
-              <div className="md:col-span-2 overflow-x-auto rounded-xl border border-orange-100">
-                <table className="min-w-full text-sm bg-white">
-                  <thead>
-                    <tr className="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-orange-100">
-                      <th className="py-2 px-3">Customer No</th>
-                      <th className="py-2 px-3">Name</th>
-                      <th className="py-2 px-3">NIC</th>
-                      <th className="py-2 px-3">Phone</th>
-                      <th className="py-2 px-3">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {customerResults.map((row) => (
-                      <tr key={row.id} className="border-b border-orange-50 text-slate-700">
-                        <td className="py-2 px-3 font-semibold">{row.customer_code || '-'}</td>
-                        <td className="py-2 px-3">{row.first_name || ''} {row.last_name || ''}</td>
-                        <td className="py-2 px-3">{row.nic_passport || '-'}</td>
-                        <td className="py-2 px-3">{row.phone || '-'}</td>
-                        <td className="py-2 px-3">
-                          <button
-                            type="button"
-                            onClick={() => selectCustomer(row)}
-                            className="px-3 py-1 rounded-lg border border-orange-200 bg-orange-50 text-xs font-semibold text-orange-800"
-                          >
-                            Use This
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">Account Type</label>
-              <select value={accountType} onChange={(e) => setAccountType(e.target.value as 'savings' | 'current' | 'fixed_deposit')} className="w-full rounded-xl border border-orange-100 bg-white px-3 py-2 text-sm text-slate-900">
-                <option value="savings">Savings</option>
-                <option value="current">Current</option>
-                <option value="fixed_deposit">Fixed Deposit</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">Interest Rate %</label>
-              <input value={interestRate} onChange={(e) => setInterestRate(e.target.value)} className="w-full rounded-xl border border-orange-100 bg-white px-3 py-2 text-sm text-slate-900" placeholder="e.g. 4.5" />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">Opening Deposit</label>
-              <input value={openingDeposit} onChange={(e) => setOpeningDeposit(e.target.value)} className="w-full rounded-xl border border-orange-100 bg-white px-3 py-2 text-sm text-slate-900" placeholder="0.00" />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">Opened Date</label>
-              <input type="date" value={openedAt} onChange={(e) => setOpenedAt(e.target.value)} className="w-full rounded-xl border border-orange-100 bg-white px-3 py-2 text-sm text-slate-900" />
-            </div>
           </div>
 
-          <button type="button" disabled={openingAccount} onClick={openAccount} className="px-4 py-2 rounded-lg bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white text-sm font-semibold disabled:opacity-60 inline-flex items-center gap-2">
-            <PiggyBank className="h-4 w-4" />
-            {openingAccount ? 'Opening...' : 'Open Account'}
-          </button>
-          <p className="text-xs text-slate-500">One customer can open multiple savings/deposit accounts.</p>
+          {/* Sidebar summary */}
+          <aside className="xl:sticky xl:top-6 space-y-4">
+            <div className="rounded-3xl border border-orange-100 bg-white/95 p-5 shadow-lg">
+              <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Live summary</h3>
+              <div className="mt-4 space-y-3">
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-[10px] font-bold uppercase text-slate-500">Customer</p>
+                  <p className="text-sm font-semibold text-slate-900 mt-1">
+                    {resolvedCustomer
+                      ? `${resolvedCustomer.first_name} ${resolvedCustomer.last_name}`
+                      : 'Not selected'}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-[10px] font-bold uppercase text-slate-500">Product</p>
+                  <p className="text-sm font-semibold text-slate-900 mt-1">{selectedAccountMeta?.label || '—'}</p>
+                  <p className="text-xs text-slate-600 mt-0.5">{formatInterestTypeLabel(interestType)}</p>
+                </div>
+                <div className="rounded-xl bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-100 p-3">
+                  <p className="text-[10px] font-bold uppercase text-orange-700">Opening deposit</p>
+                  <p className="text-xl font-extrabold text-orange-900 mt-1 tabular-nums">LKR {amount(openingDeposit)}</p>
+                  <p className="text-xs text-slate-600 mt-1">@ {interestRate}% p.a.</p>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
+                Step {activeStep} of 3 — complete each section before submitting.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-dashed border-orange-200 bg-orange-50/40 p-4 text-xs text-orange-900/90 leading-relaxed">
+              <p className="font-bold text-orange-800 mb-1">Tip</p>
+              Pick the account type first — we’ll suggest the best interest types for that product.
+            </div>
+          </aside>
         </div>
 
-        <div className="bg-white/90 rounded-3xl border border-orange-100 p-5 space-y-4">
-          <h2 className="text-lg font-bold text-slate-900">Latest Accounts</h2>
+        {/* Accounts list */}
+        <div className="rounded-3xl border border-orange-100 bg-white/95 shadow-lg overflow-hidden">
+          <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-orange-100 bg-gradient-to-r from-orange-50/80 to-transparent">
+            <div className="flex items-center gap-2">
+              <CircleDollarSign className="h-5 w-5 text-orange-700" />
+              <h2 className="text-lg font-bold text-slate-900">Recent accounts</h2>
+            </div>
+            <span className="text-xs font-semibold text-slate-500">{accounts.length} total</span>
+          </div>
+
           {loadingAccounts ? (
-            <div className="py-8 text-sm text-slate-500">Loading accounts...</div>
+            <div className="p-6 space-y-3">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="h-14 animate-pulse rounded-xl bg-orange-50" />
+              ))}
+            </div>
           ) : accounts.length === 0 ? (
-            <div className="py-8 text-sm text-slate-500">No savings/deposit accounts found.</div>
+            <div className="py-16 text-center px-6">
+              <Banknote className="h-12 w-12 text-orange-200 mx-auto" />
+              <p className="mt-3 text-sm font-semibold text-slate-700">No accounts yet</p>
+              <p className="text-xs text-slate-500 mt-1">Open your first savings or deposit account above.</p>
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-orange-100">
-                    <th className="py-2 pr-3">Account No</th>
-                    <th className="py-2 pr-3">Customer</th>
-                    <th className="py-2 pr-3">Type</th>
-                    <th className="py-2 pr-3">Opening Deposit</th>
-                    <th className="py-2 pr-3">Balance</th>
+                  <tr className="text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 bg-slate-50/80">
+                    <th className="py-3 px-4">Account</th>
+                    <th className="py-3 px-4">Customer</th>
+                    <th className="py-3 px-4">Type</th>
+                    <th className="py-3 px-4">Interest</th>
+                    <th className="py-3 px-4 text-right">Rate</th>
+                    <th className="py-3 px-4 text-right">Balance</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {accounts.slice(0, 20).map((row) => (
-                    <tr key={row.id} className="border-b border-orange-50 text-slate-700">
-                      <td className="py-2 pr-3 font-semibold">{row.account_number || '-'}</td>
-                      <td className="py-2 pr-3">{row.customer?.customer_code || '-'} - {row.customer?.first_name || ''} {row.customer?.last_name || ''}</td>
-                      <td className="py-2 pr-3 capitalize">{String(row.account_type || '-').replace('_', ' ')}</td>
-                      <td className="py-2 pr-3">{amount(row.opening_deposit)}</td>
-                      <td className="py-2 pr-3">{amount(row.balance)}</td>
+                <tbody className="divide-y divide-orange-50">
+                  {accounts.slice(0, 15).map((row) => (
+                    <tr key={row.id} className="hover:bg-orange-50/40 transition">
+                      <td className="py-3 px-4">
+                        <p className="font-bold text-slate-900">{row.account_number || '—'}</p>
+                        <p className="text-[10px] text-slate-500 capitalize">{row.status || 'active'}</p>
+                      </td>
+                      <td className="py-3 px-4">
+                        <p className="font-medium text-slate-800">{row.customer?.first_name} {row.customer?.last_name}</p>
+                        <p className="text-xs text-slate-500">{row.customer?.customer_code}</p>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span
+                          className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${accountTypeBadgeClass(row.account_type)}`}
+                        >
+                          {formatAccountTypeLabel(row.account_type)}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-slate-700">{formatInterestTypeLabel(row.interest_type)}</td>
+                      <td className="py-3 px-4 text-right tabular-nums font-medium">{amount(row.interest_rate)}%</td>
+                      <td className="py-3 px-4 text-right tabular-nums font-bold text-emerald-800">{amount(row.balance)}</td>
                     </tr>
                   ))}
                 </tbody>

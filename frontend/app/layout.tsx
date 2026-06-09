@@ -1,10 +1,37 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import ExtensionNoiseFilter from "./components/ExtensionNoiseFilter";
 import "./globals.css";
 
+const APP_NAME = "Desk of Finance";
+const APP_DESCRIPTION = "Modern finance management platform with HRM";
+
 export const metadata: Metadata = {
-  title: "Desk of Finance",
-  description: "Modern finance management platform with HRM",
+  applicationName: APP_NAME,
+  title: {
+    default: APP_NAME,
+    template: `%s | ${APP_NAME}`,
+  },
+  description: APP_DESCRIPTION,
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: APP_NAME,
+  },
+  formatDetection: {
+    telephone: false,
+  },
+  icons: {
+    icon: [{ url: "/icons/icon.svg", type: "image/svg+xml" }],
+    apple: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0891b2",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 export default function RootLayout({
@@ -16,6 +43,80 @@ export default function RootLayout({
 
   return (
     <html lang="en">
+      <head>
+        <Script
+          id="extension-noise-bootstrap-filter"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function () {
+                var patterns = [
+                  /enable copy/i,
+                  /\\be\\.c\\.p\\b/i,
+                  /ecp_regular/i,
+                  /enable_product/i,
+                  /aggressive_mode/i,
+                  /a listener indicated an asynchronous response by returning true/i,
+                  /message channel closed before a response was received/i,
+                  /could not establish connection\\. receiving end does not exist/i,
+                  /runtime\\.lasterror/i,
+                  /extension context invalidated/i,
+                  /chrome-extension:\\/\\//i,
+                  /fdprocessedid/i
+                ];
+
+                var matchesNoise = function (text) {
+                  var value = String(text || '');
+                  return patterns.some(function (pattern) { return pattern.test(value); });
+                };
+
+                var isNoise = function (value) {
+                  if (value && typeof value === 'object' && typeof value.message === 'string') {
+                    return matchesNoise(value.message + ' ' + (value.stack || ''));
+                  }
+                  return matchesNoise(value);
+                };
+
+                var argsAreNoise = function (args) {
+                  var text = Array.prototype.slice.call(args).map(function (arg) {
+                    if (arg && typeof arg === 'object' && typeof arg.message === 'string') {
+                      return arg.message + ' ' + (arg.stack || '');
+                    }
+                    try {
+                      return typeof arg === 'object' ? JSON.stringify(arg) : String(arg);
+                    } catch (e) {
+                      return String(arg);
+                    }
+                  }).join(' ');
+                  return matchesNoise(text);
+                };
+
+                ['log', 'warn', 'error', 'info', 'debug'].forEach(function (method) {
+                  var original = console[method].bind(console);
+                  console[method] = function () {
+                    if (argsAreNoise(arguments)) return;
+                    return original.apply(console, arguments);
+                  };
+                });
+
+                window.addEventListener('unhandledrejection', function (event) {
+                  if (isNoise(event && event.reason)) {
+                    event.preventDefault();
+                    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+                  }
+                }, true);
+
+                window.addEventListener('error', function (event) {
+                  if (isNoise((event && event.error) || (event && event.message))) {
+                    event.preventDefault();
+                    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+                  }
+                }, true);
+              })();
+            `,
+          }}
+        />
+      </head>
       <body className="antialiased" suppressHydrationWarning={true}>
         <ExtensionNoiseFilter />
         {children}

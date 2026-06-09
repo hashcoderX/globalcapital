@@ -33,4 +33,14 @@ class Company extends Model
     {
         return $this->belongsTo(User::class, 'manager_user_id');
     }
+
+    public function accounts(): HasMany
+    {
+        return $this->hasMany(CompanyAccount::class);
+    }
+
+    public function accountingExpenses(): HasMany
+    {
+        return $this->hasMany(AccountingExpense::class);
+    }
 }

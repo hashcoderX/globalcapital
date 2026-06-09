@@ -121,9 +121,9 @@
          Maturity Report - /dashboard/savings-deposits/reports/maturity
   
       Finance Management Related Reports
-         Income and Expense Report - /dashboard/finance/reports/income-expense
+         Income and Expense Report - /dashboard/reports/income-expense
          Cash Flow Report - /dashboard/mortgages/reports/arrears
-         General Ledger Snapshot - /dashboard/finance/reports/general-ledger
+         General Ledger Snapshot - /dashboard/reports/general-ledger
 
       Branch Management Related Reports
          Branch Performance Report 

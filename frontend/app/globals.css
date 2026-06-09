@@ -24,3 +24,112 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes chart-donut-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes chart-bar-breathe {
+  0%,
+  100% {
+    transform: scaleY(1);
+    filter: brightness(1);
+  }
+  50% {
+    transform: scaleY(1.05);
+    filter: brightness(1.06);
+  }
+}
+
+@keyframes chart-bar-shimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+
+@keyframes chart-dot-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.82;
+  }
+}
+
+@keyframes chart-panel-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.08);
+  }
+}
+
+@keyframes chart-fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chart-animate-panel {
+  animation: chart-panel-glow 3.2s ease-in-out infinite, chart-fade-rise 0.55s ease-out both;
+}
+
+.chart-animate-donut {
+  animation: chart-donut-spin 28s linear infinite;
+}
+
+.chart-animate-bar {
+  transform-origin: bottom center;
+  animation: chart-bar-breathe 2.6s ease-in-out infinite;
+}
+
+.chart-animate-fill {
+  position: relative;
+  overflow: hidden;
+}
+
+.chart-animate-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.38) 50%, transparent 100%);
+  animation: chart-bar-shimmer 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.chart-animate-dot {
+  animation: chart-dot-pulse 2.2s ease-in-out infinite;
+}
+
+.chart-animate-icon {
+  animation: chart-dot-pulse 2.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-animate-panel,
+  .chart-animate-donut,
+  .chart-animate-bar,
+  .chart-animate-fill::after,
+  .chart-animate-dot,
+  .chart-animate-icon {
+    animation: none !important;
+  }
+}

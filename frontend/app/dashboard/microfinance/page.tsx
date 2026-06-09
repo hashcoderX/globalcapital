@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
 
 type LoanStatRow = {
   id: number;
@@ -46,6 +47,7 @@ type AuthUser = {
 
 export default function MicrofinanceDashboard() {
   const [token, setToken] = useState('');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [stats, setStats] = useState({
     activeLoans: 0,
@@ -64,11 +66,7 @@ export default function MicrofinanceDashboard() {
   });
   const [statsLoading, setStatsLoading] = useState(false);
   const router = useRouter();
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-  const normalizedApiBase = API_URL.replace(/\/+$/, '');
-  const withApiPrefix = normalizedApiBase.endsWith('/api')
-    ? normalizedApiBase
-    : `${normalizedApiBase}/api`;
+  const apiBase = getApiBaseUrl();
 
   const normalizeText = (value: string) =>
     String(value || '')
@@ -161,7 +159,7 @@ export default function MicrofinanceDashboard() {
 
     const fetchAuthUser = async () => {
       try {
-        const response = await axios.get(`${withApiPrefix}/user`, {
+        const response = await axios.get(`${apiBase}/user`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -173,7 +171,7 @@ export default function MicrofinanceDashboard() {
     };
 
     fetchAuthUser();
-  }, [token, withApiPrefix]);
+  }, [token, apiBase]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -389,13 +387,13 @@ export default function MicrofinanceDashboard() {
       setStatsLoading(true);
       try {
         const [loanRes, collectionRes] = await Promise.all([
-          axios.get('http://localhost:8000/api/microfinance/loan-requests', {
+          axios.get('/api/microfinance/loan-requests', {
             headers: {
               Authorization: `Bearer ${token}`,
               Accept: 'application/json',
             },
           }),
-          axios.get('http://localhost:8000/api/microfinance/collections', {
+          axios.get('/api/microfinance/collections', {
             headers: {
               Authorization: `Bearer ${token}`,
               Accept: 'application/json',
@@ -593,18 +591,18 @@ export default function MicrofinanceDashboard() {
       {/* Modern Navigation */}
       <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
+          <div className="flex items-center justify-between min-h-16 py-2">
+            <div className="flex items-center min-w-0">
               <div className="flex-shrink-0 flex items-center space-x-3">
                 <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-lg flex items-center justify-center">
                   <span className="text-white font-bold text-sm">DOF</span>
                 </div>
-                <h1 className="text-gray-900 text-xl font-bold bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">
+                <h1 className="text-gray-900 text-sm sm:text-lg lg:text-xl font-bold bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent truncate">
                   Microfinance Management
                 </h1>
               </div>
             </div>
-            <div className="flex items-center space-x-4">
+            <div className="hidden md:flex items-center space-x-4">
               <button
                 onClick={() => router.push('/dashboard')}
                 className="text-gray-600 hover:text-gray-900 px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-300"
@@ -622,7 +620,41 @@ export default function MicrofinanceDashboard() {
                 Logout
               </button>
             </div>
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen((prev) => !prev)}
+              className="md:hidden inline-flex items-center justify-center rounded-lg border border-cyan-100 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+              aria-label="Toggle navigation"
+            >
+              {mobileNavOpen ? 'Close' : 'Menu'}
+            </button>
           </div>
+          {mobileNavOpen && (
+            <div className="md:hidden pb-3 space-y-2">
+              <button
+                onClick={() => {
+                  setMobileNavOpen(false);
+                  router.push('/dashboard');
+                }}
+                className="w-full text-left text-gray-700 hover:text-gray-900 px-3 py-2 rounded-lg text-sm font-medium bg-white/70 border border-cyan-100"
+              >
+                ← Back to Dashboard
+              </button>
+              <div className="flex items-center space-x-2 text-sm text-gray-600 px-3 py-2 rounded-lg bg-white/70 border border-cyan-100">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                <span>System Online</span>
+              </div>
+              <button
+                onClick={() => {
+                  setMobileNavOpen(false);
+                  handleLogout();
+                }}
+                className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 text-white px-4 py-2.5 rounded-lg text-sm font-medium"
+              >
+                Logout
+              </button>
+            </div>
+          )}
         </div>
       </nav>
 

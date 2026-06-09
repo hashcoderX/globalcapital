@@ -50,7 +50,7 @@ export default function SavingsDepositsPage() {
   const loadAccounts = async (authToken: string) => {
     setLoading(true);
     try {
-      const response = await axios.get('http://localhost:8000/api/savings-accounts', {
+      const response = await axios.get('/api/savings-accounts', {
         headers: {
           Authorization: `Bearer ${authToken}`,
           Accept: 'application/json',

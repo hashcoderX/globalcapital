@@ -3,6 +3,7 @@
 import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
 
 type MFRoute = { id: number; name: string; code: string };
 type MFCenter = { id: number; mf_route_id: number; name: string; code: string };
@@ -75,7 +76,37 @@ type AuthUser = {
   roles?: AuthRole[];
 };
 
-const API_BASE = 'http://localhost:8000/api';
+type CollectionRow = {
+  id: number;
+  mf_loan_request_id: number | string;
+  collection_date?: string | null;
+  created_at?: string | null;
+  collected_amount?: number | string;
+  capital_amount?: number | string;
+  interest_amount?: number | string;
+  penalty_amount?: number | string;
+  profit_amount?: number | string;
+  payment_type?: string | null;
+  payment_reference?: string | null;
+};
+
+type CollectionTransaction = {
+  id: number;
+  date: string;
+  loanId: number;
+  loanCode: string;
+  customerNo: string;
+  customerName: string;
+  fieldOfficer: string;
+  collected: number;
+  capital: number;
+  profit: number;
+  penalty: number;
+  paymentType: string;
+  reference: string;
+};
+
+const ACTIVE_LOAN_STATUSES = new Set(['approved', 'released']);
 
 const formatDisplayDate = (value?: string | null) => {
   if (!value) return '-';
@@ -99,6 +130,8 @@ export default function ReleasedLoansPage() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [loans, setLoans] = useState<LoanRequest[]>([]);
+  const [collections, setCollections] = useState<CollectionRow[]>([]);
+  const [collectionsError, setCollectionsError] = useState('');
   const [routes, setRoutes] = useState<MFRoute[]>([]);
   const [centers, setCenters] = useState<MFCenter[]>([]);
   const [groups, setGroups] = useState<MFGroup[]>([]);
@@ -154,6 +187,8 @@ export default function ReleasedLoansPage() {
     insurance_charges: string;
     charge_payment_mode: 'deduct_from_loan' | 'hand_cash';
     loan_request_date: string;
+    next_collection_date: string;
+    loan_end_date: string;
     guarantors: Array<{ name: string; nic: string; address: string; contact_no: string; relationship: string }>;
   }>({
     open: false,
@@ -182,6 +217,8 @@ export default function ReleasedLoansPage() {
     insurance_charges: '',
     charge_payment_mode: 'hand_cash',
     loan_request_date: '',
+    next_collection_date: '',
+    loan_end_date: '',
     guarantors: [{ name: '', nic: '', address: '', contact_no: '', relationship: '' }],
   });
   const [savingEdit, setSavingEdit] = useState(false);
@@ -269,6 +306,8 @@ export default function ReleasedLoansPage() {
       insurance_charges: String(loan.insurance_charges || ''),
       charge_payment_mode: loan.charge_payment_mode || 'hand_cash',
       loan_request_date: String(loan.loan_request_date || '').slice(0, 10),
+      next_collection_date: String(loan.due_date || loan.next_payment_date || '').slice(0, 10),
+      loan_end_date: String(loan.loan_end_date || '').slice(0, 10),
       guarantors: Array.isArray(loan.guarantors) && loan.guarantors.length > 0
         ? loan.guarantors.map((g) => ({
             name: String(g.name || ''),
@@ -325,11 +364,14 @@ export default function ReleasedLoansPage() {
         insurance_charges: Number(editModal.insurance_charges || 0),
         charge_payment_mode: editModal.charge_payment_mode,
         loan_request_date: editModal.loan_request_date || null,
+        loan_end_date: editModal.loan_end_date || null,
+        next_payment_date: editModal.next_collection_date || null,
+        due_date: editModal.next_collection_date || null,
         guarantors: editModal.guarantors.filter((g) => g.name.trim() !== ''),
       };
 
       const response = await axios.put(
-        `${API_BASE}/microfinance/loan-requests/${editModal.loanId}`,
+        `${getApiBaseUrl()}/microfinance/loan-requests/${editModal.loanId}`,
         payload,
         { headers }
       );
@@ -368,7 +410,7 @@ export default function ReleasedLoansPage() {
 
   const buildDocumentUrl = (filePath: string) => {
     const normalizedPath = (filePath || '').replace(/^public\//, '');
-    return `http://localhost:8000/storage/${normalizedPath}`;
+    return `${getBackendOrigin()}/storage/${normalizedPath}`;
   };
 
   const handleDownloadAgreement = async (loanId: number, customerNo: string) => {
@@ -381,7 +423,7 @@ export default function ReleasedLoansPage() {
     setDownloadingAgreementId(loanId);
     try {
       const response = await axios.get(
-        `${API_BASE}/microfinance/loan-requests/${loanId}/download-agreement`,
+        `${getApiBaseUrl()}/microfinance/loan-requests/${loanId}/download-agreement`,
         {
           headers,
           responseType: 'blob',
@@ -438,7 +480,7 @@ export default function ReleasedLoansPage() {
     setDownloadingReminderId(loanId);
     try {
       const response = await axios.get(
-        `${API_BASE}/microfinance/loan-requests/${loanId}/download-reminder-letter`,
+        `${getApiBaseUrl()}/microfinance/loan-requests/${loanId}/download-reminder-letter`,
         {
           headers,
           responseType: 'blob',
@@ -495,7 +537,7 @@ export default function ReleasedLoansPage() {
     setDownloadingLegalId(loanId);
     try {
       const response = await axios.get(
-        `${API_BASE}/microfinance/loan-requests/${loanId}/download-legal-letter`,
+        `${getApiBaseUrl()}/microfinance/loan-requests/${loanId}/download-legal-letter`,
         {
           headers,
           responseType: 'blob',
@@ -643,7 +685,7 @@ export default function ReleasedLoansPage() {
     setRemovingLoanId(loanId);
 
     try {
-      await axios.delete(`${API_BASE}/microfinance/loan-requests/${loanId}`, { headers });
+      await axios.delete(`${getApiBaseUrl()}/microfinance/loan-requests/${loanId}`, { headers });
       setLoans((prev) => prev.filter((loan) => loan.id !== loanId));
       openModal('Loan removed successfully.', 'Success');
     } catch {
@@ -678,18 +720,29 @@ export default function ReleasedLoansPage() {
 
     const loadApprovedLoans = async () => {
       setLoading(true);
+      setCollectionsError('');
       try {
-        const response = await axios.get(`${API_BASE}/microfinance/loan-requests`, {
-          headers,
-          params: {
-            status: 'approved',
-            ...(isCollectionOfficer && preferredCollectionOfficerName
-              ? { field_officer: preferredCollectionOfficerName }
-              : {}),
-          },
-        });
-        setLoans(Array.isArray(response.data) ? response.data : []);
+        const [loanRes, collectionRes] = await Promise.all([
+          axios.get(`${getApiBaseUrl()}/microfinance/loan-requests`, {
+            headers,
+            params: {
+              ...(isCollectionOfficer && preferredCollectionOfficerName
+                ? { field_officer: preferredCollectionOfficerName }
+                : {}),
+            },
+          }),
+          axios.get(`${getApiBaseUrl()}/microfinance/collections`, { headers }),
+        ]);
+
+        const loanRows = Array.isArray(loanRes.data) ? loanRes.data : [];
+        setLoans(
+          loanRows.filter((loan: LoanRequest) => ACTIVE_LOAN_STATUSES.has(String(loan.status || '').toLowerCase()))
+        );
+        setCollections(Array.isArray(collectionRes.data) ? collectionRes.data : []);
       } catch {
+        setLoans([]);
+        setCollections([]);
+        setCollectionsError('Failed to load loans or collection transactions.');
         openModal('Failed to load approved loans.', 'Error');
       } finally {
         setLoading(false);
@@ -724,10 +777,10 @@ export default function ReleasedLoansPage() {
     const loadMasterData = async () => {
       try {
         const [routeRes, centerRes, groupRes, employeeRes] = await Promise.all([
-          axios.get(`${API_BASE}/microfinance/settings/routes`, { headers }),
-          axios.get(`${API_BASE}/microfinance/settings/centers`, { headers }),
-          axios.get(`${API_BASE}/microfinance/settings/groups`, { headers }),
-          axios.get(`${API_BASE}/hr/employees`, { headers }),
+          axios.get(`${getApiBaseUrl()}/microfinance/settings/routes`, { headers }),
+          axios.get(`${getApiBaseUrl()}/microfinance/settings/centers`, { headers }),
+          axios.get(`${getApiBaseUrl()}/microfinance/settings/groups`, { headers }),
+          axios.get(`${getApiBaseUrl()}/hr/employees`, { headers }),
         ]);
 
         setRoutes(Array.isArray(routeRes.data) ? routeRes.data : []);
@@ -801,6 +854,12 @@ export default function ReleasedLoansPage() {
     () => groups.filter((g) => g.mf_route_id === editModal.mf_route_id && g.mf_center_id === editModal.mf_center_id),
     [groups, editModal.mf_route_id, editModal.mf_center_id]
   );
+
+  const editTermUnitLabel =
+    editModal.refund_option === 'day' ? 'Days' : editModal.refund_option === 'week' ? 'Weeks' : 'Months';
+
+  const editFieldClass = 'px-3 py-2 rounded-lg border border-cyan-100 text-sm w-full';
+  const editLabelClass = 'block mb-1.5 text-[0.78rem] font-bold uppercase tracking-wide text-slate-800';
 
   useEffect(() => {
     if (!editModal.open) return;
@@ -876,6 +935,137 @@ export default function ReleasedLoansPage() {
     });
   }, [scopedLoans, query, scopeFilter, routeFilter, centerFilter, fromDate, toDate]);
 
+  const loanLookup = useMemo(() => {
+    const map = new Map<number, LoanRequest>();
+    scopedLoans.forEach((loan) => {
+      map.set(Number(loan.id), loan);
+    });
+    return map;
+  }, [scopedLoans]);
+
+  const collectionTransactions = useMemo(() => {
+    const scopedLoanIds = new Set(scopedLoans.map((loan) => Number(loan.id)));
+
+    return collections
+      .map((collection) => {
+        const loanId = Number(collection.mf_loan_request_id || 0);
+        if (!scopedLoanIds.has(loanId)) {
+          return null;
+        }
+
+        const loan = loanLookup.get(loanId);
+        const interest = Number(collection.interest_amount || 0);
+        const penalty = Number(collection.penalty_amount || 0);
+        const profit =
+          collection.profit_amount != null && collection.profit_amount !== ''
+            ? Number(collection.profit_amount)
+            : interest;
+
+        return {
+          id: Number(collection.id),
+          date: String(collection.collection_date || collection.created_at || ''),
+          loanId,
+          loanCode: String(loan?.customer_no || `LR-${loanId}`),
+          customerNo: String(loan?.customer_no || '-'),
+          customerName: String(loan?.customer_name || '-'),
+          fieldOfficer: String(loan?.field_officer || 'Unassigned'),
+          collected: Number(collection.collected_amount || 0),
+          capital: Number(collection.capital_amount || 0),
+          profit,
+          penalty,
+          paymentType: String(collection.payment_type || '-').replace(/_/g, ' '),
+          reference: String(collection.payment_reference || '-'),
+        } satisfies CollectionTransaction;
+      })
+      .filter((row): row is CollectionTransaction => row !== null)
+      .sort((a, b) => {
+        const aTime = new Date(a.date).getTime();
+        const bTime = new Date(b.date).getTime();
+        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
+      });
+  }, [collections, scopedLoans, loanLookup]);
+
+  const filteredTransactions = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    const from = fromDate ? new Date(`${fromDate}T00:00:00`) : null;
+    const to = toDate ? new Date(`${toDate}T23:59:59`) : null;
+
+    return collectionTransactions.filter((row) => {
+      const rowDate = row.date ? new Date(row.date) : null;
+      if (from && rowDate && !Number.isNaN(rowDate.getTime()) && rowDate < from) {
+        return false;
+      }
+      if (to && rowDate && !Number.isNaN(rowDate.getTime()) && rowDate > to) {
+        return false;
+      }
+
+      if (keyword) {
+        const haystack = [row.loanCode, row.customerNo, row.customerName, row.fieldOfficer, row.reference, row.paymentType]
+          .join(' ')
+          .toLowerCase();
+        if (!haystack.includes(keyword)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [collectionTransactions, fromDate, toDate, query]);
+
+  const transactionSummary = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    let totalCollected = 0;
+    let totalCapital = 0;
+    let totalProfit = 0;
+    let totalPenalty = 0;
+    let todayCollected = 0;
+    const officers = new Set<string>();
+
+    filteredTransactions.forEach((row) => {
+      totalCollected += row.collected;
+      totalCapital += row.capital;
+      totalProfit += row.profit;
+      totalPenalty += row.penalty;
+
+      if (String(row.date).slice(0, 10) === today) {
+        todayCollected += row.collected;
+      }
+
+      if (row.fieldOfficer && row.fieldOfficer !== 'Unassigned') {
+        officers.add(row.fieldOfficer);
+      }
+    });
+
+    return {
+      transactionCount: filteredTransactions.length,
+      totalCollected,
+      totalCapital,
+      totalProfit,
+      totalPenalty,
+      todayCollected,
+      officerCount: officers.size,
+    };
+  }, [filteredTransactions]);
+
+  const formatMoney = (value: number) =>
+    Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const formatTransactionDate = (value: string) => {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value || '-';
+    }
+
+    return new Intl.DateTimeFormat('en-LK', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(parsed);
+  };
+
   useEffect(() => {
     setCurrentPage(1);
   }, [query, scopeFilter, routeFilter, centerFilter, fromDate, toDate, pageSize]);
@@ -949,6 +1139,96 @@ export default function ReleasedLoansPage() {
           <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm text-black" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
         </div>
 
+        <div className="bg-white/95 rounded-2xl shadow-lg border border-cyan-100 p-4 sm:p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Collection Transactions</h2>
+              <p className="text-sm text-gray-600">
+                Payment history for active loans. Profit follows interest realized on each collection (same as mortgage profit report).
+              </p>
+            </div>
+            <p className="text-sm text-gray-600">
+              Showing <span className="font-bold text-cyan-700">{transactionSummary.transactionCount}</span> transaction(s)
+            </p>
+          </div>
+
+          {collectionsError ? (
+            <p className="text-sm text-rose-600">{collectionsError}</p>
+          ) : null}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
+            <div className="rounded-xl border border-slate-200/80 bg-gradient-to-br from-white to-slate-50 p-3 shadow-sm">
+              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-slate-500">Transactions</p>
+              <p className="mt-1 text-lg font-extrabold text-slate-900">{transactionSummary.transactionCount}</p>
+            </div>
+            <div className="rounded-xl border border-emerald-200/80 bg-gradient-to-br from-white to-emerald-50/60 p-3 shadow-sm">
+              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-emerald-700">Total Collected</p>
+              <p className="mt-1 text-sm sm:text-base font-extrabold text-emerald-800">{formatMoney(transactionSummary.totalCollected)}</p>
+            </div>
+            <div className="rounded-xl border border-blue-200/80 bg-gradient-to-br from-white to-blue-50/60 p-3 shadow-sm">
+              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-blue-700">Capital</p>
+              <p className="mt-1 text-sm sm:text-base font-extrabold text-blue-800">{formatMoney(transactionSummary.totalCapital)}</p>
+            </div>
+            <div className="rounded-xl border border-violet-200/80 bg-gradient-to-br from-white to-violet-50/60 p-3 shadow-sm">
+              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-violet-700">Profit (Interest)</p>
+              <p className="mt-1 text-sm sm:text-base font-extrabold text-violet-800">{formatMoney(transactionSummary.totalProfit)}</p>
+            </div>
+            <div className="rounded-xl border border-amber-200/80 bg-gradient-to-br from-white to-amber-50/60 p-3 shadow-sm">
+              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-amber-700">Penalty</p>
+              <p className="mt-1 text-sm sm:text-base font-extrabold text-amber-800">{formatMoney(transactionSummary.totalPenalty)}</p>
+            </div>
+            <div className="rounded-xl border border-cyan-200/80 bg-gradient-to-br from-white to-cyan-50/60 p-3 shadow-sm sm:col-span-2 xl:col-span-1">
+              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-cyan-700">Today / Officers</p>
+              <p className="mt-1 text-sm sm:text-base font-extrabold text-cyan-800">{formatMoney(transactionSummary.todayCollected)}</p>
+              <p className="text-xs text-slate-500 mt-0.5">{transactionSummary.officerCount} officer(s)</p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="bg-slate-900 text-left text-white">
+                  <th className="px-3 py-2.5 font-semibold">Date</th>
+                  <th className="px-3 py-2.5 font-semibold">Loan Code</th>
+                  <th className="px-3 py-2.5 font-semibold">Customer</th>
+                  <th className="px-3 py-2.5 font-semibold">Officer</th>
+                  <th className="px-3 py-2.5 font-semibold">Pay Type</th>
+                  <th className="px-3 py-2.5 font-semibold text-right">Collected</th>
+                  <th className="px-3 py-2.5 font-semibold text-right">Capital</th>
+                  <th className="px-3 py-2.5 font-semibold text-right">Profit</th>
+                  <th className="px-3 py-2.5 font-semibold text-right">Penalty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTransactions.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
+                      No collection transactions found for the current filters.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredTransactions.slice(0, 50).map((row) => (
+                    <tr key={row.id} className="border-t border-slate-100 odd:bg-white even:bg-slate-50/60">
+                      <td className="px-3 py-2 whitespace-nowrap text-slate-700">{formatTransactionDate(row.date)}</td>
+                      <td className="px-3 py-2 font-medium text-slate-900">{row.loanCode}</td>
+                      <td className="px-3 py-2 text-slate-700">{row.customerName}</td>
+                      <td className="px-3 py-2 text-slate-600">{row.fieldOfficer}</td>
+                      <td className="px-3 py-2 capitalize text-slate-600">{row.paymentType}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-emerald-700">{formatMoney(row.collected)}</td>
+                      <td className="px-3 py-2 text-right text-blue-700">{formatMoney(row.capital)}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-violet-700">{formatMoney(row.profit)}</td>
+                      <td className="px-3 py-2 text-right text-amber-700">{formatMoney(row.penalty)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          {filteredTransactions.length > 50 ? (
+            <p className="text-xs text-slate-500">Showing latest 50 of {filteredTransactions.length} transactions. Use date filters to narrow results.</p>
+          ) : null}
+        </div>
+
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm text-gray-600">
             Showing {filteredLoans.length === 0 ? 0 : startIndex + 1}-{Math.min(startIndex + pageSize, filteredLoans.length)} of {filteredLoans.length}
@@ -975,28 +1255,28 @@ export default function ReleasedLoansPage() {
         ) : (
           <div className="space-y-4">
             {paginatedLoans.map((loan) => (
-              <div key={loan.id} className="bg-white/90 rounded-2xl shadow-lg border border-cyan-100 p-5">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="space-y-1">
+              <div key={loan.id} className="bg-white/90 rounded-2xl shadow-lg border border-cyan-100 p-4 sm:p-5">
+                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                  <div className="space-y-1 min-w-0">
                     <h2 className="text-lg font-bold text-gray-900">{loan.customer_name}</h2>
                     <p className="text-sm text-gray-600">Loan Code: {loan.customer_no}</p>
                     <p className="text-sm text-gray-600">
                       Scope: {loan.loan_scope === 'center_loan' ? 'Center Loan' : loan.loan_scope === 'route_loan' ? 'Route Loan' : 'Direct Loan'}
                     </p>
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-gray-600 break-words">
                       Route: {loan.route?.name || '-'} | Center: {loan.center?.name || '-'} | Group: {loan.group?.name || '-'}
                     </p>
                   </div>
 
-                  <div className="text-right">
-                    <div className="mb-2 flex justify-end gap-2">
+                  <div className="w-full lg:w-auto lg:min-w-[22rem] text-left lg:text-right">
+                    <div className="mb-2 flex flex-wrap justify-start lg:justify-end gap-2">
                       {canManageSensitiveLoanActions && (
                         <>
                           <button
                             type="button"
                             onClick={() => handleDownloadAgreement(loan.id, loan.customer_no)}
                             disabled={downloadingAgreementId === loan.id}
-                            className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                            className="w-full sm:w-auto px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
                           >
                             {downloadingAgreementId === loan.id ? 'Downloading...' : 'Download Agreement'}
                           </button>
@@ -1004,7 +1284,7 @@ export default function ReleasedLoansPage() {
                             type="button"
                             onClick={() => handleDownloadReminderLetter(loan.id, loan.customer_no)}
                             disabled={downloadingReminderId === loan.id}
-                            className="px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                            className="w-full sm:w-auto px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
                           >
                             {downloadingReminderId === loan.id ? 'Downloading...' : 'Reminder Letter'}
                           </button>
@@ -1012,14 +1292,14 @@ export default function ReleasedLoansPage() {
                             type="button"
                             onClick={() => handleDownloadLegalLetter(loan.id, loan.customer_no)}
                             disabled={downloadingLegalId === loan.id}
-                            className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                            className="w-full sm:w-auto px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
                           >
                             {downloadingLegalId === loan.id ? 'Downloading...' : 'Legal Letter'}
                           </button>
                           <button
                             type="button"
                             onClick={() => openEditModal(loan)}
-                            className="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold"
+                            className="w-full sm:w-auto px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold"
                           >
                             Edit Loan
                           </button>
@@ -1030,7 +1310,7 @@ export default function ReleasedLoansPage() {
                           type="button"
                           onClick={() => openRemoveConfirmModal(loan)}
                           disabled={removingLoanId === loan.id}
-                          className="px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                          className="w-full sm:w-auto px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-800 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
                         >
                           {removingLoanId === loan.id ? 'Removing...' : 'Remove Loan'}
                         </button>
@@ -1038,7 +1318,7 @@ export default function ReleasedLoansPage() {
                       <button
                         type="button"
                         onClick={() => openDocumentsModal(loan)}
-                        className="px-3 py-1.5 rounded-lg border border-cyan-200 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 text-xs font-semibold"
+                        className="w-full sm:w-auto px-3 py-1.5 rounded-lg border border-cyan-200 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 text-xs font-semibold"
                       >
                         View Documents ({Array.isArray(loan.documents) ? loan.documents.length : 0})
                       </button>
@@ -1051,7 +1331,7 @@ export default function ReleasedLoansPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-6 gap-3 mt-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3 mt-4">
                   <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
                     <p className="text-xs uppercase tracking-wide text-gray-500">Refundable</p>
                     <p className="text-sm font-bold text-gray-900">{Number(loan.refundable_amount || 0).toFixed(2)}</p>
@@ -1202,71 +1482,172 @@ export default function ReleasedLoansPage() {
               </div>
 
               {editStep === 1 && (
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-black">
-                  <select
-                    className="px-3 py-2 rounded-lg border border-cyan-100 text-sm"
-                    value={editModal.loan_scope}
-                    onChange={(e) => {
-                      const nextScope = e.target.value as 'route_loan' | 'center_loan' | 'direct_loan';
-                      setEditModal((prev) => ({
-                        ...prev,
-                        loan_scope: nextScope,
-                        mf_route_id: 0,
-                        mf_center_id: 0,
-                        mf_group_id: 0,
-                      }));
-                    }}
-                  >
-                    <option value="center_loan">Center Loan</option>
-                    <option value="route_loan">Route Loan</option>
-                    <option value="direct_loan">Direct Loan</option>
-                  </select>
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-black">
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-loan-scope">Loan Scope</label>
+                    <select
+                      id="edit-loan-scope"
+                      className={editFieldClass}
+                      value={editModal.loan_scope}
+                      onChange={(e) => {
+                        const nextScope = e.target.value as 'route_loan' | 'center_loan' | 'direct_loan';
+                        setEditModal((prev) => ({
+                          ...prev,
+                          loan_scope: nextScope,
+                          mf_route_id: 0,
+                          mf_center_id: 0,
+                          mf_group_id: 0,
+                        }));
+                      }}
+                    >
+                      <option value="center_loan">Center Loan</option>
+                      <option value="route_loan">Route Loan</option>
+                      <option value="direct_loan">Direct Loan</option>
+                    </select>
+                  </div>
 
                   {editModal.loan_scope !== 'direct_loan' && (
-                    <select className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" value={editModal.mf_route_id} onChange={(e) => setEditModal((prev) => ({ ...prev, mf_route_id: Number(e.target.value), mf_center_id: 0, mf_group_id: 0 }))}>
-                      <option value={0}>Select Route</option>
-                      {routes.map((r) => <option key={r.id} value={r.id}>{r.name} ({r.code})</option>)}
-                    </select>
+                    <div>
+                      <label className={editLabelClass} htmlFor="edit-route">Route</label>
+                      <select
+                        id="edit-route"
+                        className={editFieldClass}
+                        value={editModal.mf_route_id}
+                        onChange={(e) => setEditModal((prev) => ({ ...prev, mf_route_id: Number(e.target.value), mf_center_id: 0, mf_group_id: 0 }))}
+                      >
+                        <option value={0}>Select Route</option>
+                        {routes.map((r) => <option key={r.id} value={r.id}>{r.name} ({r.code})</option>)}
+                      </select>
+                    </div>
                   )}
 
                   {editModal.loan_scope === 'center_loan' && (
-                    <select className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" value={editModal.mf_center_id} onChange={(e) => setEditModal((prev) => ({ ...prev, mf_center_id: Number(e.target.value), mf_group_id: 0 }))}>
-                      <option value={0}>Select Center</option>
-                      {editFilteredCenters.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
-                    </select>
+                    <div>
+                      <label className={editLabelClass} htmlFor="edit-center">Center</label>
+                      <select
+                        id="edit-center"
+                        className={editFieldClass}
+                        value={editModal.mf_center_id}
+                        onChange={(e) => setEditModal((prev) => ({ ...prev, mf_center_id: Number(e.target.value), mf_group_id: 0 }))}
+                      >
+                        <option value={0}>Select Center</option>
+                        {editFilteredCenters.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
+                      </select>
+                    </div>
                   )}
 
                   {editModal.loan_scope === 'center_loan' && (
-                    <select className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" value={editModal.mf_group_id} onChange={(e) => setEditModal((prev) => ({ ...prev, mf_group_id: Number(e.target.value) }))}>
-                      <option value={0}>Select Group</option>
-                      {editFilteredGroups.map((g) => <option key={g.id} value={g.id}>{g.name} ({g.code})</option>)}
-                    </select>
+                    <div>
+                      <label className={editLabelClass} htmlFor="edit-group">Group</label>
+                      <select
+                        id="edit-group"
+                        className={editFieldClass}
+                        value={editModal.mf_group_id}
+                        onChange={(e) => setEditModal((prev) => ({ ...prev, mf_group_id: Number(e.target.value) }))}
+                      >
+                        <option value={0}>Select Group</option>
+                        {editFilteredGroups.map((g) => <option key={g.id} value={g.id}>{g.name} ({g.code})</option>)}
+                      </select>
+                    </div>
                   )}
                 </div>
               )}
 
               {editStep === 2 && (
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-black">
-                  <select className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" value={editModal.manager_name} onChange={(e) => updateEditField('manager_name', e.target.value)}>
-                    <option value="">Select Manager</option>
-                    {managers.map((m) => <option key={m.id} value={m.name}>{m.name}{m.designation ? ` (${m.designation})` : ''}</option>)}
-                  </select>
-                  <select className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" value={editModal.field_officer} onChange={(e) => updateEditField('field_officer', e.target.value)}>
-                    <option value="">Select Field Officer</option>
-                    {fieldOfficers.map((o) => <option key={o.id} value={o.name}>{o.name}{o.designation ? ` (${o.designation})` : ''}</option>)}
-                  </select>
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Group Leader" value={editModal.group_leader} onChange={(e) => updateEditField('group_leader', e.target.value)} />
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-black">
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-manager">Manager</label>
+                    <select
+                      id="edit-manager"
+                      className={editFieldClass}
+                      value={editModal.manager_name}
+                      onChange={(e) => updateEditField('manager_name', e.target.value)}
+                    >
+                      <option value="">Select Manager</option>
+                      {managers.map((m) => <option key={m.id} value={m.name}>{m.name}{m.designation ? ` (${m.designation})` : ''}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-field-officer">Field Officer</label>
+                    <select
+                      id="edit-field-officer"
+                      className={editFieldClass}
+                      value={editModal.field_officer}
+                      onChange={(e) => updateEditField('field_officer', e.target.value)}
+                    >
+                      <option value="">Select Field Officer</option>
+                      {fieldOfficers.map((o) => <option key={o.id} value={o.name}>{o.name}{o.designation ? ` (${o.designation})` : ''}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-group-leader">Group Leader</label>
+                    <input
+                      id="edit-group-leader"
+                      className={editFieldClass}
+                      value={editModal.group_leader}
+                      onChange={(e) => updateEditField('group_leader', e.target.value)}
+                    />
+                  </div>
                 </div>
               )}
 
               {editStep === 3 && (
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-black">
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Customer Name" value={editModal.customer_name} onChange={(e) => updateEditField('customer_name', e.target.value)} />
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Nick Name" value={editModal.nick_name} onChange={(e) => updateEditField('nick_name', e.target.value)} />
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Contact No" value={editModal.contact_no} onChange={(e) => updateEditField('contact_no', e.target.value)} />
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" type="date" value={editModal.loan_request_date} onChange={(e) => updateEditField('loan_request_date', e.target.value)} />
-                  <input className="md:col-span-2 px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Address" value={editModal.address} onChange={(e) => updateEditField('address', e.target.value)} />
-                  <input className="md:col-span-2 px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Reason" value={editModal.reason} onChange={(e) => updateEditField('reason', e.target.value)} />
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-black">
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-customer-name">Customer Name</label>
+                    <input
+                      id="edit-customer-name"
+                      className={editFieldClass}
+                      value={editModal.customer_name}
+                      onChange={(e) => updateEditField('customer_name', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-nick-name">Nick Name</label>
+                    <input
+                      id="edit-nick-name"
+                      className={editFieldClass}
+                      value={editModal.nick_name}
+                      onChange={(e) => updateEditField('nick_name', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-contact-no">Contact No</label>
+                    <input
+                      id="edit-contact-no"
+                      className={editFieldClass}
+                      value={editModal.contact_no}
+                      onChange={(e) => updateEditField('contact_no', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-loan-request-date">Loan Request Date</label>
+                    <input
+                      id="edit-loan-request-date"
+                      className={editFieldClass}
+                      type="date"
+                      value={editModal.loan_request_date}
+                      onChange={(e) => updateEditField('loan_request_date', e.target.value)}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className={editLabelClass} htmlFor="edit-address">Address</label>
+                    <input
+                      id="edit-address"
+                      className={editFieldClass}
+                      value={editModal.address}
+                      onChange={(e) => updateEditField('address', e.target.value)}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className={editLabelClass} htmlFor="edit-reason">Reason</label>
+                    <input
+                      id="edit-reason"
+                      className={editFieldClass}
+                      value={editModal.reason}
+                      onChange={(e) => updateEditField('reason', e.target.value)}
+                    />
+                  </div>
                 </div>
               )}
 
@@ -1276,16 +1657,56 @@ export default function ReleasedLoansPage() {
                     <button type="button" onClick={addGuarantorRow} className="px-3 py-1.5 rounded-lg bg-cyan-600 text-white text-xs font-semibold">+ Add Guarantor</button>
                   </div>
                   {editModal.guarantors.map((g, index) => (
-                    <div key={index} className="grid grid-cols-1 md:grid-cols-5 gap-2 rounded-lg border border-cyan-100 p-3">
-                      <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Name" value={g.name} onChange={(e) => updateGuarantor(index, 'name', e.target.value)} />
-                      <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="NIC" value={g.nic} onChange={(e) => updateGuarantor(index, 'nic', e.target.value)} />
-                      <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Contact" value={g.contact_no} onChange={(e) => updateGuarantor(index, 'contact_no', e.target.value)} />
-                      <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Relationship" value={g.relationship} onChange={(e) => updateGuarantor(index, 'relationship', e.target.value)} />
-                      <div className="flex gap-2">
-                        <input className="w-full px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Address" value={g.address} onChange={(e) => updateGuarantor(index, 'address', e.target.value)} />
-                        {editModal.guarantors.length > 1 && (
-                          <button type="button" onClick={() => removeGuarantorRow(index)} className="px-2 py-1 rounded-lg bg-red-100 text-red-700 text-xs font-semibold">Remove</button>
-                        )}
+                    <div key={index} className="grid grid-cols-1 md:grid-cols-5 gap-3 rounded-lg border border-cyan-100 p-3">
+                      <div>
+                        <label className={editLabelClass} htmlFor={`edit-guarantor-name-${index}`}>Guarantor Name</label>
+                        <input
+                          id={`edit-guarantor-name-${index}`}
+                          className={editFieldClass}
+                          value={g.name}
+                          onChange={(e) => updateGuarantor(index, 'name', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className={editLabelClass} htmlFor={`edit-guarantor-nic-${index}`}>NIC</label>
+                        <input
+                          id={`edit-guarantor-nic-${index}`}
+                          className={editFieldClass}
+                          value={g.nic}
+                          onChange={(e) => updateGuarantor(index, 'nic', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className={editLabelClass} htmlFor={`edit-guarantor-contact-${index}`}>Contact No</label>
+                        <input
+                          id={`edit-guarantor-contact-${index}`}
+                          className={editFieldClass}
+                          value={g.contact_no}
+                          onChange={(e) => updateGuarantor(index, 'contact_no', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className={editLabelClass} htmlFor={`edit-guarantor-relationship-${index}`}>Relationship</label>
+                        <input
+                          id={`edit-guarantor-relationship-${index}`}
+                          className={editFieldClass}
+                          value={g.relationship}
+                          onChange={(e) => updateGuarantor(index, 'relationship', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className={editLabelClass} htmlFor={`edit-guarantor-address-${index}`}>Address</label>
+                        <div className="flex gap-2">
+                          <input
+                            id={`edit-guarantor-address-${index}`}
+                            className={editFieldClass}
+                            value={g.address}
+                            onChange={(e) => updateGuarantor(index, 'address', e.target.value)}
+                          />
+                          {editModal.guarantors.length > 1 && (
+                            <button type="button" onClick={() => removeGuarantorRow(index)} className="shrink-0 px-2 py-1 rounded-lg bg-red-100 text-red-700 text-xs font-semibold self-end">Remove</button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1293,43 +1714,171 @@ export default function ReleasedLoansPage() {
               )}
 
               {editStep === 5 && (
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-black">
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Loan Amount" type="number" min="0" value={editModal.loan_amount} onChange={(e) => updateEditField('loan_amount', e.target.value)} />
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Interest Rate" type="number" min="0" step="0.01" value={editModal.interest_rate} onChange={(e) => updateEditField('interest_rate', e.target.value)} />
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Terms Count" type="number" min="1" value={editModal.terms_count} onChange={(e) => updateEditField('terms_count', e.target.value)} />
-                  <select className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" value={editModal.refund_option} onChange={(e) => updateEditField('refund_option', e.target.value)}>
-                    <option value="day">Day</option>
-                    <option value="week">Week</option>
-                    <option value="month">Month</option>
-                  </select>
-                  <select className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" value={editModal.interest_type} onChange={(e) => updateEditField('interest_type', e.target.value)}>
-                    <option value="flat">Flat</option>
-                    <option value="reducing">Reducing</option>
-                  </select>
-                  <select className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" value={editModal.charge_payment_mode} onChange={(e) => updateEditField('charge_payment_mode', e.target.value)}>
-                    <option value="deduct_from_loan">Deduct from loan</option>
-                    <option value="hand_cash">Hand cash</option>
-                  </select>
-
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm bg-slate-50" placeholder="Refundable Amount" value={editModal.refundable_amount} readOnly />
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm bg-slate-50" placeholder="Installment Amount" value={editModal.installment_amount} readOnly />
-                  <div className="px-3 py-2 rounded-lg border border-cyan-100 text-sm bg-slate-50">
-                    Net Disbursed: {(
-                      editModal.charge_payment_mode === 'deduct_from_loan'
-                        ? Math.max(
-                          Number(editModal.loan_amount || 0)
-                            - Number(editModal.document_charges || 0)
-                            - Number(editModal.stamp_charges || 0)
-                            - Number(editModal.insurance_charges || 0),
-                          0
-                        )
-                        : Number(editModal.loan_amount || 0)
-                    ).toFixed(2)}
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-black">
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-loan-amount">Loan Amount</label>
+                    <input
+                      id="edit-loan-amount"
+                      className={editFieldClass}
+                      type="number"
+                      min="0"
+                      value={editModal.loan_amount}
+                      onChange={(e) => updateEditField('loan_amount', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-interest-rate">Interest Rate (%)</label>
+                    <input
+                      id="edit-interest-rate"
+                      className={editFieldClass}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editModal.interest_rate}
+                      onChange={(e) => updateEditField('interest_rate', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-terms-count">Terms Count ({editTermUnitLabel})</label>
+                    <input
+                      id="edit-terms-count"
+                      className={editFieldClass}
+                      type="number"
+                      min="1"
+                      value={editModal.terms_count}
+                      onChange={(e) => updateEditField('terms_count', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-refund-option">Refund Option</label>
+                    <select
+                      id="edit-refund-option"
+                      className={editFieldClass}
+                      value={editModal.refund_option}
+                      onChange={(e) => updateEditField('refund_option', e.target.value)}
+                    >
+                      <option value="day">Day</option>
+                      <option value="week">Week</option>
+                      <option value="month">Month</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-interest-type">Interest Type</label>
+                    <select
+                      id="edit-interest-type"
+                      className={editFieldClass}
+                      value={editModal.interest_type}
+                      onChange={(e) => updateEditField('interest_type', e.target.value)}
+                    >
+                      <option value="flat">Flat</option>
+                      <option value="reducing">Reducing</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-charge-payment-mode">Charges Collection Mode</label>
+                    <select
+                      id="edit-charge-payment-mode"
+                      className={editFieldClass}
+                      value={editModal.charge_payment_mode}
+                      onChange={(e) => updateEditField('charge_payment_mode', e.target.value)}
+                    >
+                      <option value="deduct_from_loan">Deduct from loan</option>
+                      <option value="hand_cash">Hand cash</option>
+                    </select>
                   </div>
 
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Document Charges" type="number" min="0" step="0.01" value={editModal.document_charges} onChange={(e) => updateEditField('document_charges', e.target.value)} />
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Stamp Charges" type="number" min="0" step="0.01" value={editModal.stamp_charges} onChange={(e) => updateEditField('stamp_charges', e.target.value)} />
-                  <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm" placeholder="Insurance Charges" type="number" min="0" step="0.01" value={editModal.insurance_charges} onChange={(e) => updateEditField('insurance_charges', e.target.value)} />
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-refundable-amount">Refundable Amount</label>
+                    <input
+                      id="edit-refundable-amount"
+                      className={`${editFieldClass} bg-slate-50`}
+                      value={editModal.refundable_amount}
+                      readOnly
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-installment-amount">Installment Amount</label>
+                    <input
+                      id="edit-installment-amount"
+                      className={`${editFieldClass} bg-slate-50`}
+                      value={editModal.installment_amount}
+                      readOnly
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass}>Net Disbursed</label>
+                    <div className={`${editFieldClass} bg-slate-50 font-semibold text-slate-800`}>
+                      {(
+                        editModal.charge_payment_mode === 'deduct_from_loan'
+                          ? Math.max(
+                            Number(editModal.loan_amount || 0)
+                              - Number(editModal.document_charges || 0)
+                              - Number(editModal.stamp_charges || 0)
+                              - Number(editModal.insurance_charges || 0),
+                            0
+                          )
+                          : Number(editModal.loan_amount || 0)
+                      ).toFixed(2)}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-document-charges">Document Charges</label>
+                    <input
+                      id="edit-document-charges"
+                      className={editFieldClass}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editModal.document_charges}
+                      onChange={(e) => updateEditField('document_charges', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-stamp-charges">Stamp Charges</label>
+                    <input
+                      id="edit-stamp-charges"
+                      className={editFieldClass}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editModal.stamp_charges}
+                      onChange={(e) => updateEditField('stamp_charges', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-insurance-charges">Insurance Charges</label>
+                    <input
+                      id="edit-insurance-charges"
+                      className={editFieldClass}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editModal.insurance_charges}
+                      onChange={(e) => updateEditField('insurance_charges', e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-next-collection-date">Next Collection Date (Due Date)</label>
+                    <input
+                      id="edit-next-collection-date"
+                      className={editFieldClass}
+                      type="date"
+                      value={editModal.next_collection_date}
+                      onChange={(e) => updateEditField('next_collection_date', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={editLabelClass} htmlFor="edit-loan-end-date">Loan End Date</label>
+                    <input
+                      id="edit-loan-end-date"
+                      className={editFieldClass}
+                      type="date"
+                      value={editModal.loan_end_date}
+                      onChange={(e) => updateEditField('loan_end_date', e.target.value)}
+                    />
+                  </div>
                 </div>
               )}
 

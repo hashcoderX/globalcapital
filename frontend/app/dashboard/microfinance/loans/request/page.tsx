@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl, resolveStorageAssetUrl } from '@/lib/api';
 
 type MFRoute = { id: number; name: string; code: string };
 type MFCenter = { id: number; mf_route_id: number; name: string; code: string };
@@ -32,7 +33,13 @@ type ExistingCustomer = {
   phone?: string;
   permanent_address?: string;
   current_address?: string;
+  photo_path?: string;
+  photo_url?: string;
+  profile_photo?: string;
+  customer_photo?: string;
 };
+
+const CUSTOMER_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 
 type ExistingLoanRequest = {
   customer_no?: string;
@@ -53,7 +60,7 @@ type AuthUser = {
   roles?: AuthRole[];
 };
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = getApiBaseUrl();
 const INTEREST_RATE_MAX_DECIMALS = 7;
 
 const sanitizeInterestRateInput = (value: string) => {
@@ -129,6 +136,10 @@ export default function RequestLoanPage() {
   const [customerCodeLookupLoading, setCustomerCodeLookupLoading] = useState(false);
   const [customerCodeLookupNotice, setCustomerCodeLookupNotice] = useState('');
   const customerCodeLookupRequestRef = useRef(0);
+  const customerPhotoInputRef = useRef<HTMLInputElement | null>(null);
+  const [customerPhotoFile, setCustomerPhotoFile] = useState<File | null>(null);
+  const [customerPhotoPreview, setCustomerPhotoPreview] = useState('');
+  const [existingCustomerPhotoUrl, setExistingCustomerPhotoUrl] = useState('');
   const [activeStep, setActiveStep] = useState(1);
 
   const [form, setForm] = useState({
@@ -223,6 +234,69 @@ export default function RequestLoanPage() {
   }, [authUser]);
 
   const normalizeCustomerNo = (value: string) => value.trim().toUpperCase();
+
+  const resolveCustomerPhotoUrl = useCallback((customer: ExistingCustomer): string => {
+    const directUrl = String(customer.photo_url || '').trim();
+    if (directUrl) {
+      return resolveStorageAssetUrl(directUrl);
+    }
+
+    const rawPath = String(
+      customer.photo_path || customer.profile_photo || customer.customer_photo || ''
+    ).trim();
+    if (!rawPath) return '';
+
+    return resolveStorageAssetUrl(rawPath);
+  }, []);
+
+  const handleCustomerPhotoChange = (file: File | null) => {
+    if (!file) {
+      setCustomerPhotoFile(null);
+      setCustomerPhotoPreview(existingCustomerPhotoUrl);
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      openModal('Please choose a valid image file (JPG, PNG, or WEBP).', 'Validation');
+      return;
+    }
+
+    if (file.size > CUSTOMER_PHOTO_MAX_BYTES) {
+      openModal('Customer photo must be 5 MB or smaller.', 'Validation');
+      return;
+    }
+
+    setCustomerPhotoFile(file);
+  };
+
+  const clearCustomerPhotoSelection = () => {
+    setCustomerPhotoFile(null);
+    setCustomerPhotoPreview(existingCustomerPhotoUrl);
+    if (customerPhotoInputRef.current) {
+      customerPhotoInputRef.current.value = '';
+    }
+  };
+
+  const uploadCustomerPhoto = async (customerCode: string, file: File) => {
+    const formData = new FormData();
+    formData.append('photo', file);
+
+    const response = await axios.post(
+      `${API_BASE}/customers/by-code/${encodeURIComponent(normalizeCustomerNo(customerCode))}/photo`,
+      formData,
+      {
+        headers: {
+          ...headers,
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+
+    const uploaded = response.data as ExistingCustomer;
+    const uploadedUrl = resolveCustomerPhotoUrl(uploaded);
+    setExistingCustomerPhotoUrl(uploadedUrl);
+    setCustomerPhotoPreview(uploadedUrl);
+  };
 
   const handleInterestRateChange = (value: string) => {
     const sanitized = sanitizeInterestRateInput(value);
@@ -498,8 +572,15 @@ export default function RequestLoanPage() {
         address: address || prev.address,
         contact_no: customer.phone || prev.contact_no,
       }));
+      const existingPhotoUrl = resolveCustomerPhotoUrl(customer);
+      setExistingCustomerPhotoUrl(existingPhotoUrl);
+      setCustomerPhotoPreview(existingPhotoUrl);
+      setCustomerPhotoFile(null);
+      if (customerPhotoInputRef.current) {
+        customerPhotoInputRef.current.value = '';
+      }
     },
-    [loanRequestNicknamesByCustomerNo]
+    [loanRequestNicknamesByCustomerNo, resolveCustomerPhotoUrl]
   );
 
   const lookupCustomerByCode = useCallback(
@@ -569,6 +650,19 @@ export default function RequestLoanPage() {
 
     return () => window.clearTimeout(timer);
   }, [form.customer_code, lookupCustomerByCode]);
+
+  useEffect(() => {
+    if (!customerPhotoFile) {
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(customerPhotoFile);
+    setCustomerPhotoPreview(objectUrl);
+
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [customerPhotoFile]);
 
   const applyCustomerFromSuggestion = (customer: ExistingCustomer) => {
     fillCustomerFromRecord(customer);
@@ -720,6 +814,8 @@ export default function RequestLoanPage() {
 
     setLoading(true);
 
+    const pendingCustomerPhoto = customerPhotoFile;
+
     try {
       const loanResponse = await axios.post(
         `${API_BASE}/microfinance/loan-requests`,
@@ -748,9 +844,27 @@ export default function RequestLoanPage() {
         { headers }
       );
 
+      let customerPhotoUploadFailed = false;
+      if (pendingCustomerPhoto && form.customer_code.trim()) {
+        try {
+          await uploadCustomerPhoto(form.customer_code, pendingCustomerPhoto);
+        } catch {
+          customerPhotoUploadFailed = true;
+        }
+      }
+
       const loanId = loanResponse?.data?.id;
       if (loanId) {
-        const readyDocs = documents.filter((doc) => doc.file && doc.document_type.trim() !== '');
+        const readyDocs: LoanDocumentUpload[] = documents.filter(
+          (doc) => doc.file && doc.document_type.trim() !== ''
+        );
+        if (pendingCustomerPhoto) {
+          readyDocs.unshift({
+            document_type: 'Customer Photo',
+            file: pendingCustomerPhoto,
+          });
+        }
+
         if (readyDocs.length > 0) {
           const formData = new FormData();
           readyDocs.forEach((doc) => {
@@ -771,9 +885,20 @@ export default function RequestLoanPage() {
         }
       }
 
-      openModal('Loan request registered successfully.', 'Success', () => {
-        router.push('/dashboard/microfinance/loans');
-      });
+      setCustomerPhotoFile(null);
+      if (customerPhotoInputRef.current) {
+        customerPhotoInputRef.current.value = '';
+      }
+
+      openModal(
+        customerPhotoUploadFailed
+          ? 'Loan request registered, but the customer photo could not be saved. You can upload it again later.'
+          : 'Loan request registered successfully.',
+        customerPhotoUploadFailed ? 'Warning' : 'Success',
+        () => {
+          router.push('/dashboard/microfinance/loans');
+        }
+      );
     } catch (error: any) {
       const message = error?.response?.data?.message || 'Failed to register loan request.';
       openModal(message, 'Error');
@@ -1037,6 +1162,45 @@ export default function RequestLoanPage() {
                   <div>
                     <label className="fieldLabel">Contact No *</label>
                     <input className="input" placeholder="Enter contact number" value={form.contact_no} onChange={(e) => setForm((p) => ({ ...p, contact_no: e.target.value }))} required />
+                  </div>
+                  <div className="md:col-span-3">
+                    <label className="fieldLabel">Customer Photo</label>
+                    <div className="rounded-xl border border-emerald-100 bg-white/95 p-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                        <div className="h-24 w-24 shrink-0 rounded-xl border border-emerald-200 bg-slate-50 overflow-hidden flex items-center justify-center">
+                          {customerPhotoPreview ? (
+                            <img
+                              src={customerPhotoPreview}
+                              alt="Customer preview"
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <span className="text-xs text-slate-400 text-center px-2">No photo</span>
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <input
+                            ref={customerPhotoInputRef}
+                            className="customerPhotoInput"
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,image/*"
+                            onChange={(e) => handleCustomerPhotoChange(e.target.files?.[0] ?? null)}
+                          />
+                          <p className="mt-2 text-xs text-slate-500">
+                            JPG, PNG, or WEBP up to 5 MB. Saved on the customer profile and attached to this loan request.
+                          </p>
+                          {(customerPhotoFile || customerPhotoPreview) && (
+                            <button
+                              type="button"
+                              onClick={clearCustomerPhotoSelection}
+                              className="mt-3 px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200"
+                            >
+                              {customerPhotoFile ? 'Remove selected photo' : 'Clear preview'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1410,6 +1574,29 @@ export default function RequestLoanPage() {
         .input:focus {
           border-color: #10b981;
           box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.2);
+        }
+        .customerPhotoInput {
+          width: 100%;
+          border: 1px solid #d1fae5;
+          background: rgba(255, 255, 255, 0.95);
+          border-radius: 0.75rem;
+          padding: 0.68rem 0.9rem;
+          font-size: 0.9rem;
+          color: #0f172a;
+        }
+        .customerPhotoInput::file-selector-button {
+          margin-right: 0.75rem;
+          border: 0;
+          border-radius: 0.55rem;
+          padding: 0.45rem 0.85rem;
+          font-size: 0.82rem;
+          font-weight: 600;
+          background: #d1fae5;
+          color: #047857;
+          cursor: pointer;
+        }
+        .customerPhotoInput::file-selector-button:hover {
+          background: #a7f3d0;
         }
         .sectionCard {
           border: 1px solid #d1fae5;

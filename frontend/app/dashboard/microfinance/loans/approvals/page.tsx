@@ -1,13 +1,24 @@
 'use client';
 
 import axios from 'axios';
+import { getApiBaseUrl, resolveStorageAssetUrl } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+
+type LoanDocument = {
+  id: number;
+  document_type: string;
+  file_path: string;
+  original_name?: string | null;
+};
 
 type LoanRequest = {
   id: number;
   customer_no: string;
   customer_name: string;
+  nic?: string | null;
+  customer_photo_url?: string | null;
+  documents?: LoanDocument[];
   manager_name?: string | null;
   field_officer?: string | null;
   branch_id?: number | null;
@@ -45,7 +56,30 @@ type AuthUser = {
   roles?: AuthRole[];
 };
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = getApiBaseUrl();
+
+const resolveLoanCustomerPhotoUrl = (loan: LoanRequest): string => {
+  const directUrl = String(loan.customer_photo_url || '').trim();
+  if (directUrl) {
+    return resolveStorageAssetUrl(directUrl);
+  }
+
+  const photoDocument = (loan.documents || []).find((doc) =>
+    String(doc.document_type || '').toLowerCase().includes('customer photo')
+  );
+
+  if (photoDocument) {
+    const documentWithUrl = photoDocument as LoanDocument & { file_url?: string | null };
+    if (documentWithUrl.file_url) {
+      return resolveStorageAssetUrl(documentWithUrl.file_url);
+    }
+    if (photoDocument.file_path) {
+      return resolveStorageAssetUrl(photoDocument.file_path);
+    }
+  }
+
+  return '';
+};
 
 const toInputDate = (date: Date) => {
   const year = date.getFullYear();
@@ -123,6 +157,11 @@ export default function LoanApprovalsPage() {
     message: '',
   });
   const [scheduleByLoanId, setScheduleByLoanId] = useState<Record<number, LoanSchedule>>({});
+  const [photoViewer, setPhotoViewer] = useState<{ open: boolean; title: string; imageUrl: string }>({
+    open: false,
+    title: '',
+    imageUrl: '',
+  });
 
   const openModal = (message: string, title = 'Notice', onClose?: () => void) => {
     setModal({ open: true, title, message, onClose });
@@ -132,6 +171,24 @@ export default function LoanApprovalsPage() {
     const callback = modal.onClose;
     setModal({ open: false, title: '', message: '' });
     if (callback) callback();
+  };
+
+  const openPhotoViewer = (loan: LoanRequest) => {
+    const imageUrl = resolveLoanCustomerPhotoUrl(loan);
+    if (!imageUrl) {
+      openModal('No customer photo uploaded for this loan.', 'Customer Photo');
+      return;
+    }
+
+    setPhotoViewer({
+      open: true,
+      title: `${loan.customer_name} (${loan.customer_no})`,
+      imageUrl,
+    });
+  };
+
+  const closePhotoViewer = () => {
+    setPhotoViewer({ open: false, title: '', imageUrl: '' });
   };
 
   const headers = useMemo(
@@ -581,11 +638,35 @@ export default function LoanApprovalsPage() {
           <div className="space-y-4">
             {paginatedRequests.map((loan) => {
               const schedule = getLoanSchedule(loan);
+              const customerPhotoUrl = resolveLoanCustomerPhotoUrl(loan);
 
               return (
               <div key={loan.id} className="bg-white/90 rounded-2xl shadow-lg border border-orange-100 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="space-y-1">
+                  <div className="flex items-start gap-4 min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => openPhotoViewer(loan)}
+                      className="group relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-orange-200 bg-orange-50 shadow-sm transition hover:border-orange-400 hover:shadow-md"
+                      title={customerPhotoUrl ? 'View customer photo' : 'No customer photo uploaded'}
+                    >
+                      {customerPhotoUrl ? (
+                        <img
+                          src={customerPhotoUrl}
+                          alt={`${loan.customer_name} photo`}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full flex-col items-center justify-center px-2 text-center text-[11px] font-semibold text-orange-700">
+                          <span>No Photo</span>
+                        </div>
+                      )}
+                      <span className="absolute inset-x-0 bottom-0 bg-slate-900/65 px-1 py-1 text-[10px] font-semibold text-white opacity-0 transition group-hover:opacity-100">
+                        View
+                      </span>
+                    </button>
+
+                    <div className="space-y-1 min-w-0">
                     <h2 className="text-lg font-bold text-gray-900">{loan.customer_name}</h2>
                     <p className="text-sm text-gray-600">Loan Code: {loan.customer_no}</p>
                     {loan.documents_requested && (
@@ -599,6 +680,14 @@ export default function LoanApprovalsPage() {
                     <p className="text-sm text-gray-600">
                       Route: {loan.route?.name || '-'} | Center: {loan.center?.name || '-'} | Group: {loan.group?.name || '-'}
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => openPhotoViewer(loan)}
+                      className="mt-1 inline-flex items-center rounded-full border border-orange-200 bg-white px-3 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-50"
+                    >
+                      {customerPhotoUrl ? 'View Customer Photo' : 'Customer Photo Not Available'}
+                    </button>
+                    </div>
                   </div>
 
                   <div className="text-right">
@@ -762,6 +851,33 @@ export default function LoanApprovalsPage() {
           </div>
         )}
       </div>
+
+      {photoViewer.open && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/75 px-4 py-8">
+          <div className="w-full max-w-3xl rounded-2xl bg-white p-4 shadow-2xl border border-orange-100">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Customer Photo</h3>
+                <p className="text-sm text-slate-600">{photoViewer.title}</p>
+              </div>
+              <button
+                type="button"
+                onClick={closePhotoViewer}
+                className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200"
+              >
+                Close
+              </button>
+            </div>
+            <div className="rounded-xl border border-orange-100 bg-slate-50 p-3 flex items-center justify-center min-h-[280px]">
+              <img
+                src={photoViewer.imageUrl}
+                alt={photoViewer.title}
+                className="max-h-[70vh] w-auto max-w-full rounded-lg object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {modal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">

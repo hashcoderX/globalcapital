@@ -12,14 +12,20 @@ import {
   HandCoins,
   Layers,
   PieChart,
+  Search,
   ShieldAlert,
   TrendingUp,
+  X,
 } from 'lucide-react';
+
+const inputClass =
+  'w-full rounded-xl border border-cyan-200/80 bg-white px-3.5 py-2.5 text-sm text-black shadow-sm transition focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-200/80 placeholder:text-slate-400 [color-scheme:light]';
 
 type FinanceRow = {
   id: number;
   finance_type?: string | null;
   product_type?: string | null;
+  asset_reference?: string | null;
   financed_amount?: number | string | null;
   amount?: number | string | null;
   total_paid_amount?: number | string | null;
@@ -28,14 +34,39 @@ type FinanceRow = {
   due_amount?: number | string | null;
   due_date?: string | null;
   installment_amount?: number | string | null;
+  installment_frequency?: string | null;
+  tenure_months?: number | string | null;
   interest_rate?: number | string | null;
+  refund_amount?: number | string | null;
   status?: string | null;
   created_at?: string | null;
+  repayment_plan?: {
+    installments?: Array<{ amount?: number | string | null }>;
+  } | null;
+  vehicle_details?: {
+    vehicle_no?: string | null;
+    chassis_no?: string | null;
+  } | null;
   customer?: {
     customer_code?: string | null;
     first_name?: string | null;
     last_name?: string | null;
   } | null;
+};
+
+type MonthlyTrendRow = {
+  key: string;
+  month: string;
+  financeId: number;
+  customerNo: string;
+  vehicleNo: string;
+  reference: string;
+  financed: number;
+  totalRefundable: number;
+  collected: number;
+  collectionRate: number;
+  profitLoss: number;
+  profitLossRate: number;
 };
 
 function toNumber(value: unknown): number {
@@ -74,6 +105,91 @@ function daysPastDue(value: unknown): number {
   return Math.max(0, days);
 }
 
+function getFinancedAmount(row: FinanceRow): number {
+  const value = toNumber(row.financed_amount ?? row.amount);
+  return Number.isFinite(value) ? Math.max(value, 0) : 0;
+}
+
+function getCollectedAmount(row: FinanceRow): number {
+  const paid = toNumber(row.total_paid_amount);
+  if (Number.isFinite(paid) && paid > 0) return paid;
+
+  const financed = getFinancedAmount(row);
+  const balance = toNumber(row.balance_amount);
+  if (Number.isFinite(balance) && financed > 0) {
+    return Math.max(financed - balance, 0);
+  }
+
+  return 0;
+}
+
+function getOutstandingAmount(row: FinanceRow): number {
+  const balance = toNumber(row.balance_amount);
+  if (Number.isFinite(balance) && balance >= 0) return balance;
+
+  const financed = getFinancedAmount(row);
+  const collected = getCollectedAmount(row);
+  return Math.max(financed - collected, 0);
+}
+
+function getArrearsAmount(row: FinanceRow): number {
+  const value = toNumber(row.arrears);
+  return Number.isFinite(value) ? Math.max(value, 0) : 0;
+}
+
+function isPortfolioBookStatus(status: unknown): boolean {
+  const key = String(status || '').toLowerCase();
+  return key === 'active' || key === 'settled';
+}
+
+function computeInstallmentCount(row: FinanceRow): number {
+  const tenure = Number(row.tenure_months || 0);
+  const frequency = String(row.installment_frequency || 'monthly').toLowerCase();
+  const installmentsPerYear =
+    frequency === 'daily'
+      ? 365
+      : frequency === 'weekly'
+        ? 52
+        : frequency === 'quarterly'
+          ? 4
+          : frequency === 'yearly'
+            ? 1
+            : 12;
+
+  return Math.max(1, Math.round((tenure / 12) * installmentsPerYear));
+}
+
+function getTotalRefundableValue(row: FinanceRow): number {
+  const installments = row.repayment_plan?.installments;
+  if (Array.isArray(installments) && installments.length > 0) {
+    const plannedTotal = installments.reduce((sum, item) => {
+      const amount = toNumber(item?.amount);
+      return sum + (Number.isFinite(amount) ? amount : 0);
+    }, 0);
+    if (plannedTotal > 0) return plannedTotal;
+  }
+
+  const installment = toNumber(row.installment_amount);
+  if (Number.isFinite(installment) && installment > 0) {
+    return installment * computeInstallmentCount(row);
+  }
+
+  return getFinancedAmount(row);
+}
+
+function getFinanceReference(row: FinanceRow): { customerNo: string; vehicleNo: string; reference: string } {
+  const customerNo = String(row.customer?.customer_code || '').trim();
+  const vehicleNo = String(row.vehicle_details?.vehicle_no || '').trim();
+  const assetRef = String(row.asset_reference || '').trim();
+  const reference = customerNo || vehicleNo || assetRef || `#${row.id}`;
+
+  return {
+    customerNo: customerNo || '-',
+    vehicleNo: vehicleNo || '-',
+    reference,
+  };
+}
+
 function csvEscape(value: unknown): string {
   const raw = String(value ?? '');
   return `"${raw.replace(/"/g, '""')}"`;
@@ -90,6 +206,79 @@ function downloadCsv(fileName: string, headers: string[], data: Array<Array<stri
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+function statusBadgeClass(status: string): string {
+  const key = status.toLowerCase();
+  if (key === 'active') return 'bg-emerald-100 text-emerald-800 border-emerald-200';
+  if (key === 'settled') return 'bg-sky-100 text-sky-800 border-sky-200';
+  if (key === 'pending_approval') return 'bg-amber-100 text-amber-800 border-amber-200';
+  if (key === 'rejected') return 'bg-rose-100 text-rose-800 border-rose-200';
+  return 'bg-slate-100 text-slate-700 border-slate-200';
+}
+
+function MetricCard({
+  label,
+  value,
+  sub,
+  icon: Icon,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  icon: React.ComponentType<{ className?: string }>;
+  accent: { border: string; iconBg: string; iconText: string; glow: string };
+}) {
+  return (
+    <div className={`relative overflow-hidden rounded-2xl border bg-white/95 p-3.5 shadow-sm ${accent.border}`}>
+      <div className={`pointer-events-none absolute -right-4 -top-4 h-20 w-20 rounded-full blur-2xl opacity-40 ${accent.glow}`} />
+      <div className="relative flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">{label}</p>
+          <p className="mt-1 text-xs font-bold text-slate-900 tabular-nums truncate leading-snug">{value}</p>
+          <p className="mt-0.5 text-[10px] text-slate-500 leading-snug">{sub}</p>
+        </div>
+        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${accent.iconBg} ${accent.iconText}`}>
+          <Icon className="h-3.5 w-3.5" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReportPanel({
+  title,
+  description,
+  icon: Icon,
+  headerClass,
+  action,
+  children,
+}: {
+  title: string;
+  description?: string;
+  icon: React.ComponentType<{ className?: string }>;
+  headerClass: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-3xl border border-cyan-100 bg-white/95 shadow-lg overflow-hidden">
+      <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-5 py-4 ${headerClass}`}>
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/80 shadow-sm">
+            <Icon className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="font-bold text-slate-900">{title}</p>
+            {description ? <p className="text-xs text-slate-600 mt-0.5">{description}</p> : null}
+          </div>
+        </div>
+        {action}
+      </div>
+      <div className="p-4 sm:p-5">{children}</div>
+    </div>
+  );
 }
 
 export default function FinanceReportsPage() {
@@ -119,26 +308,36 @@ export default function FinanceReportsPage() {
     const fetchRows = async () => {
       setLoading(true);
       try {
-        const response = await fetch('http://localhost:8000/api/finances?per_page=1000', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/json',
-          },
-        });
+        const allRows: FinanceRow[] = [];
+        let page = 1;
+        let lastPage = 1;
 
-        if (!response.ok) {
-          setRows([]);
-          return;
-        }
+        do {
+          const response = await fetch(`/api/finances?per_page=500&page=${page}`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          });
 
-        const payload = await response.json();
-        const data = Array.isArray(payload?.data)
-          ? payload.data
-          : Array.isArray(payload)
-            ? payload
-            : [];
+          if (!response.ok) {
+            setRows([]);
+            return;
+          }
 
-        setRows(data as FinanceRow[]);
+          const payload = await response.json();
+          const data = Array.isArray(payload?.data)
+            ? payload.data
+            : Array.isArray(payload)
+              ? payload
+              : [];
+
+          allRows.push(...(data as FinanceRow[]));
+          lastPage = Number(payload?.last_page || 1);
+          page += 1;
+        } while (page <= lastPage);
+
+        setRows(allRows);
       } catch {
         setRows([]);
       } finally {
@@ -179,6 +378,8 @@ export default function FinanceReportsPage() {
         row.finance_type || '',
         row.status || '',
         row.customer?.customer_code || '',
+        row.vehicle_details?.vehicle_no || '',
+        row.asset_reference || '',
         customerName,
       ]
         .join(' ')
@@ -190,33 +391,19 @@ export default function FinanceReportsPage() {
 
   const metrics = useMemo(() => {
     const totalAccounts = filteredRows.length;
+    const portfolioRows = filteredRows.filter((row) => isPortfolioBookStatus(row.status));
 
-    const totalFinanced = filteredRows.reduce((sum, row) => {
-      const value = toNumber(row.financed_amount ?? row.amount);
-      return sum + (Number.isFinite(value) ? value : 0);
-    }, 0);
-
-    const totalCollected = filteredRows.reduce((sum, row) => {
-      const value = toNumber(row.total_paid_amount);
-      return sum + (Number.isFinite(value) ? value : 0);
-    }, 0);
-
-    const totalOutstanding = filteredRows.reduce((sum, row) => {
-      const value = toNumber(row.balance_amount);
-      return sum + (Number.isFinite(value) ? value : 0);
-    }, 0);
-
-    const totalArrears = filteredRows.reduce((sum, row) => {
-      const value = toNumber(row.arrears);
-      return sum + (Number.isFinite(value) ? value : 0);
-    }, 0);
+    const totalFinanced = portfolioRows.reduce((sum, row) => sum + getFinancedAmount(row), 0);
+    const totalCollected = portfolioRows.reduce((sum, row) => sum + getCollectedAmount(row), 0);
+    const totalOutstanding = portfolioRows.reduce((sum, row) => sum + getOutstandingAmount(row), 0);
+    const totalArrears = portfolioRows.reduce((sum, row) => sum + getArrearsAmount(row), 0);
 
     const activeCount = filteredRows.filter((r) => String(r.status || '').toLowerCase() === 'active').length;
     const settledCount = filteredRows.filter((r) => String(r.status || '').toLowerCase() === 'settled').length;
     const pendingCount = filteredRows.filter((r) => String(r.status || '').toLowerCase() === 'pending_approval').length;
 
-    const atRiskCount = filteredRows.filter((row) => {
-      const arrears = Math.max(0, Number(row.arrears || 0));
+    const atRiskCount = portfolioRows.filter((row) => {
+      const arrears = getArrearsAmount(row);
       const overdueDays = daysPastDue(row.due_date);
       return arrears > 0 || overdueDays > 0;
     }).length;
@@ -234,6 +421,7 @@ export default function FinanceReportsPage() {
       pendingCount,
       atRiskCount,
       collectionRate,
+      portfolioAccounts: portfolioRows.length,
     };
   }, [filteredRows]);
 
@@ -347,41 +535,78 @@ export default function FinanceReportsPage() {
   }, [filteredRows]);
 
   const monthlyReport = useMemo(() => {
-    const map = new Map<string, { count: number; financed: number; collected: number }>();
+    const rows: MonthlyTrendRow[] = filteredRows
+      .map((row) => {
+        const date = row.created_at ? new Date(String(row.created_at)) : null;
+        if (!date || Number.isNaN(date.getTime())) return null;
 
-    filteredRows.forEach((row) => {
-      const date = row.created_at ? new Date(String(row.created_at)) : null;
-      if (!date || Number.isNaN(date.getTime())) return;
-
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-      const financed = Number(row.financed_amount ?? row.amount ?? 0);
-      const collected = Number(row.total_paid_amount || 0);
-      const prev = map.get(key) || { count: 0, financed: 0, collected: 0 };
-
-      map.set(key, {
-        count: prev.count + 1,
-        financed: prev.financed + (Number.isFinite(financed) ? financed : 0),
-        collected: prev.collected + (Number.isFinite(collected) ? collected : 0),
-      });
-    });
-
-    return Array.from(map.entries())
-      .map(([month, info]) => {
-        const collectionRate = info.financed > 0 ? (info.collected / info.financed) * 100 : 0;
-        const profitLoss = info.collected - info.financed;
-        const profitLossRate = info.financed > 0 ? (profitLoss / info.financed) * 100 : 0;
+        const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        const financed = getFinancedAmount(row);
+        const collected = getCollectedAmount(row);
+        const totalRefundable = getTotalRefundableValue(row);
+        const refs = getFinanceReference(row);
+        const collectionRate = totalRefundable > 0 ? (collected / totalRefundable) * 100 : 0;
+        const profitLoss = collected - totalRefundable;
+        const profitLossRate = totalRefundable > 0 ? (profitLoss / totalRefundable) * 100 : 0;
 
         return {
+          key: `${month}-${row.id}`,
           month,
-          ...info,
+          financeId: row.id,
+          customerNo: refs.customerNo,
+          vehicleNo: refs.vehicleNo,
+          reference: refs.reference,
+          financed,
+          totalRefundable,
+          collected,
           collectionRate,
           profitLoss,
           profitLossRate,
         };
       })
-      .sort((a, b) => a.month.localeCompare(b.month))
-      .slice(-12);
+      .filter((row): row is MonthlyTrendRow => row !== null)
+      .sort((a, b) => b.month.localeCompare(a.month) || b.financeId - a.financeId);
+
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 11);
+    cutoff.setDate(1);
+    cutoff.setHours(0, 0, 0, 0);
+
+    return rows.filter((row) => {
+      const [year, month] = row.month.split('-').map(Number);
+      const rowDate = new Date(year, (month || 1) - 1, 1);
+      return rowDate >= cutoff;
+    });
   }, [filteredRows]);
+
+  const monthlyTrendTotals = useMemo(() => {
+    return monthlyReport.reduce(
+      (acc, row) => {
+        acc.count += 1;
+        acc.financed += row.financed;
+        acc.totalRefundable += row.totalRefundable;
+        acc.collected += row.collected;
+        return acc;
+      },
+      { count: 0, financed: 0, totalRefundable: 0, collected: 0 }
+    );
+  }, [monthlyReport]);
+
+  const monthlyTrendSummary = useMemo(() => {
+    const collectionRate =
+      monthlyTrendTotals.totalRefundable > 0
+        ? (monthlyTrendTotals.collected / monthlyTrendTotals.totalRefundable) * 100
+        : 0;
+    const profitLoss = monthlyTrendTotals.collected - monthlyTrendTotals.totalRefundable;
+    const profitLossRate =
+      monthlyTrendTotals.totalRefundable > 0 ? (profitLoss / monthlyTrendTotals.totalRefundable) * 100 : 0;
+
+    return {
+      collectionRate,
+      profitLoss,
+      profitLossRate,
+    };
+  }, [monthlyTrendTotals]);
 
   const exportPortfolioSnapshot = () => {
     const headers = [
@@ -443,6 +668,26 @@ export default function FinanceReportsPage() {
     downloadCsv('finance-risk-watchlist.csv', headers, data);
   };
 
+  const hasActiveFilters =
+    search.trim() !== '' ||
+    statusFilter !== 'all' ||
+    productFilter !== 'all' ||
+    fromDate !== '' ||
+    toDate !== '';
+
+  const clearFilters = () => {
+    setSearch('');
+    setStatusFilter('all');
+    setProductFilter('all');
+    setFromDate('');
+    setToDate('');
+  };
+
+  const maxAgingArrears = useMemo(
+    () => Math.max(...arrearsAgingReport.map((b) => b.arrears), 1),
+    [arrearsAgingReport],
+  );
+
   if (!token || loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
@@ -452,295 +697,432 @@ export default function FinanceReportsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-4 sm:p-6 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-40">
+        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl" />
+        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl" />
+        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl" />
       </div>
 
-      <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/90 rounded-3xl border border-cyan-100 p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700">Finance Manager Console</p>
-            <h1 className="text-2xl font-extrabold text-slate-900 mt-2">Finance Reports</h1>
-            <p className="text-sm text-slate-600 mt-1">All reports below are built directly from the finance portfolio dataset.</p>
+      <div className="relative z-10 max-w-7xl mx-auto space-y-5">
+        {/* Hero */}
+        <div className="rounded-3xl border border-white/80 bg-white/95 shadow-xl overflow-hidden">
+          <div className="bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 px-6 py-6">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+              <div className="flex items-start gap-4">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/20 backdrop-blur">
+                  <BarChart3 className="h-7 w-7 text-white" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-100">Finance Analytics</p>
+                  <h1 className="text-2xl sm:text-3xl font-extrabold text-white">Portfolio Reports</h1>
+                  <p className="text-sm text-cyan-50/95 mt-1 max-w-2xl">
+                    Live portfolio intelligence — status mix, product performance, arrears aging, risk watchlist, and monthly trends.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={exportPortfolioSnapshot}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/30 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 transition"
+                >
+                  <Download className="h-4 w-4" />
+                  Export portfolio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push('/dashboard/reports/general-ledger')}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/30 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 transition"
+                >
+                  <FileText className="h-4 w-4" />
+                  More reports
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push('/dashboard/finance')}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/30 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 transition"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Dashboard
+                </button>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={exportPortfolioSnapshot}
-              className="px-4 py-2 rounded-xl bg-white border border-cyan-200 text-cyan-800 text-sm font-semibold inline-flex items-center gap-2"
-            >
-              <Download className="h-4 w-4" />
-              Export Portfolio CSV
-            </button>
-            <button
-              type="button"
-              onClick={() => router.push('/dashboard/finance')}
-              className="px-4 py-2 rounded-xl bg-white border border-cyan-200 text-cyan-800 text-sm font-semibold inline-flex items-center gap-2"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back
-            </button>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-y md:divide-y-0 divide-cyan-100 border-t border-cyan-100/80 bg-cyan-50/40">
+            <div className="px-4 py-3 text-center sm:text-left">
+              <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Filtered accounts</p>
+              <p className="text-xs font-bold text-slate-900 tabular-nums">{metrics.totalAccounts}</p>
+            </div>
+            <div className="px-4 py-3 text-center sm:text-left">
+              <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Collection rate</p>
+              <p className="text-xs font-bold text-emerald-700 tabular-nums">{metrics.collectionRate.toFixed(1)}%</p>
+            </div>
+            <div className="px-4 py-3 text-center sm:text-left">
+              <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">At-risk</p>
+              <p className="text-xs font-bold text-rose-700 tabular-nums">{metrics.atRiskCount}</p>
+            </div>
+            <div className="px-4 py-3 text-center sm:text-left">
+              <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Total arrears</p>
+              <p className="text-xs font-bold text-amber-800 tabular-nums truncate">{formatAmount(metrics.totalArrears)}</p>
+            </div>
           </div>
         </div>
 
-        <div className="bg-white/90 rounded-3xl border border-cyan-100 p-5">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-            <div className="md:col-span-2 rounded-xl border border-cyan-100 bg-cyan-50/40 px-3 py-2 flex items-center gap-2">
-              <FileText className="h-4 w-4 text-cyan-700" />
+        {/* Filters */}
+        <div className="rounded-3xl border border-cyan-100 bg-white/95 shadow-lg p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+            <div>
+              <p className="text-sm font-bold text-slate-900">Report filters</p>
+              <p className="text-xs text-slate-500 mt-0.5">Narrow the portfolio snapshot and all tables below.</p>
+            </div>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+              >
+                <X className="h-3.5 w-3.5" />
+                Clear filters
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3">
+            <div className="xl:col-span-4 relative">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search finance id, customer code, product, status"
-                className="w-full bg-transparent text-sm text-slate-800 placeholder:text-slate-500 outline-none"
+                placeholder="Search ID, customer, product, status…"
+                className={`${inputClass} pl-10`}
               />
             </div>
-
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-            >
-              <option value="all">All Status</option>
-              <option value="active">Active</option>
-              <option value="pending_approval">Pending Approval</option>
-              <option value="settled">Settled</option>
-              <option value="rejected">Rejected</option>
-            </select>
-
-            <select
-              value={productFilter}
-              onChange={(e) => setProductFilter(e.target.value)}
-              className="rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-            >
-              <option value="all">All Products</option>
-              {productOptions.map((p) => (
-                <option key={p} value={p.toLowerCase()}>{p}</option>
-              ))}
-            </select>
-
-            <div className="rounded-xl border border-cyan-100 bg-white px-3 py-2 flex items-center gap-2">
-              <CalendarRange className="h-4 w-4 text-cyan-700" />
-              <input
-                type="date"
-                value={fromDate}
-                onChange={(e) => setFromDate(e.target.value)}
-                className="text-sm text-slate-900 outline-none"
-              />
-              <span className="text-xs text-slate-500">to</span>
-              <input
-                type="date"
-                value={toDate}
-                onChange={(e) => setToDate(e.target.value)}
-                className="text-sm text-slate-900 outline-none"
-              />
+            <div className="xl:col-span-2">
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={inputClass}>
+                <option value="all">All status</option>
+                <option value="active">Active</option>
+                <option value="pending_approval">Pending approval</option>
+                <option value="settled">Settled</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+            <div className="xl:col-span-2">
+              <select value={productFilter} onChange={(e) => setProductFilter(e.target.value)} className={inputClass}>
+                <option value="all">All products</option>
+                {productOptions.map((p) => (
+                  <option key={p} value={p.toLowerCase()}>{p}</option>
+                ))}
+              </select>
+            </div>
+            <div className="xl:col-span-4 flex flex-col sm:flex-row items-stretch gap-2 rounded-xl border border-cyan-200/80 bg-cyan-50/30 px-3 py-2">
+              <div className="flex items-center gap-2 shrink-0">
+                <CalendarRange className="h-4 w-4 text-cyan-700" />
+                <span className="text-xs font-semibold text-slate-600">Created</span>
+              </div>
+              <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className={`${inputClass} py-2`} />
+              <span className="self-center text-xs text-slate-400 hidden sm:inline">→</span>
+              <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className={`${inputClass} py-2`} />
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-          <div className="rounded-2xl border border-cyan-100 bg-white/90 p-4">
-            <div className="inline-flex items-center gap-2 text-cyan-700"><Layers className="h-4 w-4" /><p className="text-xs font-bold uppercase">Accounts</p></div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{metrics.totalAccounts}</p>
-            <p className="text-xs text-slate-500 mt-1">Active: {metrics.activeCount} | Pending: {metrics.pendingCount}</p>
-          </div>
+        {/* KPI cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
+          <MetricCard
+            label="Accounts"
+            value={String(metrics.totalAccounts)}
+            sub={`Active ${metrics.activeCount} · Pending ${metrics.pendingCount}`}
+            icon={Layers}
+            accent={{ border: 'border-cyan-100', iconBg: 'bg-cyan-100', iconText: 'text-cyan-700', glow: 'bg-cyan-400' }}
+          />
+          <MetricCard
+            label="Financed"
+            value={formatAmount(metrics.totalFinanced)}
+            sub={`${metrics.portfolioAccounts} in book · ${metrics.settledCount} settled`}
+            icon={TrendingUp}
+            accent={{ border: 'border-emerald-100', iconBg: 'bg-emerald-100', iconText: 'text-emerald-700', glow: 'bg-emerald-400' }}
+          />
+          <MetricCard
+            label="Collected"
+            value={formatAmount(metrics.totalCollected)}
+            sub={`${metrics.collectionRate.toFixed(2)}% of financed book`}
+            icon={HandCoins}
+            accent={{ border: 'border-blue-100', iconBg: 'bg-blue-100', iconText: 'text-blue-700', glow: 'bg-blue-400' }}
+          />
+          <MetricCard
+            label="Outstanding"
+            value={formatAmount(metrics.totalOutstanding)}
+            sub="Active & settled balance"
+            icon={BarChart3}
+            accent={{ border: 'border-amber-100', iconBg: 'bg-amber-100', iconText: 'text-amber-700', glow: 'bg-amber-400' }}
+          />
+          <MetricCard
+            label="Arrears"
+            value={formatAmount(metrics.totalArrears)}
+            sub={`${metrics.atRiskCount} accounts need attention`}
+            icon={AlertTriangle}
+            accent={{ border: 'border-rose-100', iconBg: 'bg-rose-100', iconText: 'text-rose-700', glow: 'bg-rose-400' }}
+          />
+        </div>
 
-          <div className="rounded-2xl border border-emerald-100 bg-white/90 p-4">
-            <div className="inline-flex items-center gap-2 text-emerald-700"><TrendingUp className="h-4 w-4" /><p className="text-xs font-bold uppercase">Financed</p></div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{formatAmount(metrics.totalFinanced)}</p>
-            <p className="text-xs text-slate-500 mt-1">Settled accounts: {metrics.settledCount}</p>
+        {/* Collection progress */}
+        <div className="rounded-3xl border border-cyan-100 bg-white/95 shadow-lg p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+            <p className="text-xs font-bold text-slate-900">Portfolio collection progress</p>
+            <p className="text-xs font-bold text-cyan-800 tabular-nums">{metrics.collectionRate.toFixed(2)}%</p>
           </div>
-
-          <div className="rounded-2xl border border-blue-100 bg-white/90 p-4">
-            <div className="inline-flex items-center gap-2 text-blue-700"><HandCoins className="h-4 w-4" /><p className="text-xs font-bold uppercase">Collected</p></div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{formatAmount(metrics.totalCollected)}</p>
-            <p className="text-xs text-slate-500 mt-1">Collection rate: {metrics.collectionRate.toFixed(2)}%</p>
+          <div className="h-3 rounded-full bg-slate-100 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-cyan-500 via-blue-500 to-emerald-500 transition-all duration-500"
+              style={{ width: `${Math.min(100, Math.max(0, metrics.collectionRate))}%` }}
+            />
           </div>
-
-          <div className="rounded-2xl border border-amber-100 bg-white/90 p-4">
-            <div className="inline-flex items-center gap-2 text-amber-700"><BarChart3 className="h-4 w-4" /><p className="text-xs font-bold uppercase">Outstanding</p></div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{formatAmount(metrics.totalOutstanding)}</p>
-            <p className="text-xs text-slate-500 mt-1">Still to recover from running book</p>
-          </div>
-
-          <div className="rounded-2xl border border-rose-100 bg-white/90 p-4">
-            <div className="inline-flex items-center gap-2 text-rose-700"><AlertTriangle className="h-4 w-4" /><p className="text-xs font-bold uppercase">Arrears</p></div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{formatAmount(metrics.totalArrears)}</p>
-            <p className="text-xs text-slate-500 mt-1">At-risk accounts: {metrics.atRiskCount}</p>
-          </div>
+          <p className="mt-2 text-[10px] text-slate-500">
+            Collected {formatAmount(metrics.totalCollected)} of {formatAmount(metrics.totalFinanced)} financed volume
+            (active & settled accounts only).
+          </p>
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          <div className="rounded-2xl border border-cyan-100 bg-white/90 p-4">
-            <div className="flex items-center gap-2 text-cyan-800 mb-3"><PieChart className="h-5 w-5" /><p className="font-bold">Status Report</p></div>
-            <div className="overflow-x-auto rounded-lg border border-cyan-100">
-              <table className="min-w-full text-xs text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70">
-                  <tr>
-                    <th className="px-2 py-2 font-semibold">Status</th>
-                    <th className="px-2 py-2 font-semibold">Count</th>
-                    <th className="px-2 py-2 font-semibold">Financed</th>
-                    <th className="px-2 py-2 font-semibold">Outstanding</th>
-                    <th className="px-2 py-2 font-semibold">Arrears</th>
+          <ReportPanel
+            title="Status breakdown"
+            description="Accounts and balances grouped by finance status."
+            icon={PieChart}
+            headerClass="bg-gradient-to-r from-cyan-50 to-blue-50 border-b border-cyan-100 text-cyan-900"
+          >
+            <div className="overflow-x-auto rounded-2xl border border-cyan-100">
+              <table className="min-w-full text-sm text-left">
+                <thead>
+                  <tr className="bg-cyan-50/80 text-[11px] font-bold uppercase tracking-wide text-slate-600">
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Count</th>
+                    <th className="px-4 py-3">Financed</th>
+                    <th className="px-4 py-3">Outstanding</th>
+                    <th className="px-4 py-3">Arrears</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-cyan-50">
                   {statusReport.map((item) => (
-                    <tr key={item.status} className="border-b border-cyan-100 last:border-b-0">
-                      <td className="px-2 py-2 capitalize">{item.status}</td>
-                      <td className="px-2 py-2">{item.count}</td>
-                      <td className="px-2 py-2">{formatAmount(item.financed)}</td>
-                      <td className="px-2 py-2">{formatAmount(item.outstanding)}</td>
-                      <td className="px-2 py-2">{formatAmount(item.arrears)}</td>
+                    <tr key={item.status} className="hover:bg-cyan-50/40 transition">
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize ${statusBadgeClass(item.status)}`}>
+                          {item.status.replace(/_/g, ' ')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-slate-900 tabular-nums">{item.count}</td>
+                      <td className="px-4 py-3 tabular-nums text-slate-800">{formatAmount(item.financed)}</td>
+                      <td className="px-4 py-3 tabular-nums text-slate-800">{formatAmount(item.outstanding)}</td>
+                      <td className="px-4 py-3 tabular-nums text-rose-700 font-medium">{formatAmount(item.arrears)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          </div>
+          </ReportPanel>
 
-          <div className="rounded-2xl border border-cyan-100 bg-white/90 p-4">
-            <div className="flex items-center gap-2 text-cyan-800 mb-3"><FileText className="h-5 w-5" /><p className="font-bold">Product Report</p></div>
-            <div className="overflow-x-auto rounded-lg border border-cyan-100">
-              <table className="min-w-full text-xs text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70">
-                  <tr>
-                    <th className="px-2 py-2 font-semibold">Product</th>
-                    <th className="px-2 py-2 font-semibold">Accounts</th>
-                    <th className="px-2 py-2 font-semibold">Financed</th>
-                    <th className="px-2 py-2 font-semibold">Avg Rate</th>
+          <ReportPanel
+            title="Product performance"
+            description="Financed volume and average rate by product type."
+            icon={FileText}
+            headerClass="bg-gradient-to-r from-indigo-50 to-violet-50 border-b border-indigo-100 text-indigo-900"
+          >
+            <div className="overflow-x-auto rounded-2xl border border-indigo-100">
+              <table className="min-w-full text-sm text-left">
+                <thead>
+                  <tr className="bg-indigo-50/80 text-[11px] font-bold uppercase tracking-wide text-slate-600">
+                    <th className="px-4 py-3">Product</th>
+                    <th className="px-4 py-3">Accounts</th>
+                    <th className="px-4 py-3">Financed</th>
+                    <th className="px-4 py-3">Avg rate</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-indigo-50">
                   {productReport.map((item) => (
-                    <tr key={item.product} className="border-b border-cyan-100 last:border-b-0">
-                      <td className="px-2 py-2">{item.product}</td>
-                      <td className="px-2 py-2">{item.count}</td>
-                      <td className="px-2 py-2">{formatAmount(item.financed)}</td>
-                      <td className="px-2 py-2">{item.avgRate.toFixed(2)}%</td>
+                    <tr key={item.product} className="hover:bg-indigo-50/40 transition">
+                      <td className="px-4 py-3 font-semibold text-slate-900">{item.product}</td>
+                      <td className="px-4 py-3 tabular-nums">{item.count}</td>
+                      <td className="px-4 py-3 tabular-nums text-slate-800">{formatAmount(item.financed)}</td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex rounded-lg bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-800 tabular-nums">
+                          {item.avgRate.toFixed(2)}%
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          </div>
+          </ReportPanel>
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          <div className="rounded-2xl border border-amber-100 bg-white/90 p-4">
-            <div className="flex items-center gap-2 text-amber-800 mb-3"><ShieldAlert className="h-5 w-5" /><p className="font-bold">Arrears Aging Report</p></div>
-            <div className="overflow-x-auto rounded-lg border border-amber-100">
-              <table className="min-w-full text-xs text-left text-slate-700 bg-white">
-                <thead className="bg-amber-50/70">
-                  <tr>
-                    <th className="px-2 py-2 font-semibold">Aging Bucket</th>
-                    <th className="px-2 py-2 font-semibold">Accounts</th>
-                    <th className="px-2 py-2 font-semibold">Arrears</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {arrearsAgingReport.map((item) => (
-                    <tr key={item.key} className="border-b border-amber-100 last:border-b-0">
-                      <td className="px-2 py-2">{item.label}</td>
-                      <td className="px-2 py-2">{item.count}</td>
-                      <td className="px-2 py-2">{formatAmount(item.arrears)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <ReportPanel
+            title="Arrears aging"
+            description="Overdue exposure by days past due bucket."
+            icon={ShieldAlert}
+            headerClass="bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-100 text-amber-900"
+          >
+            <div className="space-y-3">
+              {arrearsAgingReport.map((item) => {
+                const width = maxAgingArrears > 0 ? (item.arrears / maxAgingArrears) * 100 : 0;
+                return (
+                  <div key={item.key} className="rounded-xl border border-amber-100 bg-white p-3">
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <p className="text-sm font-semibold text-slate-900">{item.label}</p>
+                      <p className="text-xs text-slate-500">{item.count} accounts</p>
+                    </div>
+                    <div className="h-2 rounded-full bg-amber-100 overflow-hidden mb-1.5">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500 transition-all"
+                        style={{ width: `${width}%` }}
+                      />
+                    </div>
+                    <p className="text-xs font-bold text-amber-800 tabular-nums">{formatAmount(item.arrears)}</p>
+                  </div>
+                );
+              })}
             </div>
-          </div>
+          </ReportPanel>
 
-          <div className="rounded-2xl border border-indigo-100 bg-white/90 p-4">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <div className="inline-flex items-center gap-2 text-indigo-800"><AlertTriangle className="h-5 w-5" /><p className="font-bold">Risk Watchlist (Top 10)</p></div>
+          <ReportPanel
+            title="Risk watchlist"
+            description="Top 10 accounts by combined arrears and overdue days."
+            icon={AlertTriangle}
+            headerClass="bg-gradient-to-r from-rose-50 to-red-50 border-b border-rose-100 text-rose-900"
+            action={
               <button
                 type="button"
                 onClick={exportRiskWatchlist}
-                className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-800 hover:bg-indigo-50 inline-flex items-center gap-1"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50 transition"
               >
                 <Download className="h-3.5 w-3.5" />
-                Export
+                Export CSV
               </button>
-            </div>
-            <div className="overflow-x-auto rounded-lg border border-indigo-100">
-              <table className="min-w-full text-xs text-left text-slate-700 bg-white">
-                <thead className="bg-indigo-50/70">
-                  <tr>
-                    <th className="px-2 py-2 font-semibold">Finance</th>
-                    <th className="px-2 py-2 font-semibold">Customer</th>
-                    <th className="px-2 py-2 font-semibold">Overdue</th>
-                    <th className="px-2 py-2 font-semibold">Arrears</th>
-                    <th className="px-2 py-2 font-semibold">Due</th>
-                    <th className="px-2 py-2 font-semibold">Score</th>
+            }
+          >
+            <div className="overflow-x-auto rounded-2xl border border-rose-100">
+              <table className="min-w-full text-sm text-left">
+                <thead>
+                  <tr className="bg-rose-50/80 text-[11px] font-bold uppercase tracking-wide text-slate-600">
+                    <th className="px-4 py-3">Finance</th>
+                    <th className="px-4 py-3">Customer</th>
+                    <th className="px-4 py-3">Overdue</th>
+                    <th className="px-4 py-3">Arrears</th>
+                    <th className="px-4 py-3">Due</th>
+                    <th className="px-4 py-3">Score</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-rose-50">
                   {riskWatchlist.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-2 py-4 text-center text-slate-500">No at-risk accounts for selected filters.</td>
+                      <td colSpan={6} className="px-4 py-10 text-center">
+                        <ShieldAlert className="mx-auto h-8 w-8 text-slate-300" />
+                        <p className="mt-2 text-sm text-slate-500">No at-risk accounts for selected filters.</p>
+                      </td>
                     </tr>
                   ) : (
                     riskWatchlist.map((item) => (
-                      <tr key={item.id} className="border-b border-indigo-100 last:border-b-0">
-                        <td className="px-2 py-2">#{item.id}</td>
-                        <td className="px-2 py-2">{item.customer?.customer_code || '-'}</td>
-                        <td className="px-2 py-2">{item.overdueDays} days</td>
-                        <td className="px-2 py-2">{formatAmount(item.arrears)}</td>
-                        <td className="px-2 py-2">{formatAmount(item.due)}</td>
-                        <td className="px-2 py-2 font-semibold text-indigo-800">{formatAmount(item.riskScore)}</td>
+                      <tr key={item.id} className="hover:bg-rose-50/30 transition">
+                        <td className="px-4 py-3 font-semibold text-slate-900">#{item.id}</td>
+                        <td className="px-4 py-3">{item.customer?.customer_code || '-'}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-bold ${item.overdueDays > 30 ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>
+                            {item.overdueDays}d
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 tabular-nums text-rose-700 font-medium">{formatAmount(item.arrears)}</td>
+                        <td className="px-4 py-3 tabular-nums">{formatAmount(item.due)}</td>
+                        <td className="px-4 py-3 font-bold text-indigo-800 tabular-nums">{formatAmount(item.riskScore)}</td>
                       </tr>
                     ))
                   )}
                 </tbody>
               </table>
             </div>
-          </div>
+          </ReportPanel>
         </div>
 
-        <div className="rounded-2xl border border-cyan-100 bg-white/90 p-4">
-          <div className="inline-flex items-center gap-2 text-cyan-800 mb-3"><BarChart3 className="h-5 w-5" /><p className="font-bold">Monthly Trend (Last 12 Months)</p></div>
-          <div className="overflow-x-auto rounded-lg border border-cyan-100">
-            <table className="min-w-full text-xs text-left text-slate-700 bg-white">
-              <thead className="bg-cyan-50/70">
-                <tr>
-                  <th className="px-2 py-2 font-semibold">Month</th>
-                  <th className="px-2 py-2 font-semibold">New Accounts</th>
-                  <th className="px-2 py-2 font-semibold">Financed</th>
-                  <th className="px-2 py-2 font-semibold">Collected</th>
-                  <th className="px-2 py-2 font-semibold">Collected %</th>
-                  <th className="px-2 py-2 font-semibold">Profit / Loss</th>
-                  <th className="px-2 py-2 font-semibold">P/L %</th>
+        <ReportPanel
+          title="Monthly trend"
+          description="Finance accounts from the last 12 months with customer or vehicle reference and total refundable value."
+          icon={BarChart3}
+          headerClass="bg-gradient-to-r from-cyan-50 via-blue-50 to-teal-50 border-b border-cyan-100 text-cyan-900"
+        >
+          <div className="overflow-x-auto rounded-2xl border border-cyan-100">
+            <table className="min-w-full text-sm text-left text-black">
+              <thead>
+                <tr className="bg-cyan-50/80 text-[11px] font-bold uppercase tracking-wide text-black">
+                  <th className="px-4 py-3">Month</th>
+                  <th className="px-4 py-3">Customer No</th>
+                  <th className="px-4 py-3">Vehicle No</th>
+                  <th className="px-4 py-3">Ref</th>
+                  <th className="px-4 py-3">Financed</th>
+                  <th className="px-4 py-3">Total Refundable</th>
+                  <th className="px-4 py-3">Collected</th>
+                  <th className="px-4 py-3">Collected %</th>
+                  <th className="px-4 py-3">Profit / loss</th>
+                  <th className="px-4 py-3">P/L %</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-cyan-50">
                 {monthlyReport.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-2 py-4 text-center text-slate-500">No monthly trend data for selected filters.</td>
+                    <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-500">
+                      No monthly trend data for selected filters.
+                    </td>
                   </tr>
                 ) : (
-                  monthlyReport.map((item) => (
-                    <tr key={item.month} className="border-b border-cyan-100 last:border-b-0">
-                      <td className="px-2 py-2">{item.month}</td>
-                      <td className="px-2 py-2">{item.count}</td>
-                      <td className="px-2 py-2">{formatAmount(item.financed)}</td>
-                      <td className="px-2 py-2">{formatAmount(item.collected)}</td>
-                      <td className="px-2 py-2 font-semibold text-cyan-800">{item.collectionRate.toFixed(2)}%</td>
-                      <td className={`px-2 py-2 font-semibold ${item.profitLoss >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                        {item.profitLoss >= 0 ? '+' : '-'}{formatAmount(Math.abs(item.profitLoss))}
+                  <>
+                    {monthlyReport.map((item) => (
+                      <tr key={item.key} className="hover:bg-cyan-50/40 transition">
+                        <td className="px-4 py-3 font-semibold text-black whitespace-nowrap">{item.month}</td>
+                        <td className="px-4 py-3 text-black whitespace-nowrap">{item.customerNo}</td>
+                        <td className="px-4 py-3 text-black whitespace-nowrap">{item.vehicleNo}</td>
+                        <td className="px-4 py-3 text-black font-semibold whitespace-nowrap">{item.reference}</td>
+                        <td className="px-4 py-3 tabular-nums text-black">{formatAmount(item.financed)}</td>
+                        <td className="px-4 py-3 tabular-nums text-black font-semibold">{formatAmount(item.totalRefundable)}</td>
+                        <td className="px-4 py-3 tabular-nums text-black">{formatAmount(item.collected)}</td>
+                        <td className="px-4 py-3">
+                          <span className="inline-flex rounded-lg bg-cyan-100 px-2 py-0.5 text-xs font-bold text-black tabular-nums">
+                            {item.collectionRate.toFixed(2)}%
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 font-semibold tabular-nums text-black">
+                          {item.profitLoss >= 0 ? '+' : '-'}{formatAmount(Math.abs(item.profitLoss))}
+                        </td>
+                        <td className="px-4 py-3 font-semibold tabular-nums text-black">
+                          {item.profitLossRate >= 0 ? '+' : '-'}{Math.abs(item.profitLossRate).toFixed(2)}%
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="bg-cyan-50/70 font-semibold">
+                      <td className="px-4 py-3 text-black" colSpan={4}>
+                        Total ({monthlyTrendTotals.count} accounts)
                       </td>
-                      <td className={`px-2 py-2 font-semibold ${item.profitLossRate >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                        {item.profitLossRate >= 0 ? '+' : '-'}{Math.abs(item.profitLossRate).toFixed(2)}%
+                      <td className="px-4 py-3 tabular-nums text-black">{formatAmount(monthlyTrendTotals.financed)}</td>
+                      <td className="px-4 py-3 tabular-nums text-black">{formatAmount(monthlyTrendTotals.totalRefundable)}</td>
+                      <td className="px-4 py-3 tabular-nums text-black">{formatAmount(monthlyTrendTotals.collected)}</td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex rounded-lg bg-cyan-200/80 px-2 py-0.5 text-xs font-bold text-black tabular-nums">
+                          {monthlyTrendSummary.collectionRate.toFixed(2)}%
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-black">
+                        {monthlyTrendSummary.profitLoss >= 0 ? '+' : '-'}
+                        {formatAmount(Math.abs(monthlyTrendSummary.profitLoss))}
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-black">
+                        {monthlyTrendSummary.profitLossRate >= 0 ? '+' : '-'}
+                        {Math.abs(monthlyTrendSummary.profitLossRate).toFixed(2)}%
                       </td>
                     </tr>
-                  ))
+                  </>
                 )}
               </tbody>
             </table>
           </div>
-        </div>
+        </ReportPanel>
       </div>
     </div>
   );

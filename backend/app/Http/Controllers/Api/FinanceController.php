@@ -3,11 +3,19 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Company;
+use App\Models\CompanyAccount;
 use App\Models\Customer;
 use App\Models\DraftLoan;
 use App\Models\Finance;
 use App\Models\FinanceCollection;
 use App\Models\FinanceDocument;
+use App\Models\LoanRequest;
+use App\Models\LoanRequestCollection;
+use App\Models\MicrofinanceLoanCollection;
+use App\Models\MicrofinanceLoanRequest;
+use App\Models\Mortgage;
+use App\Models\MortgagePayment;
 use App\Services\SpeedDraftCalculator;
 use Carbon\Carbon;
 use Illuminate\Support\Arr;
@@ -62,6 +70,15 @@ class FinanceController extends Controller
         return $branchId > 0 ? $branchId : null;
     }
 
+    private function periodGroupExpression(string $column, string $groupBy): string
+    {
+        if ($groupBy === 'day') {
+            return "DATE({$column})";
+        }
+
+        return "DATE_FORMAT({$column}, '%Y-%m-01')";
+    }
+
     private function applyFinanceBranchScope($query, Request $request, string $column = 'branch_id')
     {
         $branchId = $this->scopedBranchId($request);
@@ -84,6 +101,17 @@ class FinanceController extends Controller
         return $query->findOrFail($id);
     }
 
+    private function normalizeFinanceCustomer(?Customer $customer): ?Customer
+    {
+        if (!$customer) {
+            return null;
+        }
+
+        $customer->repairCustomerCodeIfNeeded();
+
+        return $customer->fresh();
+    }
+
     public function index(Request $request): JsonResponse
     {
         $perPage = (int) ($request->get('per_page', 20));
@@ -102,6 +130,14 @@ class FinanceController extends Controller
         }
 
         $data = $query->paginate($perPage);
+        $data->getCollection()->transform(function (Finance $finance) {
+            if ($finance->relationLoaded('customer') && $finance->customer) {
+                $finance->setRelation('customer', $this->normalizeFinanceCustomer($finance->customer));
+            }
+
+            return $finance;
+        });
+
         return response()->json($data);
     }
 
@@ -110,6 +146,11 @@ class FinanceController extends Controller
         $finance = $this->resolveFinanceOrFail($request, $id, ['customer', 'documents', 'collections' => function ($query) {
             $query->orderByDesc('payment_date')->orderByDesc('id');
         }]);
+
+        if ($finance->relationLoaded('customer') && $finance->customer) {
+            $finance->setRelation('customer', $this->normalizeFinanceCustomer($finance->customer));
+        }
+
         return response()->json($finance);
     }
 
@@ -121,19 +162,21 @@ class FinanceController extends Controller
             'product_type' => ['nullable', 'string', 'max:100'],
             'status' => ['nullable', 'string', 'max:50'],
             'group_by' => ['nullable', 'in:day,month'],
+            'company_id' => ['nullable', 'integer', 'exists:companies,id'],
+            'branch_id' => ['nullable', 'integer', 'exists:companies,id'],
         ]);
 
         $groupBy = (string) ($validated['group_by'] ?? 'month');
-        $groupExpression = $groupBy === 'day'
-            ? "DATE(%s)"
-            : "DATE_FORMAT(%s, '%Y-%m-01')";
 
         $collectionsBase = FinanceCollection::query()
             ->join('finances', 'finances.id', '=', 'finance_collections.finance_id');
 
         $disbursementsBase = Finance::query();
 
-        $branchId = $this->scopedBranchId($request);
+        $requestedCompanyId = (int) ($validated['company_id'] ?? $validated['branch_id'] ?? 0);
+        $branchId = $requestedCompanyId > 0 ? $requestedCompanyId : $this->scopedBranchId($request);
+        $company = $branchId ? Company::query()->find($branchId) : null;
+
         if ($branchId !== null) {
             $collectionsBase->where('finances.branch_id', $branchId);
             $disbursementsBase->where('finances.branch_id', $branchId);
@@ -162,7 +205,7 @@ class FinanceController extends Controller
         }
 
         $incomeRows = (clone $collectionsBase)
-            ->selectRaw(sprintf($groupExpression, 'finance_collections.payment_date') . ' as period')
+            ->selectRaw($this->periodGroupExpression('finance_collections.payment_date', $groupBy) . ' as period')
             ->selectRaw('SUM(finance_collections.interest_paid) as interest_income')
             ->selectRaw('SUM(finance_collections.payment_amount) as total_collections')
             ->selectRaw('SUM(finance_collections.refund_amount) as refund_expense')
@@ -171,8 +214,68 @@ class FinanceController extends Controller
             ->get();
 
         $disbursementRows = (clone $disbursementsBase)
-            ->selectRaw(sprintf($groupExpression, 'finances.start_date') . ' as period')
+            ->selectRaw($this->periodGroupExpression('finances.start_date', $groupBy) . ' as period')
             ->selectRaw('SUM(finances.financed_amount) as disbursement_expense')
+            ->selectRaw('COUNT(*) as disbursement_accounts')
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get();
+
+        $loanCollectionsBase = LoanRequestCollection::query()
+            ->join('loan_requests', 'loan_requests.id', '=', 'loan_request_collections.loan_request_id');
+
+        $loanDisbursementsBase = LoanRequest::query()
+            ->whereIn('loan_requests.status', ['approved', 'closed']);
+
+        if ($branchId !== null) {
+            $loanCollectionsBase->where('loan_requests.branch_id', $branchId);
+            $loanDisbursementsBase->where('loan_requests.branch_id', $branchId);
+        }
+
+        if (!empty($validated['from_date'])) {
+            $loanCollectionsBase->whereDate('loan_request_collections.collection_date', '>=', $validated['from_date']);
+            $loanDisbursementsBase->whereRaw('DATE(COALESCE(loan_requests.last_action_at, loan_requests.created_at)) >= ?', [$validated['from_date']]);
+        }
+
+        if (!empty($validated['to_date'])) {
+            $loanCollectionsBase->whereDate('loan_request_collections.collection_date', '<=', $validated['to_date']);
+            $loanDisbursementsBase->whereRaw('DATE(COALESCE(loan_requests.last_action_at, loan_requests.created_at)) <= ?', [$validated['to_date']]);
+        }
+
+        if (!empty($validated['product_type'])) {
+            $productType = strtolower(trim((string) $validated['product_type']));
+            $loanCollectionsBase->whereRaw('LOWER(loan_requests.loan_product) = ?', [$productType]);
+            $loanDisbursementsBase->whereRaw('LOWER(loan_requests.loan_product) = ?', [$productType]);
+        }
+
+        if (!empty($validated['status'])) {
+            $status = strtolower(trim((string) $validated['status']));
+            if ($status === 'active') {
+                $loanCollectionsBase->where('loan_requests.status', 'approved');
+                $loanDisbursementsBase->where('loan_requests.status', 'approved');
+            } else {
+                $loanCollectionsBase->whereRaw('LOWER(loan_requests.status) = ?', [$status]);
+                $loanDisbursementsBase->whereRaw('LOWER(loan_requests.status) = ?', [$status]);
+            }
+        }
+
+        $instantLoanCollectionCount = (int) (clone $loanCollectionsBase)->count('loan_request_collections.id');
+
+        $loanCollectionRows = (clone $loanCollectionsBase)
+            ->selectRaw($this->periodGroupExpression('loan_request_collections.collection_date', $groupBy) . ' as period')
+            ->selectRaw('SUM(loan_request_collections.collected_amount) as total_collections')
+            ->selectRaw(
+                'SUM(loan_request_collections.collected_amount * CASE WHEN loan_requests.total_payable > 0 '
+                . 'THEN GREATEST(loan_requests.total_payable - loan_requests.principal, 0) / loan_requests.total_payable '
+                . 'ELSE 0 END) as interest_income'
+            )
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get();
+
+        $loanDisbursementRows = (clone $loanDisbursementsBase)
+            ->selectRaw($this->periodGroupExpression('COALESCE(loan_requests.last_action_at, loan_requests.created_at)', $groupBy) . ' as period')
+            ->selectRaw('SUM(loan_requests.principal) as disbursement_expense')
             ->selectRaw('COUNT(*) as disbursement_accounts')
             ->groupBy('period')
             ->orderBy('period')
@@ -180,23 +283,9 @@ class FinanceController extends Controller
 
         $periodMap = [];
 
-        foreach ($incomeRows as $row) {
-            $period = (string) $row->period;
-            $periodMap[$period] = [
-                'period' => $period,
-                'interest_income' => round((float) ($row->interest_income ?? 0), 2),
-                'collection_inflow' => round((float) ($row->total_collections ?? 0), 2),
-                'refund_expense' => round((float) ($row->refund_expense ?? 0), 2),
-                'disbursement_expense' => 0.0,
-                'disbursement_accounts' => 0,
-            ];
-        }
-
-        foreach ($disbursementRows as $row) {
-            $period = (string) $row->period;
-
-            if (!isset($periodMap[$period])) {
-                $periodMap[$period] = [
+        $ensurePeriod = static function (array &$map, string $period): void {
+            if (!isset($map[$period])) {
+                $map[$period] = [
                     'period' => $period,
                     'interest_income' => 0.0,
                     'collection_inflow' => 0.0,
@@ -205,9 +294,35 @@ class FinanceController extends Controller
                     'disbursement_accounts' => 0,
                 ];
             }
+        };
 
-            $periodMap[$period]['disbursement_expense'] = round((float) ($row->disbursement_expense ?? 0), 2);
-            $periodMap[$period]['disbursement_accounts'] = (int) ($row->disbursement_accounts ?? 0);
+        foreach ($incomeRows as $row) {
+            $period = (string) $row->period;
+            $ensurePeriod($periodMap, $period);
+            $periodMap[$period]['interest_income'] += round((float) ($row->interest_income ?? 0), 2);
+            $periodMap[$period]['collection_inflow'] += round((float) ($row->total_collections ?? 0), 2);
+            $periodMap[$period]['refund_expense'] += round((float) ($row->refund_expense ?? 0), 2);
+        }
+
+        foreach ($loanCollectionRows as $row) {
+            $period = (string) $row->period;
+            $ensurePeriod($periodMap, $period);
+            $periodMap[$period]['interest_income'] += round((float) ($row->interest_income ?? 0), 2);
+            $periodMap[$period]['collection_inflow'] += round((float) ($row->total_collections ?? 0), 2);
+        }
+
+        foreach ($disbursementRows as $row) {
+            $period = (string) $row->period;
+            $ensurePeriod($periodMap, $period);
+            $periodMap[$period]['disbursement_expense'] += round((float) ($row->disbursement_expense ?? 0), 2);
+            $periodMap[$period]['disbursement_accounts'] += (int) ($row->disbursement_accounts ?? 0);
+        }
+
+        foreach ($loanDisbursementRows as $row) {
+            $period = (string) $row->period;
+            $ensurePeriod($periodMap, $period);
+            $periodMap[$period]['disbursement_expense'] += round((float) ($row->disbursement_expense ?? 0), 2);
+            $periodMap[$period]['disbursement_accounts'] += (int) ($row->disbursement_accounts ?? 0);
         }
 
         ksort($periodMap);
@@ -232,42 +347,137 @@ class FinanceController extends Controller
             'total_expense' => round((float) collect($periods)->sum('total_expense'), 2),
             'net_profit' => round((float) collect($periods)->sum('net_profit'), 2),
             'disbursement_accounts' => (int) collect($periods)->sum('disbursement_accounts'),
+            'instant_loan_collections' => $instantLoanCollectionCount,
         ];
 
         return response()->json([
             'summary' => $summary,
             'periods' => $periods,
+            'company' => $company ? [
+                'id' => $company->id,
+                'name' => $company->name,
+                'currency' => $company->currency ?: 'LKR',
+            ] : null,
             'filters' => [
                 'from_date' => $validated['from_date'] ?? null,
                 'to_date' => $validated['to_date'] ?? null,
                 'product_type' => $validated['product_type'] ?? null,
                 'status' => $validated['status'] ?? null,
                 'group_by' => $groupBy,
+                'branch_id' => $branchId,
+                'company_id' => $branchId,
             ],
         ]);
     }
 
-    public function cashFlowReport(Request $request): JsonResponse
+    private function emptyCashFlowPeriodRow(string $period): array
     {
-        $validated = $request->validate([
-            'from_date' => ['nullable', 'date'],
-            'to_date' => ['nullable', 'date'],
-            'product_type' => ['nullable', 'string', 'max:100'],
-            'status' => ['nullable', 'string', 'max:50'],
-            'group_by' => ['nullable', 'in:day,month'],
-        ]);
+        return [
+            'period' => $period,
+            'cash_in' => 0.0,
+            'cash_out' => 0.0,
+            'refund_out' => 0.0,
+            'collection_count' => 0,
+            'disbursement_count' => 0,
+        ];
+    }
 
-        $groupBy = (string) ($validated['group_by'] ?? 'month');
-        $groupExpression = $groupBy === 'day'
-            ? "DATE(%s)"
-            : "DATE_FORMAT(%s, '%Y-%m-01')";
+    private function ensureCashFlowPeriod(array &$periodMap, string $period): void
+    {
+        if (!isset($periodMap[$period])) {
+            $periodMap[$period] = $this->emptyCashFlowPeriodRow($period);
+        }
+    }
 
+    private function applyCashFlowInflowRows(array &$periodMap, $rows): void
+    {
+        foreach ($rows as $row) {
+            $period = (string) $row->period;
+            $this->ensureCashFlowPeriod($periodMap, $period);
+            $periodMap[$period]['cash_in'] = round($periodMap[$period]['cash_in'] + (float) ($row->cash_in ?? 0), 2);
+            $periodMap[$period]['collection_count'] += (int) ($row->collection_count ?? 0);
+        }
+    }
+
+    private function applyCashFlowOutflowRows(array &$periodMap, $rows): void
+    {
+        foreach ($rows as $row) {
+            $period = (string) $row->period;
+            $this->ensureCashFlowPeriod($periodMap, $period);
+            $periodMap[$period]['cash_out'] = round($periodMap[$period]['cash_out'] + (float) ($row->cash_out ?? 0), 2);
+            $periodMap[$period]['disbursement_count'] += (int) ($row->disbursement_count ?? 0);
+        }
+    }
+
+    private function applyCashFlowRefundRows(array &$periodMap, $rows): void
+    {
+        foreach ($rows as $row) {
+            $period = (string) $row->period;
+            $this->ensureCashFlowPeriod($periodMap, $period);
+            $periodMap[$period]['refund_out'] = round($periodMap[$period]['refund_out'] + (float) ($row->refund_out ?? 0), 2);
+        }
+    }
+
+    private function mergeCashFlowPeriodMaps(array ...$maps): array
+    {
+        $merged = [];
+
+        foreach ($maps as $map) {
+            foreach ($map as $period => $row) {
+                $this->ensureCashFlowPeriod($merged, (string) $period);
+                $merged[$period]['cash_in'] = round($merged[$period]['cash_in'] + (float) ($row['cash_in'] ?? 0), 2);
+                $merged[$period]['cash_out'] = round($merged[$period]['cash_out'] + (float) ($row['cash_out'] ?? 0), 2);
+                $merged[$period]['refund_out'] = round($merged[$period]['refund_out'] + (float) ($row['refund_out'] ?? 0), 2);
+                $merged[$period]['collection_count'] += (int) ($row['collection_count'] ?? 0);
+                $merged[$period]['disbursement_count'] += (int) ($row['disbursement_count'] ?? 0);
+            }
+        }
+
+        return $merged;
+    }
+
+    private function finalizeCashFlowPeriodMap(array $periodMap): array
+    {
+        ksort($periodMap);
+
+        $runningBalance = 0.0;
+
+        return array_map(function (array $row) use (&$runningBalance) {
+            $effectiveCashOut = round((float) $row['cash_out'] + (float) $row['refund_out'], 2);
+            $netCashFlow = round((float) $row['cash_in'] - $effectiveCashOut, 2);
+            $runningBalance = round($runningBalance + $netCashFlow, 2);
+
+            return [
+                ...$row,
+                'effective_cash_out' => $effectiveCashOut,
+                'net_cash_flow' => $netCashFlow,
+                'running_cash_balance' => $runningBalance,
+            ];
+        }, array_values($periodMap));
+    }
+
+    private function summarizeCashFlowPeriods(array $periods): array
+    {
+        return [
+            'periods_count' => count($periods),
+            'total_cash_in' => round((float) collect($periods)->sum('cash_in'), 2),
+            'total_cash_out' => round((float) collect($periods)->sum('cash_out'), 2),
+            'total_refund_out' => round((float) collect($periods)->sum('refund_out'), 2),
+            'total_effective_cash_out' => round((float) collect($periods)->sum('effective_cash_out'), 2),
+            'net_cash_flow' => round((float) collect($periods)->sum('net_cash_flow'), 2),
+            'ending_cash_balance' => count($periods) > 0 ? (float) ($periods[count($periods) - 1]['running_cash_balance'] ?? 0) : 0.0,
+            'total_collections' => (int) collect($periods)->sum('collection_count'),
+            'total_disbursements' => (int) collect($periods)->sum('disbursement_count'),
+        ];
+    }
+
+    private function buildFinanceCashFlowPeriodMap(?int $branchId, array $validated, string $groupBy): array
+    {
         $collectionsBase = FinanceCollection::query()
             ->join('finances', 'finances.id', '=', 'finance_collections.finance_id');
 
         $disbursementsBase = Finance::query();
 
-        $branchId = $this->scopedBranchId($request);
         if ($branchId !== null) {
             $collectionsBase->where('finances.branch_id', $branchId);
             $disbursementsBase->where('finances.branch_id', $branchId);
@@ -295,8 +505,10 @@ class FinanceController extends Controller
             $disbursementsBase->whereRaw('LOWER(finances.status) = ?', [$status]);
         }
 
+        $periodMap = [];
+
         $inflowRows = (clone $collectionsBase)
-            ->selectRaw(sprintf($groupExpression, 'finance_collections.payment_date') . ' as period')
+            ->selectRaw($this->periodGroupExpression('finance_collections.payment_date', $groupBy) . ' as period')
             ->selectRaw('SUM(finance_collections.payment_amount) as cash_in')
             ->selectRaw('COUNT(*) as collection_count')
             ->groupBy('period')
@@ -304,7 +516,7 @@ class FinanceController extends Controller
             ->get();
 
         $outflowRows = (clone $disbursementsBase)
-            ->selectRaw(sprintf($groupExpression, 'finances.start_date') . ' as period')
+            ->selectRaw($this->periodGroupExpression('finances.start_date', $groupBy) . ' as period')
             ->selectRaw('SUM(finances.financed_amount) as cash_out')
             ->selectRaw('COUNT(*) as disbursement_count')
             ->groupBy('period')
@@ -312,94 +524,240 @@ class FinanceController extends Controller
             ->get();
 
         $refundRows = (clone $collectionsBase)
-            ->selectRaw(sprintf($groupExpression, 'finance_collections.payment_date') . ' as period')
+            ->selectRaw($this->periodGroupExpression('finance_collections.payment_date', $groupBy) . ' as period')
             ->selectRaw('SUM(finance_collections.refund_amount) as refund_out')
             ->groupBy('period')
             ->orderBy('period')
             ->get();
 
+        $this->applyCashFlowInflowRows($periodMap, $inflowRows);
+        $this->applyCashFlowOutflowRows($periodMap, $outflowRows);
+        $this->applyCashFlowRefundRows($periodMap, $refundRows);
+
+        return $periodMap;
+    }
+
+    private function buildMicrofinanceCashFlowPeriodMap(?int $branchId, array $validated, string $groupBy): array
+    {
+        if ($branchId === null) {
+            return [];
+        }
+
+        $collectionsBase = MicrofinanceLoanCollection::query()
+            ->join('mf_loan_requests', 'mf_loan_requests.id', '=', 'mf_loan_collections.mf_loan_request_id')
+            ->where('mf_loan_requests.branch_id', $branchId);
+
+        $disbursementsBase = MicrofinanceLoanRequest::query()
+            ->where('branch_id', $branchId)
+            ->where('status', 'released');
+
+        if (!empty($validated['from_date'])) {
+            $collectionsBase->whereDate('mf_loan_collections.collection_date', '>=', $validated['from_date']);
+            $disbursementsBase->whereDate('loan_request_date', '>=', $validated['from_date']);
+        }
+
+        if (!empty($validated['to_date'])) {
+            $collectionsBase->whereDate('mf_loan_collections.collection_date', '<=', $validated['to_date']);
+            $disbursementsBase->whereDate('loan_request_date', '<=', $validated['to_date']);
+        }
+
         $periodMap = [];
 
-        foreach ($inflowRows as $row) {
-            $period = (string) $row->period;
-            $periodMap[$period] = [
-                'period' => $period,
-                'cash_in' => round((float) ($row->cash_in ?? 0), 2),
-                'cash_out' => 0.0,
-                'refund_out' => 0.0,
-                'collection_count' => (int) ($row->collection_count ?? 0),
-                'disbursement_count' => 0,
-            ];
+        $inflowRows = (clone $collectionsBase)
+            ->selectRaw($this->periodGroupExpression('mf_loan_collections.collection_date', $groupBy) . ' as period')
+            ->selectRaw('SUM(mf_loan_collections.collected_amount) as cash_in')
+            ->selectRaw('COUNT(*) as collection_count')
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get();
+
+        $outflowRows = (clone $disbursementsBase)
+            ->selectRaw($this->periodGroupExpression('mf_loan_requests.loan_request_date', $groupBy) . ' as period')
+            ->selectRaw('SUM(COALESCE(NULLIF(mf_loan_requests.net_disbursed_amount, 0), mf_loan_requests.loan_amount)) as cash_out')
+            ->selectRaw('COUNT(*) as disbursement_count')
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get();
+
+        $this->applyCashFlowInflowRows($periodMap, $inflowRows);
+        $this->applyCashFlowOutflowRows($periodMap, $outflowRows);
+
+        return $periodMap;
+    }
+
+    private function buildMortgageCashFlowPeriodMap(?int $branchId, array $validated, string $groupBy): array
+    {
+        if ($branchId === null) {
+            return [];
         }
 
-        foreach ($outflowRows as $row) {
-            $period = (string) $row->period;
-            if (!isset($periodMap[$period])) {
-                $periodMap[$period] = [
-                    'period' => $period,
-                    'cash_in' => 0.0,
-                    'cash_out' => 0.0,
-                    'refund_out' => 0.0,
-                    'collection_count' => 0,
-                    'disbursement_count' => 0,
-                ];
-            }
-            $periodMap[$period]['cash_out'] = round((float) ($row->cash_out ?? 0), 2);
-            $periodMap[$period]['disbursement_count'] = (int) ($row->disbursement_count ?? 0);
+        $collectionsBase = MortgagePayment::query()->where('branch_id', $branchId);
+
+        $disbursementsBase = Mortgage::query()
+            ->where('branch_id', $branchId)
+            ->whereIn('status', ['approved', 'active', 'released'])
+            ->whereNotNull('approved_at');
+
+        if (!empty($validated['from_date'])) {
+            $collectionsBase->whereDate('paid_date', '>=', $validated['from_date']);
+            $disbursementsBase->whereDate('approved_at', '>=', $validated['from_date']);
         }
 
-        foreach ($refundRows as $row) {
-            $period = (string) $row->period;
-            if (!isset($periodMap[$period])) {
-                $periodMap[$period] = [
-                    'period' => $period,
-                    'cash_in' => 0.0,
-                    'cash_out' => 0.0,
-                    'refund_out' => 0.0,
-                    'collection_count' => 0,
-                    'disbursement_count' => 0,
-                ];
-            }
-            $periodMap[$period]['refund_out'] = round((float) ($row->refund_out ?? 0), 2);
+        if (!empty($validated['to_date'])) {
+            $collectionsBase->whereDate('paid_date', '<=', $validated['to_date']);
+            $disbursementsBase->whereDate('approved_at', '<=', $validated['to_date']);
         }
 
-        ksort($periodMap);
+        $periodMap = [];
 
-        $runningBalance = 0.0;
-        $periods = array_map(function (array $row) use (&$runningBalance) {
-            $effectiveCashOut = round((float) $row['cash_out'] + (float) $row['refund_out'], 2);
-            $netCashFlow = round((float) $row['cash_in'] - $effectiveCashOut, 2);
-            $runningBalance = round($runningBalance + $netCashFlow, 2);
+        $inflowRows = (clone $collectionsBase)
+            ->selectRaw($this->periodGroupExpression('paid_date', $groupBy) . ' as period')
+            ->selectRaw('SUM(amount) as cash_in')
+            ->selectRaw('COUNT(*) as collection_count')
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get();
 
-            return [
-                ...$row,
-                'effective_cash_out' => $effectiveCashOut,
-                'net_cash_flow' => $netCashFlow,
-                'running_cash_balance' => $runningBalance,
-            ];
-        }, array_values($periodMap));
+        $outflowRows = (clone $disbursementsBase)
+            ->selectRaw($this->periodGroupExpression('approved_at', $groupBy) . ' as period')
+            ->selectRaw('SUM(COALESCE(approved_amount, 0)) as cash_out')
+            ->selectRaw('COUNT(*) as disbursement_count')
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get();
 
-        $summary = [
-            'periods_count' => count($periods),
-            'total_cash_in' => round((float) collect($periods)->sum('cash_in'), 2),
-            'total_cash_out' => round((float) collect($periods)->sum('cash_out'), 2),
-            'total_refund_out' => round((float) collect($periods)->sum('refund_out'), 2),
-            'total_effective_cash_out' => round((float) collect($periods)->sum('effective_cash_out'), 2),
-            'net_cash_flow' => round((float) collect($periods)->sum('net_cash_flow'), 2),
-            'ending_cash_balance' => count($periods) > 0 ? (float) ($periods[count($periods) - 1]['running_cash_balance'] ?? 0) : 0.0,
-            'total_collections' => (int) collect($periods)->sum('collection_count'),
-            'total_disbursements' => (int) collect($periods)->sum('disbursement_count'),
+        $this->applyCashFlowInflowRows($periodMap, $inflowRows);
+        $this->applyCashFlowOutflowRows($periodMap, $outflowRows);
+
+        return $periodMap;
+    }
+
+    private function buildInstantLoanCashFlowPeriodMap(?int $branchId, array $validated, string $groupBy): array
+    {
+        if ($branchId === null) {
+            return [];
+        }
+
+        $collectionsBase = LoanRequestCollection::query()
+            ->join('loan_requests', 'loan_requests.id', '=', 'loan_request_collections.loan_request_id')
+            ->where('loan_requests.branch_id', $branchId);
+
+        $disbursementsBase = LoanRequest::query()
+            ->where('loan_requests.branch_id', $branchId)
+            ->whereIn('loan_requests.status', ['approved', 'closed']);
+
+        if (!empty($validated['from_date'])) {
+            $collectionsBase->whereDate('loan_request_collections.collection_date', '>=', $validated['from_date']);
+            $disbursementsBase->whereRaw('DATE(COALESCE(loan_requests.last_action_at, loan_requests.created_at)) >= ?', [$validated['from_date']]);
+        }
+
+        if (!empty($validated['to_date'])) {
+            $collectionsBase->whereDate('loan_request_collections.collection_date', '<=', $validated['to_date']);
+            $disbursementsBase->whereRaw('DATE(COALESCE(loan_requests.last_action_at, loan_requests.created_at)) <= ?', [$validated['to_date']]);
+        }
+
+        $periodMap = [];
+
+        $inflowRows = (clone $collectionsBase)
+            ->selectRaw($this->periodGroupExpression('loan_request_collections.collection_date', $groupBy) . ' as period')
+            ->selectRaw('SUM(loan_request_collections.collected_amount) as cash_in')
+            ->selectRaw('COUNT(*) as collection_count')
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get();
+
+        $outflowRows = (clone $disbursementsBase)
+            ->selectRaw($this->periodGroupExpression('COALESCE(loan_requests.last_action_at, loan_requests.created_at)', $groupBy) . ' as period')
+            ->selectRaw('SUM(loan_requests.principal) as cash_out')
+            ->selectRaw('COUNT(*) as disbursement_count')
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get();
+
+        $this->applyCashFlowInflowRows($periodMap, $inflowRows);
+        $this->applyCashFlowOutflowRows($periodMap, $outflowRows);
+
+        return $periodMap;
+    }
+
+    private function buildCashFlowSourcePayload(string $key, string $label, array $periodMap): array
+    {
+        $periods = $this->finalizeCashFlowPeriodMap($periodMap);
+
+        return [
+            'key' => $key,
+            'label' => $label,
+            'summary' => $this->summarizeCashFlowPeriods($periods),
+            'periods' => $periods,
         ];
+    }
+
+    public function cashFlowReport(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'from_date' => ['nullable', 'date'],
+            'to_date' => ['nullable', 'date'],
+            'product_type' => ['nullable', 'string', 'max:100'],
+            'status' => ['nullable', 'string', 'max:50'],
+            'group_by' => ['nullable', 'in:day,month'],
+            'source' => ['nullable', 'in:all,finance,microfinance,mortgage,instant_loan'],
+            'company_id' => ['nullable', 'integer', 'exists:companies,id'],
+            'branch_id' => ['nullable', 'integer', 'exists:companies,id'],
+        ]);
+
+        $groupBy = (string) ($validated['group_by'] ?? 'month');
+        $sourceFilter = strtolower(trim((string) ($validated['source'] ?? 'all')));
+
+        $requestedCompanyId = (int) ($validated['company_id'] ?? $validated['branch_id'] ?? 0);
+        $branchId = $requestedCompanyId > 0 ? $requestedCompanyId : $this->scopedBranchId($request);
+        $company = $branchId ? Company::query()->find($branchId) : null;
+
+        $includeFinance = $sourceFilter === 'all' || $sourceFilter === 'finance';
+        $includeMicrofinance = $sourceFilter === 'all' || $sourceFilter === 'microfinance';
+        $includeMortgage = $sourceFilter === 'all' || $sourceFilter === 'mortgage';
+        $includeInstantLoan = $sourceFilter === 'all' || $sourceFilter === 'instant_loan';
+
+        $financeMap = $includeFinance ? $this->buildFinanceCashFlowPeriodMap($branchId, $validated, $groupBy) : [];
+        $microfinanceMap = $includeMicrofinance ? $this->buildMicrofinanceCashFlowPeriodMap($branchId, $validated, $groupBy) : [];
+        $mortgageMap = $includeMortgage ? $this->buildMortgageCashFlowPeriodMap($branchId, $validated, $groupBy) : [];
+        $instantLoanMap = $includeInstantLoan ? $this->buildInstantLoanCashFlowPeriodMap($branchId, $validated, $groupBy) : [];
+
+        $combinedMap = $this->mergeCashFlowPeriodMaps($financeMap, $microfinanceMap, $mortgageMap, $instantLoanMap);
+        $periods = $this->finalizeCashFlowPeriodMap($combinedMap);
+        $summary = $this->summarizeCashFlowPeriods($periods);
+
+        $sources = [];
+
+        if ($includeFinance) {
+            $sources['finance'] = $this->buildCashFlowSourcePayload('finance', 'Finance', $financeMap);
+        }
+        if ($includeMicrofinance) {
+            $sources['microfinance'] = $this->buildCashFlowSourcePayload('microfinance', 'Micro Credit', $microfinanceMap);
+        }
+        if ($includeMortgage) {
+            $sources['mortgage'] = $this->buildCashFlowSourcePayload('mortgage', 'Mortgage', $mortgageMap);
+        }
+        if ($includeInstantLoan) {
+            $sources['instant_loan'] = $this->buildCashFlowSourcePayload('instant_loan', 'Instant Loan', $instantLoanMap);
+        }
 
         return response()->json([
+            'company' => $company ? [
+                'id' => (int) $company->id,
+                'name' => (string) $company->name,
+                'currency' => $company->currency,
+            ] : null,
             'summary' => $summary,
             'periods' => $periods,
+            'sources' => $sources,
             'filters' => [
                 'from_date' => $validated['from_date'] ?? null,
                 'to_date' => $validated['to_date'] ?? null,
                 'product_type' => $validated['product_type'] ?? null,
                 'status' => $validated['status'] ?? null,
                 'group_by' => $groupBy,
+                'source' => $sourceFilter,
+                'branch_id' => $branchId,
             ],
         ]);
     }
@@ -411,17 +769,23 @@ class FinanceController extends Controller
             'to_date' => ['nullable', 'date'],
             'product_type' => ['nullable', 'string', 'max:100'],
             'status' => ['nullable', 'string', 'max:50'],
+            'company_id' => ['nullable', 'integer', 'exists:companies,id'],
+            'branch_id' => ['nullable', 'integer', 'exists:companies,id'],
         ]);
 
         $fromDate = $validated['from_date'] ?? null;
         $toDate = $validated['to_date'] ?? null;
+
+        $requestedCompanyId = (int) ($validated['company_id'] ?? $validated['branch_id'] ?? 0);
+        $branchId = $requestedCompanyId > 0 ? $requestedCompanyId : $this->scopedBranchId($request);
+
+        $company = $branchId ? Company::query()->find($branchId) : null;
 
         $collectionsBase = FinanceCollection::query()
             ->join('finances', 'finances.id', '=', 'finance_collections.finance_id');
 
         $financesBase = Finance::query();
 
-        $branchId = $this->scopedBranchId($request);
         if ($branchId !== null) {
             $collectionsBase->where('finances.branch_id', $branchId);
             $financesBase->where('finances.branch_id', $branchId);
@@ -474,26 +838,21 @@ class FinanceController extends Controller
         $refundOpening = (float) ((clone $collectionsBase)->tap(fn ($q) => $applyDateWindow($q, 'finance_collections.payment_date', 'opening'))->sum('finance_collections.refund_amount') ?: 0);
         $refundPeriod = (float) ((clone $collectionsBase)->tap(fn ($q) => $applyDateWindow($q, 'finance_collections.payment_date', 'period'))->sum('finance_collections.refund_amount') ?: 0);
 
-        $makeLine = static function (
-            string $accountCode,
-            string $accountName,
-            float $openingDebit,
-            float $openingCredit,
-            float $periodDebit,
-            float $periodCredit
-        ): array {
-            $openingDebit = round($openingDebit, 2);
-            $openingCredit = round($openingCredit, 2);
-            $periodDebit = round($periodDebit, 2);
-            $periodCredit = round($periodCredit, 2);
+        $recalculateLine = static function (array $line): array {
+            $openingDebit = round((float) ($line['opening_debit'] ?? 0), 2);
+            $openingCredit = round((float) ($line['opening_credit'] ?? 0), 2);
+            $periodDebit = round((float) ($line['period_debit'] ?? 0), 2);
+            $periodCredit = round((float) ($line['period_credit'] ?? 0), 2);
 
             $openingBalance = round($openingDebit - $openingCredit, 2);
             $periodMovement = round($periodDebit - $periodCredit, 2);
             $closingBalance = round($openingBalance + $periodMovement, 2);
 
             return [
-                'account_code' => $accountCode,
-                'account_name' => $accountName,
+                'account_code' => (string) ($line['account_code'] ?? ''),
+                'account_name' => (string) ($line['account_name'] ?? ''),
+                'account_type' => $line['account_type'] ?? null,
+                'source' => $line['source'] ?? null,
                 'opening_debit' => $openingDebit,
                 'opening_credit' => $openingCredit,
                 'period_debit' => $periodDebit,
@@ -507,12 +866,128 @@ class FinanceController extends Controller
             ];
         };
 
-        $lines = [
-            $makeLine('1100', 'Cash Account', $cashInOpening, $disbursementOpening + $refundOpening, $cashInPeriod, $disbursementPeriod + $refundPeriod),
-            $makeLine('1200', 'Loan Receivable', $disbursementOpening, $principalOpening, $disbursementPeriod, $principalPeriod),
-            $makeLine('4100', 'Interest Income', 0.0, $interestOpening, 0.0, $interestPeriod),
-            $makeLine('5100', 'Refund Expense', $refundOpening, 0.0, $refundPeriod, 0.0),
+        $mergeLine = static function (array $existing, array $incoming) use ($recalculateLine): array {
+            return $recalculateLine([
+                'account_code' => $existing['account_code'],
+                'account_name' => $existing['account_name'] ?: $incoming['account_name'],
+                'account_type' => $existing['account_type'] ?? $incoming['account_type'] ?? null,
+                'source' => $existing['source'] === 'company_account' || ($incoming['source'] ?? null) === 'company_account'
+                    ? 'company_account'
+                    : ($existing['source'] ?? $incoming['source'] ?? 'finance'),
+                'opening_debit' => ($existing['opening_debit'] ?? 0) + ($incoming['opening_debit'] ?? 0),
+                'opening_credit' => ($existing['opening_credit'] ?? 0) + ($incoming['opening_credit'] ?? 0),
+                'period_debit' => ($existing['period_debit'] ?? 0) + ($incoming['period_debit'] ?? 0),
+                'period_credit' => ($existing['period_credit'] ?? 0) + ($incoming['period_credit'] ?? 0),
+            ]);
+        };
+
+        $lineMap = [];
+
+        $upsertLine = function (array $line) use (&$lineMap, $recalculateLine, $mergeLine): void {
+            $normalized = $recalculateLine($line);
+            $code = $normalized['account_code'];
+
+            if ($code === '') {
+                return;
+            }
+
+            if (isset($lineMap[$code])) {
+                $lineMap[$code] = $mergeLine($lineMap[$code], $normalized);
+                return;
+            }
+
+            $lineMap[$code] = $normalized;
+        };
+
+        if ($branchId) {
+            $companyAccounts = CompanyAccount::query()
+                ->where('company_id', $branchId)
+                ->where('is_active', true)
+                ->orderBy('account_type')
+                ->orderBy('id')
+                ->get();
+
+            foreach ($companyAccounts as $account) {
+                $code = trim((string) ($account->account_code ?: CompanyAccount::defaultAccountCode((string) $account->account_type)));
+                $opening = round((float) ($account->opening_balance ?? 0), 2);
+                $name = trim((string) $account->account_name);
+
+                if ($account->account_type === CompanyAccount::TYPE_MAIN) {
+                    $upsertLine([
+                        'account_code' => $code,
+                        'account_name' => $name,
+                        'account_type' => $account->account_type,
+                        'source' => 'company_account',
+                        'opening_debit' => 0.0,
+                        'opening_credit' => $opening,
+                        'period_debit' => 0.0,
+                        'period_credit' => 0.0,
+                    ]);
+                    continue;
+                }
+
+                $upsertLine([
+                    'account_code' => $code,
+                    'account_name' => $name,
+                    'account_type' => $account->account_type,
+                    'source' => 'company_account',
+                    'opening_debit' => $opening,
+                    'opening_credit' => 0.0,
+                    'period_debit' => 0.0,
+                    'period_credit' => 0.0,
+                ]);
+            }
+        }
+
+        $financeLines = [
+            [
+                'account_code' => '1100',
+                'account_name' => 'Cash Account (Collections)',
+                'account_type' => 'cash',
+                'source' => 'finance',
+                'opening_debit' => $cashInOpening,
+                'opening_credit' => $disbursementOpening + $refundOpening,
+                'period_debit' => $cashInPeriod,
+                'period_credit' => $disbursementPeriod + $refundPeriod,
+            ],
+            [
+                'account_code' => '1150',
+                'account_name' => 'Loan Receivable',
+                'account_type' => 'receivable',
+                'source' => 'finance',
+                'opening_debit' => $disbursementOpening,
+                'opening_credit' => $principalOpening,
+                'period_debit' => $disbursementPeriod,
+                'period_credit' => $principalPeriod,
+            ],
+            [
+                'account_code' => '4100',
+                'account_name' => 'Interest Income',
+                'account_type' => 'income',
+                'source' => 'finance',
+                'opening_debit' => 0.0,
+                'opening_credit' => $interestOpening,
+                'period_debit' => 0.0,
+                'period_credit' => $interestPeriod,
+            ],
+            [
+                'account_code' => '5100',
+                'account_name' => 'Refund Expense',
+                'account_type' => 'expense',
+                'source' => 'finance',
+                'opening_debit' => $refundOpening,
+                'opening_credit' => 0.0,
+                'period_debit' => $refundPeriod,
+                'period_credit' => 0.0,
+            ],
         ];
+
+        foreach ($financeLines as $financeLine) {
+            $upsertLine($financeLine);
+        }
+
+        $lines = array_values($lineMap);
+        usort($lines, static fn (array $a, array $b) => strcmp((string) $a['account_code'], (string) $b['account_code']));
 
         $summary = [
             'opening_debits' => round((float) collect($lines)->sum('opening_debit'), 2),
@@ -528,11 +1003,18 @@ class FinanceController extends Controller
         return response()->json([
             'summary' => $summary,
             'lines' => $lines,
+            'company' => $company ? [
+                'id' => $company->id,
+                'name' => $company->name,
+                'currency' => $company->currency ?: 'LKR',
+            ] : null,
             'filters' => [
                 'from_date' => $fromDate,
                 'to_date' => $toDate,
                 'product_type' => $validated['product_type'] ?? null,
                 'status' => $validated['status'] ?? null,
+                'branch_id' => $branchId,
+                'company_id' => $branchId,
             ],
         ]);
     }

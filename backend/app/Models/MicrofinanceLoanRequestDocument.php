@@ -19,6 +19,19 @@ class MicrofinanceLoanRequestDocument extends Model
         'uploaded_by',
     ];
 
+    protected $appends = [
+        'file_url',
+    ];
+
+    public function getFileUrlAttribute(): ?string
+    {
+        if (!$this->file_path) {
+            return null;
+        }
+
+        return '/media/loan-documents/' . $this->id;
+    }
+
     public function loanRequest()
     {
         return $this->belongsTo(MicrofinanceLoanRequest::class, 'mf_loan_request_id');

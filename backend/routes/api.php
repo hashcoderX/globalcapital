@@ -21,6 +21,10 @@ use App\Http\Controllers\Api\HR\EmployeeAllowanceDeductionController;
 use App\Http\Controllers\Api\MortgageController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\CustomerDocumentController;
+use App\Http\Controllers\Api\AccountingExpenseController;
+use App\Http\Controllers\Api\AccountingOverviewController;
+use App\Http\Controllers\Api\AccountingReportsController;
+use App\Http\Controllers\Api\CompanyAccountController;
 use App\Http\Controllers\Api\CompanyDocumentTemplateController;
 use App\Http\Controllers\Api\Microfinance\RouteController as MicrofinanceRouteController;
 use App\Http\Controllers\Api\Microfinance\GroupController as MicrofinanceGroupController;
@@ -32,6 +36,10 @@ use App\Http\Controllers\Api\Microfinance\LoanCollectionController as Microfinan
 use App\Http\Controllers\Api\FinanceController;
 use App\Http\Controllers\Api\FinanceProductTypeController;
 use App\Http\Controllers\Api\LoanRequestController;
+use App\Http\Controllers\Api\OfficeCollectionController;
+use App\Http\Controllers\Reports\BranchCollectionReportController;
+use App\Http\Controllers\Reports\BranchPerformanceReportController;
+use App\Http\Controllers\Reports\BranchRepaymentReportController;
 use App\Http\Controllers\Api\SavingsAccountController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\PermissionController;
@@ -80,8 +88,32 @@ Route::get('/users', function () {
 });
 
 Route::get('/reset-password', function () {
-    User::where('email', 'superadmin@softcodelk.com')->update(['password' => \Illuminate\Support\Facades\Hash::make('password')]);
-    return 'Password reset';
+    $defaultEmail = trim((string) env('SYSTEM_SUPER_ADMIN_EMAIL', 'superadmin@softcodelk.com'));
+    $candidates = array_values(array_unique([
+        strtolower($defaultEmail),
+        'superadmin@softcodelk.com',
+        'superadmin@gmail.com',
+    ]));
+
+    $targetUser = User::query()
+        ->where(function ($query) use ($candidates) {
+            foreach ($candidates as $candidate) {
+                $query->orWhereRaw('LOWER(TRIM(email)) = ?', [$candidate]);
+            }
+        })
+        ->first();
+
+    if (!$targetUser) {
+        return response()->json(['message' => 'No super admin account found to reset.'], 404);
+    }
+
+    $targetUser->password = \Illuminate\Support\Facades\Hash::make('password');
+    $targetUser->save();
+
+    return response()->json([
+        'message' => 'Password reset',
+        'email' => $targetUser->email,
+    ]);
 });
 
 Route::post('/register', [AuthController::class, 'register']);
@@ -101,6 +133,16 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     Route::post('companies/{company}/document-templates', [CompanyDocumentTemplateController::class, 'store']);
     Route::get('companies/{company}/document-templates/{template}/view', [CompanyDocumentTemplateController::class, 'view']);
     Route::delete('companies/{company}/document-templates/{template}', [CompanyDocumentTemplateController::class, 'destroy']);
+    Route::get('companies/{company}/accounts', [CompanyAccountController::class, 'index']);
+    Route::post('companies/{company}/accounts', [CompanyAccountController::class, 'store']);
+    Route::put('companies/{company}/accounts/{account}', [CompanyAccountController::class, 'update']);
+    Route::delete('companies/{company}/accounts/{account}', [CompanyAccountController::class, 'destroy']);
+    Route::get('companies/{company}/expenses', [AccountingExpenseController::class, 'index']);
+    Route::post('companies/{company}/expenses', [AccountingExpenseController::class, 'store']);
+    Route::delete('companies/{company}/expenses/{accountingExpense}', [AccountingExpenseController::class, 'destroy']);
+    Route::get('companies/{company}/accounting-overview', [AccountingOverviewController::class, 'show']);
+    Route::get('companies/{company}/reports/bank-book', [AccountingReportsController::class, 'bankBookReport']);
+    Route::get('companies/{company}/reports/cash-book', [AccountingReportsController::class, 'cashBookReport']);
 
     // HRM Routes
     Route::prefix('hr')->group(function () {
@@ -210,9 +252,10 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     });
 
     // Mortgage Management Routes
-    Route::apiResource('mortgages', MortgageController::class)->only(['index', 'store', 'show']);
+    Route::apiResource('mortgages', MortgageController::class)->only(['index', 'store', 'show', 'destroy']);
     Route::post('mortgages/{mortgage}/status', [MortgageController::class, 'updateStatus']);
     Route::get('mortgages/reports/collections', [MortgageController::class, 'collectionReport']);
+    Route::get('mortgages/reports/profit', [MortgageController::class, 'profitReport']);
     Route::get('mortgages/reports/arrears', [MortgageController::class, 'arrearsReport']);
     Route::get('mortgages/reports/portfolio', [MortgageController::class, 'portfolioReport']);
     Route::get('mortgages/{mortgage}/payments', [MortgageController::class, 'payments']);
@@ -226,6 +269,10 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     Route::get('finances/reports/income-expense', [FinanceController::class, 'incomeExpenseReport']);
     Route::get('finances/reports/cash-flow', [FinanceController::class, 'cashFlowReport']);
     Route::get('finances/reports/general-ledger', [FinanceController::class, 'generalLedgerSnapshot']);
+    Route::get('finances/reports/journal-entries', [AccountingReportsController::class, 'journalEntriesReport']);
+    Route::get('finances/reports/loan-receivable', [AccountingReportsController::class, 'loanReceivableReport']);
+    Route::get('finances/reports/interest-income', [AccountingReportsController::class, 'interestIncomeReport']);
+    Route::get('finances/reports/loan-disbursement', [AccountingReportsController::class, 'loanDisbursementReport']);
     Route::apiResource('finances', FinanceController::class)->only(['index', 'store', 'show']);
     Route::post('finances/{finance}/status', [FinanceController::class, 'updateStatus']);
     Route::get('finances/{finance}/collections', [FinanceController::class, 'collections']);
@@ -234,6 +281,17 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     Route::post('finances/{finance}/documents', [FinanceController::class, 'storeDocument']);
     Route::get('finance-product-types', [FinanceProductTypeController::class, 'index']);
     Route::post('finance-product-types', [FinanceProductTypeController::class, 'store']);
+
+    // Reports
+    Route::get('reports/branch-performance', [BranchPerformanceReportController::class, 'index']);
+    Route::get('reports/branch-profitability', [AccountingReportsController::class, 'branchProfitabilityReport']);
+    Route::get('reports/investor-funding', [AccountingReportsController::class, 'investorFundingReport']);
+    Route::get('reports/branch-collection', [BranchCollectionReportController::class, 'index']);
+    Route::get('reports/branch-repayment', [BranchRepaymentReportController::class, 'index']);
+
+    // Office collection center (unified installment collection)
+    Route::get('office-collections/search', [OfficeCollectionController::class, 'search']);
+    Route::post('office-collections/collect', [OfficeCollectionController::class, 'collect']);
 
     // Loan Requests (step-by-step loan module)
     Route::get('loan-requests', [LoanRequestController::class, 'index']);
@@ -244,6 +302,7 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     // Customers
     Route::get('customers/generate-code', [CustomerController::class, 'generateCode']);
     Route::get('customers/by-code/{customerCode}', [CustomerController::class, 'findByCode']);
+    Route::post('customers/by-code/{customerCode}/photo', [CustomerController::class, 'uploadPhotoByCode']);
     Route::apiResource('customers', CustomerController::class);
     Route::get('customers/{customer}/documents', [CustomerDocumentController::class, 'index']);
     Route::post('customers/{customer}/documents', [CustomerDocumentController::class, 'store']);

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Company;
 use App\Models\Employee;
 use App\Models\Candidate;
+use App\Models\CompanyAccount;
 use App\Models\Department;
 use App\Models\Designation;
 use App\Models\Role;
@@ -116,7 +117,7 @@ class CompanyController extends Controller
 
     public function store(Request $request)
     {
-        $request->validate([
+        $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:companies',
             'address' => 'nullable|string',
@@ -126,11 +127,49 @@ class CompanyController extends Controller
             'currency' => 'nullable|string|max:10',
             'manager_user_id' => 'nullable|exists:users,id',
             'opening_asset' => 'nullable|numeric|min:0',
+            'cash_opening_balance' => 'nullable|numeric|min:0',
+            'bank_name' => 'nullable|string|max:190',
+            'bank_branch' => 'nullable|string|max:190',
+            'bank_account_number' => 'nullable|string|max:80',
+            'bank_opening_balance' => 'nullable|numeric|min:0',
+            'bank_accounts' => 'nullable|array',
+            'bank_accounts.*.bank_name' => 'required_with:bank_accounts|string|max:190',
+            'bank_accounts.*.bank_branch' => 'nullable|string|max:190',
+            'bank_accounts.*.account_number' => 'nullable|string|max:80',
+            'bank_accounts.*.account_name' => 'nullable|string|max:190',
+            'bank_accounts.*.opening_balance' => 'nullable|numeric|min:0',
         ]);
 
-        $company = Company::create($request->all());
+        $companyPayload = collect($validated)->only([
+            'name',
+            'email',
+            'address',
+            'phone',
+            'website',
+            'country',
+            'currency',
+            'manager_user_id',
+            'opening_asset',
+        ])->all();
 
-        return response()->json($company->load('manager:id,name,email'), 201);
+        $company = DB::transaction(function () use ($companyPayload, $validated, $request) {
+            $company = Company::create($companyPayload);
+
+            CompanyAccount::provisionForCompany($company, [
+                'opening_asset' => $validated['opening_asset'] ?? 0,
+                'main_opening_balance' => $validated['opening_asset'] ?? 0,
+                'cash_opening_balance' => $validated['cash_opening_balance'] ?? 0,
+                'bank_name' => $validated['bank_name'] ?? null,
+                'bank_branch' => $validated['bank_branch'] ?? null,
+                'bank_account_number' => $validated['bank_account_number'] ?? null,
+                'bank_opening_balance' => $validated['bank_opening_balance'] ?? 0,
+                'bank_accounts' => $validated['bank_accounts'] ?? null,
+            ], $request->user()?->id);
+
+            return $company;
+        });
+
+        return response()->json($company->load(['manager:id,name,email', 'accounts']), 201);
     }
 
     public function update(Request $request, Company $company)

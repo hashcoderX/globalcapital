@@ -158,7 +158,7 @@ export default function FinanceApprovalsPage() {
   const fetchRows = async (authToken: string) => {
     setLoading(true);
     try {
-      const response = await axios.get('http://localhost:8000/api/finances', {
+      const response = await axios.get('/api/finances', {
         headers: {
           Authorization: `Bearer ${authToken}`,
           Accept: 'application/json',
@@ -432,7 +432,7 @@ export default function FinanceApprovalsPage() {
       }
 
       await axios.post(
-        `http://localhost:8000/api/finances/${id}/status`,
+        `/api/finances/${id}/status`,
         payload,
         {
           headers: {
@@ -466,7 +466,7 @@ export default function FinanceApprovalsPage() {
     setSelectedFinance(null);
 
     try {
-      const response = await axios.get(`http://localhost:8000/api/finances/${id}`, {
+      const response = await axios.get(`/api/finances/${id}`, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',

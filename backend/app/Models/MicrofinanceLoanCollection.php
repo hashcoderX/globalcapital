@@ -23,6 +23,7 @@ class MicrofinanceLoanCollection extends Model
         'payment_type',
         'payment_reference',
         'note',
+        'client_reference',
         'created_by',
         'deleted_by',
         'deletion_reason',

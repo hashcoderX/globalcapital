@@ -3,6 +3,47 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Building2,
+  CalendarDays,
+  CheckCircle2,
+  Copy,
+  Database,
+  Download,
+  Eye,
+  FileText,
+  Globe,
+  Mail,
+  MapPin,
+  Pencil,
+  Phone,
+  Power,
+  RefreshCw,
+  Save,
+  Settings,
+  Trash2,
+  Upload,
+  Wallet,
+  X,
+} from 'lucide-react';
+import CompanyAccountingPanel from '@/app/components/accounting/CompanyAccountingPanel';
+
+type SettingsSection = 'profile' | 'accounting' | 'templates' | 'holidays' | 'system';
+
+const inputClass =
+  'w-full rounded-xl border border-cyan-200/80 bg-white px-3.5 py-2.5 text-sm text-black shadow-sm transition focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-200/80 placeholder:text-slate-400 [color-scheme:light]';
+
+const labelClass = 'block text-xs font-bold text-slate-700 mb-1.5';
+
+const SECTION_TABS: { key: SettingsSection; label: string; icon: typeof Building2 }[] = [
+  { key: 'profile', label: 'Company profile', icon: Building2 },
+  { key: 'accounting', label: 'Company accounting', icon: Wallet },
+  { key: 'templates', label: 'Document templates', icon: FileText },
+  { key: 'holidays', label: 'Global holidays', icon: CalendarDays },
+  { key: 'system', label: 'System admin', icon: Settings },
+];
 
 type Company = {
   id: number;
@@ -40,7 +81,6 @@ type MFHoliday = {
 
 export default function CompanySettingsPage() {
   const router = useRouter();
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
@@ -82,6 +122,7 @@ export default function CompanySettingsPage() {
   const [holidays, setHolidays] = useState<MFHoliday[]>([]);
   const [holidayForm, setHolidayForm] = useState({ id: 0, holiday_date: '', name: '', note: '', is_active: true });
   const [holidaySaving, setHolidaySaving] = useState(false);
+  const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -95,6 +136,16 @@ export default function CompanySettingsPage() {
   const selectedCompany = useMemo(
     () => companies.find((company) => company.id === selectedCompanyId) || null,
     [companies, selectedCompanyId]
+  );
+
+  const activeTemplates = useMemo(
+    () => templates.filter((item) => item.is_active).length,
+    [templates]
+  );
+
+  const activeHolidays = useMemo(
+    () => holidays.filter((item) => item.is_active).length,
+    [holidays]
   );
 
   const loadFormFromCompany = (company: Company | null) => {
@@ -132,7 +183,7 @@ export default function CompanySettingsPage() {
 
   const fetchTemplates = async (authToken: string, companyId: number) => {
     try {
-      const response = await axios.get(`${API_URL}/api/companies/${companyId}/document-templates`, {
+      const response = await axios.get(`/api/companies/${companyId}/document-templates`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
 
@@ -145,7 +196,7 @@ export default function CompanySettingsPage() {
 
   const fetchHolidays = async (authToken: string) => {
     try {
-      const response = await axios.get(`${API_URL}/api/microfinance/settings/holidays`, {
+      const response = await axios.get(`/api/microfinance/settings/holidays`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
 
@@ -161,7 +212,7 @@ export default function CompanySettingsPage() {
     setNotice(null);
 
     try {
-      const response = await axios.get(`${API_URL}/api/companies`, {
+      const response = await axios.get(`/api/companies`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
 
@@ -203,7 +254,7 @@ export default function CompanySettingsPage() {
   const fetchSystemStatus = async (authToken: string) => {
     setSystemStatusLoading(true);
     try {
-      const response = await axios.get(`${API_URL}/api/system/status`, {
+      const response = await axios.get(`/api/system/status`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
 
@@ -248,7 +299,7 @@ export default function CompanySettingsPage() {
     formData.append('template', templateFile);
 
     try {
-      await axios.post(`${API_URL}/api/companies/${selectedCompanyId}/document-templates`, formData, {
+      await axios.post(`/api/companies/${selectedCompanyId}/document-templates`, formData, {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'multipart/form-data',
@@ -279,7 +330,7 @@ export default function CompanySettingsPage() {
 
     try {
       const response = await axios.get(
-        `${API_URL}/api/companies/${selectedCompanyId}/document-templates/${templateId}/view`,
+        `/api/companies/${selectedCompanyId}/document-templates/${templateId}/view`,
         {
           headers: { Authorization: `Bearer ${token}` },
           responseType: 'blob',
@@ -306,7 +357,7 @@ export default function CompanySettingsPage() {
     setDeletingTemplateId(templateId);
     try {
       await axios.delete(
-        `${API_URL}/api/companies/${selectedCompanyId}/document-templates/${templateId}`,
+        `/api/companies/${selectedCompanyId}/document-templates/${templateId}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -332,7 +383,7 @@ export default function CompanySettingsPage() {
     setNotice(null);
 
     try {
-      const response = await axios.get(`${API_URL}/api/companies/${selectedCompanyId}/backup`, {
+      const response = await axios.get(`/api/companies/${selectedCompanyId}/backup`, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob',
       });
@@ -387,7 +438,7 @@ export default function CompanySettingsPage() {
     setNotice(null);
 
     try {
-      const response = await axios.get(`${API_URL}/api/companies/${selectedCompanyId}/database-backup`, {
+      const response = await axios.get(`/api/companies/${selectedCompanyId}/database-backup`, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob',
       });
@@ -443,7 +494,7 @@ export default function CompanySettingsPage() {
 
     try {
       const response = await axios.post(
-        `${API_URL}/api/system/status`,
+        `/api/system/status`,
         { is_online: nextOnline },
         {
           headers: { Authorization: `Bearer ${token}` },
@@ -475,7 +526,7 @@ export default function CompanySettingsPage() {
 
     try {
       const response = await axios.post(
-        `${API_URL}/api/system/reset`,
+        `/api/system/reset`,
         { password: resetPassword },
         {
           headers: { Authorization: `Bearer ${token}` },
@@ -542,7 +593,7 @@ export default function CompanySettingsPage() {
 
     try {
       if (selectedCompany) {
-        const response = await axios.put(`${API_URL}/api/companies/${selectedCompany.id}`, payload, {
+        const response = await axios.put(`/api/companies/${selectedCompany.id}`, payload, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -553,7 +604,7 @@ export default function CompanySettingsPage() {
         loadFormFromCompany(refreshed);
         setNotice({ type: 'success', text: 'Company details updated successfully.' });
       } else {
-        const response = await axios.post(`${API_URL}/api/companies`, payload, {
+        const response = await axios.post(`/api/companies`, payload, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -595,13 +646,13 @@ export default function CompanySettingsPage() {
       let message = 'Holiday saved successfully.';
       if (holidayForm.id) {
         const response = await axios.put(
-          `${API_URL}/api/microfinance/settings/holidays/${holidayForm.id}`,
+          `/api/microfinance/settings/holidays/${holidayForm.id}`,
           payload,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         message = response.data?.message || message;
       } else {
-        const response = await axios.post(`${API_URL}/api/microfinance/settings/holidays`, payload, {
+        const response = await axios.post(`/api/microfinance/settings/holidays`, payload, {
           headers: { Authorization: `Bearer ${token}` },
         });
         message = response.data?.message || message;
@@ -629,455 +680,615 @@ export default function CompanySettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-cyan-50/60 to-indigo-50 p-4 sm:p-6 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-40">
+        <div className="absolute -top-20 left-0 h-80 w-80 rounded-full bg-cyan-300/40 blur-3xl" />
+        <div className="absolute top-10 right-0 h-96 w-96 rounded-full bg-indigo-300/30 blur-3xl" />
+        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300/25 blur-3xl" />
       </div>
 
-      <div className="relative z-10 max-w-4xl mx-auto space-y-6">
-        <div className="bg-white/85 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
-                Settings
-              </span>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Company Settings</h1>
-              <p className="text-sm text-slate-600 mt-1">Update company profile details used across the system.</p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => router.push('/dashboard')}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
-            >
-              Back to Dashboard
-            </button>
-          </div>
-
-          <div className="mt-4 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => handleSetSystemStatus(!systemOnline)}
-              disabled={systemStatusLoading || updatingSystemStatus}
-              className={`px-4 py-2 rounded-xl text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed ${
-                systemOnline
-                  ? 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700'
-                  : 'bg-gradient-to-r from-emerald-600 to-green-700 hover:from-emerald-700 hover:to-green-800'
-              }`}
-            >
-              {systemStatusLoading
-                ? 'Checking System...'
-                : updatingSystemStatus
-                  ? 'Updating System...'
-                  : systemOnline
-                    ? 'Set System Offline'
-                    : 'Set System Online'}
-            </button>
-            <button
-              type="button"
-              onClick={handleGetBackup}
-              disabled={backingUp || !selectedCompanyId}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {backingUp ? 'Preparing Backup...' : 'Get Backup'}
-            </button>
-            <button
-              type="button"
-              onClick={handleGetDatabaseBackup}
-              disabled={backingUpDatabase || !selectedCompanyId}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-slate-700 to-slate-900 hover:from-slate-800 hover:to-black text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {backingUpDatabase ? 'Preparing DB Backup...' : 'Get Database Backup'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowResetConfirmModal(true)}
-              disabled={resettingSystem}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-700 hover:to-red-800 text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {resettingSystem ? 'Resetting System...' : 'Reset System'}
-            </button>
-          </div>
-
-          <p className="mt-3 text-xs font-semibold text-slate-600">
-            System Status:{' '}
-            <span className={systemOnline ? 'text-emerald-700' : 'text-rose-700'}>
-              {systemOnline ? 'ONLINE' : 'OFFLINE (Admins only)'}
-            </span>
-          </p>
-        </div>
-
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.45)] p-5">
-          {loading ? (
-            <div className="py-8 flex justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-600"></div>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              <form onSubmit={handleSave} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">Select Company</label>
-                  <select
-                    value={selectedCompanyId ?? ''}
-                    onChange={(e) => onCompanyChange(Number(e.target.value))}
-                    className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    disabled={companies.length === 0}
-                  >
-                    {companies.length === 0 ? (
-                      <option value="">No company found - create first</option>
-                    ) : (
-                      companies.map((company) => (
-                        <option key={company.id} value={company.id}>
-                          {company.name}
-                        </option>
-                      ))
-                    )}
-                  </select>
+      <div className="relative z-10 max-w-7xl mx-auto space-y-6">
+        {/* Hero */}
+        <div className="overflow-hidden rounded-3xl border border-white/70 bg-white/85 shadow-xl backdrop-blur-xl">
+          <div className="bg-gradient-to-r from-slate-700 via-cyan-700 to-indigo-700 px-6 py-6 sm:px-8">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-4">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/20 ring-1 ring-white/30">
+                  <Settings className="h-7 w-7 text-white" />
                 </div>
-
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">Company Name *</label>
-                  <input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">Email *</label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">Phone</label>
-                  <input
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">Website</label>
-                  <input
-                    type="url"
-                    value={website}
-                    onChange={(e) => setWebsite(e.target.value)}
-                    className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    placeholder="https://example.com"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">Country</label>
-                  <input
-                    value={country}
-                    onChange={(e) => setCountry(e.target.value)}
-                    className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">Currency</label>
-                  <input
-                    value={currency}
-                    onChange={(e) => setCurrency(e.target.value)}
-                    className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    placeholder="LKR"
-                  />
-                </div>
-
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">Address</label>
-                  <textarea
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    rows={3}
-                    className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                  />
-                </div>
-                </div>
-
-                <div className="flex justify-end">
-                  <button
-                    type="submit"
-                    disabled={saving}
-                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {saving ? 'Saving...' : selectedCompany ? 'Update Company' : 'Create Company'}
-                  </button>
-                </div>
-              </form>
-
-              <div className="h-px bg-gradient-to-r from-transparent via-cyan-200 to-transparent" />
-
-              <div className="space-y-4">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900">Documentation Templates</h2>
-                  <p className="text-sm text-slate-600 mt-1">
-                    Upload company .docx templates. On final loan approval, system generates Loan Agreement by replacing placeholders.
+                  <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-100">Administration</p>
+                  <h1 className="text-2xl sm:text-3xl font-extrabold text-white mt-0.5">Company Settings</h1>
+                  <p className="text-sm text-cyan-50/95 mt-1 max-w-2xl">
+                    Manage company profile, document templates, global holidays, and system controls from one place.
                   </p>
-                  <p className="text-xs text-slate-500 mt-2">
-                    Supported placeholders: customer_name, customer_no, issue_date, installment, principal, total_payable, loan_product, request_no, company_name.
-                  </p>
-                </div>
-
-                <form onSubmit={handleTemplateUpload} className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-1">Template Type</label>
-                    <select
-                      value={templateType}
-                      onChange={(e) => setTemplateType(e.target.value as CompanyTemplate['template_type'])}
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    >
-                      <option value="loan_agreement">Loan Agreement</option>
-                      <option value="reminder_letter">Reminder Letter</option>
-                      <option value="arrears_letter">Arrears Letter</option>
-                      <option value="mortgage_agreement">Mortgage Agreement</option>
-                      <option value="mortgage_reminder">Mortgage Reminder</option>
-                      <option value="mortgage_legal_letter">Mortgage Legal Letter</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-1">Template File (.doc/.docx)</label>
-                    <input
-                      type="file"
-                      accept=".doc,.docx"
-                      onChange={(e) => setTemplateFile(e.target.files?.[0] || null)}
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    />
-                  </div>
-
-                  <div className="md:justify-self-end">
-                    <button
-                      type="submit"
-                      disabled={uploadingTemplate}
-                      className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-700 hover:to-cyan-700 text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      {uploadingTemplate ? 'Uploading...' : 'Upload Template'}
-                    </button>
-                  </div>
-                </form>
-
-                <div className="rounded-xl border border-cyan-100 overflow-hidden">
-                  <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                    <thead className="bg-cyan-50/70 text-slate-700">
-                      <tr>
-                        <th className="px-3 py-2 font-semibold">Type</th>
-                        <th className="px-3 py-2 font-semibold">File</th>
-                        <th className="px-3 py-2 font-semibold">Status</th>
-                        <th className="px-3 py-2 font-semibold">Uploaded</th>
-                        <th className="px-3 py-2 font-semibold">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {templates.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
-                            No templates uploaded yet.
-                          </td>
-                        </tr>
-                      ) : (
-                        templates.map((item) => (
-                          <tr key={item.id} className="border-t border-cyan-100">
-                            <td className="px-3 py-2">{templateLabel(item.template_type)}</td>
-                            <td className="px-3 py-2">{item.original_name}</td>
-                            <td className="px-3 py-2">
-                              <span
-                                className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                                  item.is_active
-                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                    : 'bg-slate-50 text-slate-600 border border-slate-200'
-                                }`}
-                              >
-                                {item.is_active ? 'Active' : 'Archived'}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2">{item.created_at ? new Date(item.created_at).toLocaleString() : '-'}</td>
-                            <td className="px-3 py-2">
-                              <div className="flex items-center gap-3">
-                                <button
-                                  type="button"
-                                  onClick={() => handleTemplateView(item.id)}
-                                  className="text-cyan-700 font-semibold hover:underline"
-                                >
-                                  View
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setDeleteTemplateModal({
-                                      open: true,
-                                      id: item.id,
-                                      name: item.original_name,
-                                    })
-                                  }
-                                  disabled={deletingTemplateId === item.id}
-                                  className="text-red-600 font-semibold hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                  {deletingTemplateId === item.id ? 'Deleting...' : 'Delete'}
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
                 </div>
               </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (token) {
+                      fetchCompanies(token);
+                      fetchHolidays(token);
+                      fetchSystemStatus(token);
+                    }
+                  }}
+                  disabled={loading}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/30 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push('/dashboard')}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/30 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Dashboard
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
 
-              <div className="h-px bg-gradient-to-r from-transparent via-cyan-200 to-transparent" />
-
-              <div className="space-y-4">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900">Global Holiday Management</h2>
-                  <p className="text-sm text-slate-600 mt-1">
-                    Configure holidays from Company Settings and apply them across Microfinance, Finance, and Mortgage loan flows.
-                  </p>
+        {/* KPI row */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {[
+            { label: 'Companies', value: companies.length, sub: selectedCompany?.name || 'No company', icon: Building2, accent: 'from-cyan-500 to-blue-600' },
+            { label: 'Templates', value: templates.length, sub: `${activeTemplates} active`, icon: FileText, accent: 'from-indigo-500 to-violet-600' },
+            { label: 'Holidays', value: holidays.length, sub: `${activeHolidays} active`, icon: CalendarDays, accent: 'from-emerald-500 to-teal-600' },
+            {
+              label: 'System',
+              value: systemStatusLoading ? '…' : systemOnline ? 'Online' : 'Offline',
+              sub: systemOnline ? 'All users can sign in' : 'Admins only',
+              icon: Power,
+              accent: systemOnline ? 'from-emerald-500 to-green-600' : 'from-rose-500 to-red-600',
+            },
+          ].map((item) => {
+            const Icon = item.icon;
+            return (
+              <div key={item.label} className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
+                    <p className="mt-1 text-xl font-extrabold text-slate-900 truncate">{item.value}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-500 truncate">{item.sub}</p>
+                  </div>
+                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${item.accent} text-white shadow-sm`}>
+                    <Icon className="h-4 w-4" />
+                  </div>
                 </div>
+              </div>
+            );
+          })}
+        </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <form onSubmit={handleHolidaySubmit} className="rounded-2xl border border-cyan-100 bg-white/80 p-4 space-y-3">
-                    <h3 className="text-base font-bold text-slate-900">{holidayForm.id ? 'Edit Holiday' : 'Mark Holiday'}</h3>
-                    <input
-                      type="date"
-                      value={holidayForm.holiday_date}
-                      onChange={(e) => setHolidayForm({ ...holidayForm, holiday_date: e.target.value })}
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                      required
-                    />
-                    <input
-                      value={holidayForm.name}
-                      onChange={(e) => setHolidayForm({ ...holidayForm, name: e.target.value })}
-                      placeholder="Holiday name"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                      required
-                    />
-                    <input
-                      value={holidayForm.note}
-                      onChange={(e) => setHolidayForm({ ...holidayForm, note: e.target.value })}
-                      placeholder="Note (optional)"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    />
-                    <label className="flex items-center gap-2 text-sm text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={holidayForm.is_active}
-                        onChange={(e) => setHolidayForm({ ...holidayForm, is_active: e.target.checked })}
-                      />
-                      Active
-                    </label>
-                    <div className="flex gap-2">
+        {/* Notice */}
+        {notice ? (
+          <div
+            className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm font-medium ${
+              notice.type === 'success'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : 'border-rose-200 bg-rose-50 text-rose-800'
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              {notice.type === 'success' ? (
+                <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              )}
+              <span>{notice.text}</span>
+            </div>
+            <button type="button" onClick={() => setNotice(null)} className="rounded-lg p-1 hover:bg-black/5">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        ) : null}
+
+        {/* Section tabs */}
+        <div className="rounded-3xl border border-white/80 bg-white/90 shadow-lg overflow-hidden">
+          <div className="border-b border-slate-100 px-4 sm:px-6 py-4">
+            <div className="flex flex-wrap gap-2">
+              {SECTION_TABS.map((tab) => {
+                const active = activeSection === tab.key;
+                const Icon = tab.icon;
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setActiveSection(tab.key)}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-bold transition ${
+                      active
+                        ? 'bg-gradient-to-r from-slate-700 to-cyan-700 text-white shadow-md'
+                        : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="p-4 sm:p-6">
+            {loading ? (
+              <div className="py-16 flex flex-col items-center justify-center gap-3">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-cyan-600" />
+                <p className="text-sm font-medium text-slate-600">Loading settings…</p>
+              </div>
+            ) : (
+              <>
+                {activeSection === 'profile' && (
+                  <form onSubmit={handleSave} className="space-y-5">
+                    <div className="rounded-2xl border border-cyan-100 bg-gradient-to-r from-cyan-50/80 to-indigo-50/50 px-4 py-3">
+                      <p className="text-sm font-bold text-slate-900">Company profile</p>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Details shown on receipts, agreements, and reports across all modules.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="md:col-span-2">
+                        <label className={labelClass}>Select company</label>
+                        <select
+                          value={selectedCompanyId ?? ''}
+                          onChange={(e) => onCompanyChange(Number(e.target.value))}
+                          className={inputClass}
+                          disabled={companies.length === 0}
+                        >
+                          {companies.length === 0 ? (
+                            <option value="">No company found — create first</option>
+                          ) : (
+                            companies.map((company) => (
+                              <option key={company.id} value={company.id}>
+                                {company.name}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>Company name *</label>
+                        <div className="relative">
+                          <Building2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} pl-10`} required />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>Email *</label>
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={`${inputClass} pl-10`} required />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>Phone</label>
+                        <div className="relative">
+                          <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input value={phone} onChange={(e) => setPhone(e.target.value)} className={`${inputClass} pl-10`} />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>Website</label>
+                        <div className="relative">
+                          <Globe className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input type="url" value={website} onChange={(e) => setWebsite(e.target.value)} className={`${inputClass} pl-10`} placeholder="https://example.com" />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>Country</label>
+                        <input value={country} onChange={(e) => setCountry(e.target.value)} className={inputClass} />
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>Currency</label>
+                        <input value={currency} onChange={(e) => setCurrency(e.target.value)} className={inputClass} placeholder="LKR" />
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <label className={labelClass}>Address</label>
+                        <div className="relative">
+                          <MapPin className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                          <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={3} className={`${inputClass} pl-10`} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end pt-2">
                       <button
                         type="submit"
-                        disabled={holidaySaving}
-                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                        disabled={saving}
+                        className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:opacity-95 disabled:opacity-60"
                       >
-                        {holidaySaving ? 'Saving...' : holidayForm.id ? 'Update Holiday' : 'Mark Holiday'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={resetHolidayForm}
-                        className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold"
-                      >
-                        Clear
+                        <Save className="h-4 w-4" />
+                        {saving ? 'Saving…' : selectedCompany ? 'Update company' : 'Create company'}
                       </button>
                     </div>
                   </form>
+                )}
 
-                  <div className="rounded-2xl border border-cyan-100 bg-white/80 p-4">
-                    <h3 className="text-base font-bold text-slate-900 mb-3">Holiday List</h3>
-                    <div className="space-y-2 max-h-[360px] overflow-auto">
-                      {holidays.map((item) => (
-                        <div key={item.id} className="rounded-xl border border-cyan-100 bg-white p-3 flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">{item.name}</p>
-                            <p className="text-xs text-slate-600">
-                              Date: {formatDate(item.holiday_date)} • {item.is_active ? 'Active' : 'Inactive'}
-                              {item.note ? ` • ${item.note}` : ''}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setHolidayForm({
-                                  id: item.id,
-                                  holiday_date: String(item.holiday_date || '').slice(0, 10),
-                                  name: item.name,
-                                  note: item.note || '',
-                                  is_active: item.is_active,
-                                })
-                              }
-                              className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-100 text-amber-700 font-semibold"
-                            >
-                              Edit
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                      {holidays.length === 0 && <p className="text-sm text-slate-500">No holidays marked yet.</p>}
+                {activeSection === 'accounting' && (
+                  <>
+                    <div className="rounded-2xl border border-violet-100 bg-violet-50/50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <p className="text-xs text-slate-600">Accounting is also available as a standalone module from the main dashboard.</p>
+                      <button
+                        type="button"
+                        onClick={() => router.push('/dashboard/accounting/accounts')}
+                        className="text-xs font-bold text-violet-700 hover:text-violet-900 whitespace-nowrap"
+                      >
+                        Open Accounting module →
+                      </button>
+                    </div>
+                    <CompanyAccountingPanel
+                      token={token}
+                      companyId={selectedCompanyId}
+                      currency={currency || 'LKR'}
+                      onNotice={setNotice}
+                      emptyMessage="Create a company profile first"
+                    />
+                  </>
+                )}
+
+                {activeSection === 'templates' && (
+                  <div className="space-y-5">
+                    <div className="rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-50/80 to-cyan-50/50 px-4 py-3">
+                      <p className="text-sm font-bold text-slate-900">Documentation templates</p>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Upload .docx templates. On loan approval, the system fills placeholders automatically.
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-2 font-mono">
+                        Placeholders: customer_name, customer_no, issue_date, installment, principal, total_payable, loan_product, request_no, company_name
+                      </p>
+                    </div>
+
+                    <form onSubmit={handleTemplateUpload} className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-end rounded-2xl border border-cyan-100 bg-slate-50/50 p-4">
+                      <div>
+                        <label className={labelClass}>Template type</label>
+                        <select
+                          value={templateType}
+                          onChange={(e) => setTemplateType(e.target.value as CompanyTemplate['template_type'])}
+                          className={inputClass}
+                        >
+                          <option value="loan_agreement">Loan Agreement</option>
+                          <option value="reminder_letter">Reminder Letter</option>
+                          <option value="arrears_letter">Arrears Letter</option>
+                          <option value="mortgage_agreement">Mortgage Agreement</option>
+                          <option value="mortgage_reminder">Mortgage Reminder</option>
+                          <option value="mortgage_legal_letter">Mortgage Legal Letter</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className={labelClass}>Template file (.doc / .docx)</label>
+                        <input
+                          type="file"
+                          accept=".doc,.docx"
+                          onChange={(e) => setTemplateFile(e.target.files?.[0] || null)}
+                          className={`${inputClass} file:mr-3 file:rounded-lg file:border-0 file:bg-cyan-100 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-cyan-800`}
+                        />
+                      </div>
+
+                      <div className="lg:justify-self-end">
+                        <button
+                          type="submit"
+                          disabled={uploadingTemplate}
+                          className="inline-flex w-full lg:w-auto items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 px-5 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                        >
+                          <Upload className="h-4 w-4" />
+                          {uploadingTemplate ? 'Uploading…' : 'Upload template'}
+                        </button>
+                      </div>
+                    </form>
+
+                    <div className="overflow-x-auto rounded-2xl border border-cyan-100">
+                      <table className="min-w-full text-sm text-left text-slate-700 bg-white">
+                        <thead className="bg-cyan-50/70 text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                          <tr>
+                            <th className="px-4 py-3">Type</th>
+                            <th className="px-4 py-3">File</th>
+                            <th className="px-4 py-3">Status</th>
+                            <th className="px-4 py-3">Uploaded</th>
+                            <th className="px-4 py-3 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-cyan-50">
+                          {templates.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="px-4 py-10 text-center">
+                                <FileText className="h-8 w-8 text-cyan-400 mx-auto" />
+                                <p className="mt-2 text-sm font-semibold text-slate-700">No templates uploaded yet</p>
+                              </td>
+                            </tr>
+                          ) : (
+                            templates.map((item) => (
+                              <tr key={item.id} className="hover:bg-cyan-50/40 transition-colors">
+                                <td className="px-4 py-3 font-semibold text-slate-900">{templateLabel(item.template_type)}</td>
+                                <td className="px-4 py-3">{item.original_name}</td>
+                                <td className="px-4 py-3">
+                                  <span
+                                    className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase ${
+                                      item.is_active
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                        : 'bg-slate-50 text-slate-600 border-slate-200'
+                                    }`}
+                                  >
+                                    {item.is_active ? 'Active' : 'Archived'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-slate-600">{item.created_at ? new Date(item.created_at).toLocaleString() : '—'}</td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center justify-end gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleTemplateView(item.id)}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-cyan-200 bg-cyan-50 px-2.5 py-1.5 text-xs font-bold text-cyan-800 hover:bg-cyan-100"
+                                    >
+                                      <Eye className="h-3.5 w-3.5" />
+                                      View
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDeleteTemplateModal({
+                                          open: true,
+                                          id: item.id,
+                                          name: item.original_name,
+                                        })
+                                      }
+                                      disabled={deletingTemplateId === item.id}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                      {deletingTemplateId === item.id ? '…' : 'Delete'}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
-                </div>
-              </div>
-            </div>
-          )}
+                )}
 
-          {notice && (
-            <div
-              className={`mt-4 rounded-xl border px-3 py-2 text-sm ${
-                notice.type === 'success'
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                  : 'bg-rose-50 border-rose-200 text-rose-700'
-              }`}
-            >
-              {notice.text}
-            </div>
-          )}
+                {activeSection === 'holidays' && (
+                  <div className="space-y-5">
+                    <div className="rounded-2xl border border-emerald-100 bg-gradient-to-r from-emerald-50/80 to-cyan-50/50 px-4 py-3">
+                      <p className="text-sm font-bold text-slate-900">Global holiday management</p>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Holidays apply across Microfinance, Finance, and Mortgage loan scheduling.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                      <form onSubmit={handleHolidaySubmit} className="rounded-2xl border border-cyan-100 bg-white p-5 space-y-4 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <CalendarDays className="h-5 w-5 text-cyan-700" />
+                          <h3 className="text-base font-bold text-slate-900">{holidayForm.id ? 'Edit holiday' : 'Mark holiday'}</h3>
+                        </div>
+                        <div>
+                          <label className={labelClass}>Date *</label>
+                          <input
+                            type="date"
+                            value={holidayForm.holiday_date}
+                            onChange={(e) => setHolidayForm({ ...holidayForm, holiday_date: e.target.value })}
+                            className={inputClass}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Holiday name *</label>
+                          <input
+                            value={holidayForm.name}
+                            onChange={(e) => setHolidayForm({ ...holidayForm, name: e.target.value })}
+                            placeholder="e.g. Vesak Full Moon Poya"
+                            className={inputClass}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Note</label>
+                          <input
+                            value={holidayForm.note}
+                            onChange={(e) => setHolidayForm({ ...holidayForm, note: e.target.value })}
+                            placeholder="Optional note"
+                            className={inputClass}
+                          />
+                        </div>
+                        <label className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={holidayForm.is_active}
+                            onChange={(e) => setHolidayForm({ ...holidayForm, is_active: e.target.checked })}
+                            className="rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                          />
+                          <span className="text-sm font-medium text-slate-700">Active holiday</span>
+                        </label>
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            type="submit"
+                            disabled={holidaySaving}
+                            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-emerald-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                          >
+                            <Save className="h-4 w-4" />
+                            {holidaySaving ? 'Saving…' : holidayForm.id ? 'Update holiday' : 'Mark holiday'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={resetHolidayForm}
+                            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </form>
+
+                      <div className="rounded-2xl border border-cyan-100 bg-white p-5 shadow-sm">
+                        <h3 className="text-base font-bold text-slate-900 mb-3">Holiday list</h3>
+                        <div className="space-y-2 max-h-[420px] overflow-auto pr-1">
+                          {holidays.map((item) => (
+                            <div
+                              key={item.id}
+                              className="rounded-xl border border-cyan-100 bg-gradient-to-r from-white to-cyan-50/30 p-3 flex items-center justify-between gap-3"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold text-slate-900 truncate">{item.name}</p>
+                                <p className="text-xs text-slate-600 mt-0.5">
+                                  {formatDate(item.holiday_date)} •{' '}
+                                  <span className={item.is_active ? 'text-emerald-700 font-semibold' : 'text-slate-500'}>
+                                    {item.is_active ? 'Active' : 'Inactive'}
+                                  </span>
+                                  {item.note ? ` • ${item.note}` : ''}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setHolidayForm({
+                                    id: item.id,
+                                    holiday_date: String(item.holiday_date || '').slice(0, 10),
+                                    name: item.name,
+                                    note: item.note || '',
+                                    is_active: item.is_active,
+                                  })
+                                }
+                                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                                Edit
+                              </button>
+                            </div>
+                          ))}
+                          {holidays.length === 0 && (
+                            <div className="py-10 text-center">
+                              <CalendarDays className="h-8 w-8 text-emerald-400 mx-auto" />
+                              <p className="mt-2 text-sm text-slate-500">No holidays marked yet.</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeSection === 'system' && (
+                  <div className="space-y-5">
+                    <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 to-indigo-50/40 px-4 py-3">
+                      <p className="text-sm font-bold text-slate-900">System administration</p>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Control online access, download backups, or reset the entire system. Use with caution.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="rounded-2xl border border-cyan-100 bg-white p-5 shadow-sm">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Power className="h-5 w-5 text-cyan-700" />
+                          <h3 className="font-bold text-slate-900">System access</h3>
+                        </div>
+                        <p className="text-sm text-slate-600">
+                          Current status:{' '}
+                          <span className={`font-bold ${systemOnline ? 'text-emerald-700' : 'text-rose-700'}`}>
+                            {systemStatusLoading ? 'Checking…' : systemOnline ? 'ONLINE' : 'OFFLINE (Admins only)'}
+                          </span>
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => handleSetSystemStatus(!systemOnline)}
+                          disabled={systemStatusLoading || updatingSystemStatus}
+                          className={`mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60 ${
+                            systemOnline
+                              ? 'bg-gradient-to-r from-amber-500 to-orange-600 hover:opacity-95'
+                              : 'bg-gradient-to-r from-emerald-600 to-green-700 hover:opacity-95'
+                          }`}
+                        >
+                          <Power className="h-4 w-4" />
+                          {updatingSystemStatus
+                            ? 'Updating…'
+                            : systemOnline
+                              ? 'Set system offline'
+                              : 'Set system online'}
+                        </button>
+                      </div>
+
+                      <div className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Download className="h-5 w-5 text-emerald-700" />
+                          <h3 className="font-bold text-slate-900">Backups</h3>
+                        </div>
+                        <p className="text-sm text-slate-600 mb-4">Download company files or a full database export.</p>
+                        <div className="flex flex-col gap-2">
+                          <button
+                            type="button"
+                            onClick={handleGetBackup}
+                            disabled={backingUp || !selectedCompanyId}
+                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                          >
+                            <Download className="h-4 w-4" />
+                            {backingUp ? 'Preparing backup…' : 'Company backup (.zip)'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleGetDatabaseBackup}
+                            disabled={backingUpDatabase || !selectedCompanyId}
+                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-slate-700 to-slate-900 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                          >
+                            <Database className="h-4 w-4" />
+                            {backingUpDatabase ? 'Preparing DB backup…' : 'Database backup (.sql)'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-rose-200 bg-gradient-to-br from-rose-50 to-red-50/50 p-5">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="h-5 w-5 text-rose-700 shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <h3 className="font-bold text-rose-900">Danger zone — reset entire system</h3>
+                          <p className="text-sm text-rose-800 mt-1">
+                            Permanently deletes all records and uploaded files, then rebuilds the database. Departments, designations, and Super Admin are preserved.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setShowResetConfirmModal(true)}
+                            disabled={resettingSystem}
+                            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            {resettingSystem ? 'Resetting…' : 'Reset system'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
 
       {showResetConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-xl rounded-2xl border border-rose-200 bg-white p-6 shadow-[0_30px_70px_-30px_rgba(190,24,93,0.55)]">
-            <h3 className="text-xl font-extrabold text-rose-700">Reset Entire System</h3>
-            <p className="mt-3 text-sm text-slate-700">
-              This action will permanently delete all records and uploaded files, and rebuild the database.
-              Department data, Designation data, and the Super Admin user will be preserved.
-            </p>
-            <p className="mt-2 text-sm font-semibold text-rose-700">Type RESET to continue.</p>
-
-            <input
-              value={resetConfirmText}
-              onChange={(e) => setResetConfirmText(e.target.value)}
-              className="mt-3 w-full rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-slate-900"
-              placeholder="Type RESET"
-            />
-
-            <label className="mt-3 block text-sm font-semibold text-slate-700">Enter your password</label>
-            <input
-              type="password"
-              value={resetPassword}
-              onChange={(e) => setResetPassword(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-slate-900"
-              placeholder="Current password"
-            />
-
-            <div className="mt-5 flex justify-end gap-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-xl rounded-3xl border border-rose-200 bg-white shadow-2xl overflow-hidden">
+            <div className="bg-gradient-to-r from-rose-600 to-red-700 px-6 py-4 flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-6 w-6 text-white shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-xl font-extrabold text-white">Reset entire system</h3>
+                  <p className="text-sm text-rose-100 mt-1">This action cannot be undone.</p>
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -1086,118 +1297,168 @@ export default function CompanySettingsPage() {
                   setResetConfirmText('');
                   setResetPassword('');
                 }}
-                className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold"
+                className="rounded-lg border border-white/30 bg-white/10 p-2 text-white"
               >
-                Cancel
+                <X className="h-4 w-4" />
               </button>
-              <button
-                type="button"
-                onClick={handleResetSystem}
-                disabled={
-                  resettingSystem ||
-                  resetConfirmText.trim().toUpperCase() !== 'RESET' ||
-                  resetPassword.trim() === ''
-                }
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {resettingSystem ? 'Resetting...' : 'Confirm Reset'}
-              </button>
+            </div>
+            <div className="p-6">
+              <p className="text-sm text-slate-700">
+                This will permanently delete all records and uploaded files, and rebuild the database.
+                Department data, Designation data, and the Super Admin user will be preserved.
+              </p>
+              <p className="mt-3 text-sm font-semibold text-rose-700">Type RESET to continue.</p>
+
+              <input
+                value={resetConfirmText}
+                onChange={(e) => setResetConfirmText(e.target.value)}
+                className={`${inputClass} mt-3 border-rose-200 bg-rose-50/50`}
+                placeholder="Type RESET"
+              />
+
+              <label className={`${labelClass} mt-4`}>Enter your password</label>
+              <input
+                type="password"
+                value={resetPassword}
+                onChange={(e) => setResetPassword(e.target.value)}
+                className={`${inputClass} border-rose-200 bg-rose-50/50`}
+                placeholder="Current password"
+              />
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (resettingSystem) return;
+                    setShowResetConfirmModal(false);
+                    setResetConfirmText('');
+                    setResetPassword('');
+                  }}
+                  className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetSystem}
+                  disabled={
+                    resettingSystem ||
+                    resetConfirmText.trim().toUpperCase() !== 'RESET' ||
+                    resetPassword.trim() === ''
+                  }
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 text-white text-sm font-bold disabled:opacity-60"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {resettingSystem ? 'Resetting…' : 'Confirm reset'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
       {showResetCredentialsModal && resetCredentials && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-xl rounded-2xl border border-emerald-200 bg-white p-6 shadow-[0_30px_70px_-30px_rgba(5,150,105,0.45)]">
-            <h3 className="text-xl font-extrabold text-emerald-700">New Super Admin Credentials</h3>
-            <p className="mt-3 text-sm text-slate-700">
-              System reset completed. Use these credentials to sign in again.
-            </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-xl rounded-3xl border border-emerald-200 bg-white shadow-2xl overflow-hidden">
+            <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-6 py-4">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-6 w-6 text-white" />
+                <h3 className="text-xl font-extrabold text-white">New Super Admin credentials</h3>
+              </div>
+              <p className="text-sm text-emerald-50 mt-1">System reset completed. Store these credentials securely.</p>
+            </div>
 
-            <div className="mt-4 space-y-3">
+            <div className="p-6 space-y-3">
               <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
-                <p className="text-xs uppercase tracking-[0.12em] font-bold text-emerald-700">Email</p>
+                <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-700">Email</p>
                 <div className="mt-1 flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-slate-900 break-all">{resetCredentials.email}</p>
                   <button
                     type="button"
                     onClick={() => copyResetCredential(resetCredentials.email, 'Email')}
-                    className="px-3 py-1.5 rounded-lg border border-emerald-200 bg-white text-xs font-semibold text-emerald-700"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-200 bg-white text-xs font-bold text-emerald-700 hover:bg-emerald-50"
                   >
+                    <Copy className="h-3.5 w-3.5" />
                     Copy
                   </button>
                 </div>
               </div>
 
               <div className="rounded-xl border border-amber-100 bg-amber-50 p-3">
-                <p className="text-xs uppercase tracking-[0.12em] font-bold text-amber-700">Password</p>
+                <p className="text-[10px] uppercase tracking-wider font-bold text-amber-700">Password</p>
                 <div className="mt-1 flex items-center justify-between gap-3">
-                  <p className="text-sm font-semibold text-slate-900 break-all">{resetCredentials.password}</p>
+                  <p className="text-sm font-semibold text-slate-900 break-all font-mono">{resetCredentials.password}</p>
                   <button
                     type="button"
                     onClick={() => copyResetCredential(resetCredentials.password, 'Password')}
-                    className="px-3 py-1.5 rounded-lg border border-amber-200 bg-white text-xs font-semibold text-amber-700"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-amber-200 bg-white text-xs font-bold text-amber-700 hover:bg-amber-50"
                   >
+                    <Copy className="h-3.5 w-3.5" />
                     Copy
                   </button>
                 </div>
               </div>
-            </div>
 
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowResetCredentialsModal(false)}
-                className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold"
-              >
-                Close
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  localStorage.removeItem('token');
-                  setShowResetCredentialsModal(false);
-                  router.push('/');
-                }}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-sm font-semibold"
-              >
-                Go to Login
-              </button>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowResetCredentialsModal(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    localStorage.removeItem('token');
+                    setShowResetCredentialsModal(false);
+                    router.push('/');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-sm font-bold"
+                >
+                  Go to login
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
       {deleteTemplateModal.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-xl rounded-2xl border border-rose-200 bg-white p-6 shadow-[0_30px_70px_-30px_rgba(190,24,93,0.55)]">
-            <h3 className="text-xl font-extrabold text-rose-700">Delete Template</h3>
-            <p className="mt-3 text-sm text-slate-700">
-              Are you sure you want to delete template "{deleteTemplateModal.name}"? This action cannot be undone and will also remove the stored file.
-            </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-xl rounded-3xl border border-rose-200 bg-white shadow-2xl overflow-hidden">
+            <div className="bg-gradient-to-r from-rose-500 to-red-600 px-6 py-4 flex items-center gap-2">
+              <Trash2 className="h-5 w-5 text-white" />
+              <h3 className="text-xl font-extrabold text-white">Delete template</h3>
+            </div>
+            <div className="p-6">
+              <p className="text-sm text-slate-700">
+                Are you sure you want to delete &quot;{deleteTemplateModal.name}&quot;? This action cannot be undone and will also remove the stored file.
+              </p>
 
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setDeleteTemplateModal({ open: false, id: null, name: '' })}
-                disabled={deletingTemplateId !== null}
-                className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (deleteTemplateModal.id !== null) {
-                    handleTemplateDelete(deleteTemplateModal.id);
-                  }
-                }}
-                disabled={deletingTemplateId !== null}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 text-white text-sm font-semibold disabled:opacity-60"
-              >
-                {deletingTemplateId !== null ? 'Deleting...' : 'Delete'}
-              </button>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteTemplateModal({ open: false, id: null, name: '' })}
+                  disabled={deletingTemplateId !== null}
+                  className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (deleteTemplateModal.id !== null) {
+                      handleTemplateDelete(deleteTemplateModal.id);
+                    }
+                  }}
+                  disabled={deletingTemplateId !== null}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 text-white text-sm font-bold disabled:opacity-60"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {deletingTemplateId !== null ? 'Deleting…' : 'Delete'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import axios from 'axios';
+import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -41,7 +42,7 @@ type NotPaidRow = {
   nextPaymentDate: string;
 };
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = getApiBaseUrl();
 
 export default function NotPaidCustomersReportPage() {
   const router = useRouter();

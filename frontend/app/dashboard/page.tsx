@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
 
 type AuthPermission = {
   id: number;
@@ -50,11 +51,7 @@ export default function Dashboard() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loadingPrivileges, setLoadingPrivileges] = useState(true);
   const router = useRouter();
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-  const normalizedApiBase = API_URL.replace(/\/+$/, '');
-  const withApiPrefix = normalizedApiBase.endsWith('/api')
-    ? normalizedApiBase
-    : `${normalizedApiBase}/api`;
+  const apiBaseUrl = getApiBaseUrl();
 
   const normalizeText = (value: string) =>
     String(value || '')
@@ -105,6 +102,7 @@ export default function Dashboard() {
     credit: ['credit', 'finance', 'finances', 'finance product types', 'loan requests', 'loan request', 'microfinance', 'mortgages', 'mortgage', 'customers', 'customer'],
     savings: ['savings', 'savings accounts', 'deposit', 'deposits'],
     branches: ['branch', 'branches', 'company', 'companies'],
+    accounting: ['accounting', 'account', 'accounts', 'ledger', 'general ledger', 'chart of accounts'],
     reports: ['report', 'reports', 'ledger', 'snapshot', 'arrears', 'portfolio'],
   };
 
@@ -186,7 +184,7 @@ export default function Dashboard() {
   const fetchAuthUser = async (authToken: string) => {
     setLoadingPrivileges(true);
     try {
-      const response = await axios.get(`${withApiPrefix}/user`, {
+      const response = await axios.get(`${apiBaseUrl}/user`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       setAuthUser(response.data || null);
@@ -220,6 +218,26 @@ export default function Dashboard() {
       path: '/dashboard/credit',
       requiredModules: ['finances', 'finance product types', 'loan requests', 'microfinance', 'mortgages', 'customers'],
       requiredPermissionKeywords: ['credit', 'finance', 'loan_requests', 'loan request', 'microfinance', 'mortgages', 'customer', 'customers'],
+    },
+    {
+      name: 'Office Collection Center',
+      icon: '🏛️',
+      color: 'from-indigo-500 to-violet-500',
+      bgColor: 'from-indigo-50 to-violet-50',
+      path: '/dashboard/office-collections',
+      requiredModules: ['finances', 'finance product types', 'loan requests', 'microfinance', 'mortgages', 'customers'],
+      requiredPermissionKeywords: [
+        'collection',
+        'collections',
+        'collect',
+        'office',
+        'credit',
+        'finance',
+        'loan_requests',
+        'microfinance',
+        'mortgage',
+        'mortgages',
+      ],
     },
     {
       name: 'HRM (Human Resource Management)',
@@ -262,6 +280,15 @@ export default function Dashboard() {
       path: '/dashboard/branches',
       requiredModules: ['branches'],
       requiredPermissionKeywords: ['branch', 'branches', 'company', 'companies'],
+    },
+    {
+      name: 'Accounting',
+      icon: '📒',
+      color: 'from-violet-500 to-purple-500',
+      bgColor: 'from-violet-50 to-purple-50',
+      path: '/dashboard/accounting',
+      requiredModules: ['accounting', 'branches', 'companies', 'finance', 'reports'],
+      requiredPermissionKeywords: ['accounting', 'account', 'accounts', 'ledger', 'company', 'companies', 'branch', 'branches'],
     },
     {
       name: 'Reports',

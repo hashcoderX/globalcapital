@@ -1,7 +1,8 @@
 "use client";
 
 import axios from "axios";
-import { useEffect, useMemo, useState } from "react";
+import { getApiBaseUrl } from "@/lib/api";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type LoanProduct = {
@@ -66,10 +67,69 @@ const PRODUCT_COLORS = [
   "from-violet-500 to-fuchsia-500",
 ];
 
-const PRODUCT_ICONS = ["\ud83c\udfe2", "\ud83e\uddd1", "\ud83d\udecd", "\ud83d\ude9c", "\ud83c\udfe0", "\ud83d\ude97", "\ud83c\udf93", "\ud83d\udcb3", "\ud83d\udedf"]; 
+const PRODUCT_ICONS = ["\ud83c\udfe2", "\ud83e\uddd1", "\ud83d\udecd", "\ud83d\ude9c", "\ud83c\udfe0", "\ud83d\ude97", "\ud83c\udf93", "\ud83d\udcb3", "\ud83d\udedf"];
+
+function FieldLabel({
+  htmlFor,
+  children,
+  optional,
+}: {
+  htmlFor?: string;
+  children: React.ReactNode;
+  optional?: boolean;
+}) {
+  return (
+    <label htmlFor={htmlFor} className="block text-xs font-semibold text-slate-700 mb-1.5">
+      {children}
+      {optional ? <span className="font-normal text-slate-500"> (optional)</span> : null}
+    </label>
+  );
+}
+
+const fieldClass =
+  "w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900 focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-100";
+
+const readOnlyFieldClass =
+  "w-full rounded-xl border border-cyan-100 bg-cyan-50/60 px-3 py-2 text-sm text-slate-800";
+
+function codeSegment(value: string, maxLen = 4): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "GEN";
+
+  const fromWords = trimmed
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part[0] || "")
+    .join("")
+    .toUpperCase();
+
+  if (fromWords.length >= 2) return fromWords.slice(0, maxLen);
+
+  const compact = trimmed.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return (compact || "GEN").slice(0, maxLen);
+}
+
+function formatCustomerNumberTimestamp(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return (
+    `${date.getFullYear()}` +
+    `${pad(date.getMonth() + 1)}` +
+    `${pad(date.getDate())}` +
+    `${pad(date.getHours())}` +
+    `${pad(date.getMinutes())}` +
+    `${pad(date.getSeconds())}`
+  );
+}
+
+function buildCustomerNumber(branchName: string, loanProductKey: string, loanProductName: string): string {
+  const branchCode = codeSegment(branchName, 4);
+  const loanCode = codeSegment(loanProductKey.replace(/_/g, " ") || loanProductName, 4);
+  const timestamp = formatCustomerNumberTimestamp(new Date());
+  return `${branchCode}-${loanCode}-${timestamp}`;
+}
 
 export default function NewLoanRequestPage() {
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+  const apiBase = getApiBaseUrl();
   const [token, setToken] = useState("");
   const router = useRouter();
   const [loanProducts, setLoanProducts] = useState<LoanProduct[]>(DEFAULT_LOAN_PRODUCTS);
@@ -77,6 +137,7 @@ export default function NewLoanRequestPage() {
   const [newProductName, setNewProductName] = useState("");
   const [newProductDescription, setNewProductDescription] = useState("");
   const [newProductIcon, setNewProductIcon] = useState(PRODUCT_ICONS[0]);
+  const [showAddProduct, setShowAddProduct] = useState(false);
   const [principal, setPrincipal] = useState("1000000");
   const [annualRate, setAnnualRate] = useState("18");
   const [tenureMonths, setTenureMonths] = useState("36");
@@ -109,6 +170,23 @@ export default function NewLoanRequestPage() {
   const [submitError, setSubmitError] = useState("");
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [documents, setDocuments] = useState<File[]>([]);
+  const [branchName, setBranchName] = useState("");
+
+  const generateCustomerNumber = useCallback(() => {
+    const product = loanProducts.find((item) => item.key === loanProduct) || loanProducts[0];
+    return buildCustomerNumber(
+      branchName,
+      product?.key || loanProduct,
+      product?.name || "Loan"
+    );
+  }, [branchName, loanProduct, loanProducts]);
+
+  const applyGeneratedCustomerNumber = useCallback(() => {
+    setCustomerDetails((prev) => ({
+      ...prev,
+      customerNo: generateCustomerNumber(),
+    }));
+  }, [generateCustomerNumber]);
 
   useEffect(() => {
     const storedToken = localStorage.getItem("token");
@@ -118,6 +196,50 @@ export default function NewLoanRequestPage() {
       setToken(storedToken);
     }
   }, [router]);
+
+  useEffect(() => {
+    if (!token) return;
+
+    const readBranchFromUser = (user: unknown) => {
+      if (!user || typeof user !== "object") return "";
+      const record = user as {
+        branch?: { name?: string };
+        employee?: { branch?: { name?: string } };
+      };
+      return String(record.branch?.name || record.employee?.branch?.name || "").trim();
+    };
+
+    const cached = localStorage.getItem("auth_user");
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        const name = readBranchFromUser(parsed);
+        if (name) setBranchName(name);
+      } catch {
+        // ignore invalid cache
+      }
+    }
+
+    const loadUser = async () => {
+      try {
+        const response = await axios.get(`${apiBase}/user`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const name = readBranchFromUser(response.data);
+        if (name) setBranchName(name);
+        localStorage.setItem("auth_user", JSON.stringify(response.data || null));
+      } catch {
+        // keep cached branch name when API fails
+      }
+    };
+
+    loadUser();
+  }, [token, apiBase]);
+
+  useEffect(() => {
+    if (activeStep !== 2) return;
+    applyGeneratedCustomerNumber();
+  }, [activeStep, loanProduct, branchName, applyGeneratedCustomerNumber]);
 
   useEffect(() => {
     const raw = localStorage.getItem("loan_products_custom");
@@ -156,7 +278,7 @@ export default function NewLoanRequestPage() {
 
   const steps = useMemo(
     () => [
-      { id: 1, title: "Loan Product", hint: "Select product and add new products" },
+      { id: 1, title: "Loan Product", hint: "Select the loan product for this application" },
       { id: 2, title: "Customer Details", hint: "Capture primary applicant details" },
       { id: 3, title: "Guarantor Details", hint: "Capture one or more guarantors" },
       { id: 4, title: "Loan Terms", hint: "Amount, rate, tenure, and frequency" },
@@ -199,6 +321,7 @@ export default function NewLoanRequestPage() {
     setNewProductName("");
     setNewProductDescription("");
     setNewProductIcon(PRODUCT_ICONS[(loanProducts.length + 1) % PRODUCT_ICONS.length]);
+    setShowAddProduct(false);
   };
 
   const calculation = useMemo(() => {
@@ -446,7 +569,7 @@ export default function NewLoanRequestPage() {
         payload.append("documents[]", document);
       });
 
-      const response = await axios.post(`${API_URL}/api/loan-requests`, payload, {
+      const response = await axios.post(`/api/loan-requests`, payload, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "application/json",
@@ -536,9 +659,10 @@ export default function NewLoanRequestPage() {
               <>
                 <p className="mt-6 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700">Step 1</p>
                 <h2 className="mt-1 text-2xl font-extrabold text-slate-900">Loan Products</h2>
-                <p className="text-sm text-slate-600 mt-1">Select a product and optionally add more products.</p>
+                <p className="text-sm text-slate-600 mt-1">Choose a product for this loan request.</p>
 
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <p className="mt-4 text-xs font-semibold text-slate-700">Select loan product *</p>
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {loanProducts.map((item) => {
                     const active = loanProduct === item.key;
                     return (
@@ -566,40 +690,96 @@ export default function NewLoanRequestPage() {
                   })}
                 </div>
 
-                <div className="mt-6 rounded-xl border border-cyan-100 bg-cyan-50/40 p-4 space-y-3">
-                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-cyan-700">Add Loan Product</p>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <input
-                      value={newProductName}
-                      onChange={(e) => setNewProductName(e.target.value)}
-                      placeholder="Product name (e.g. Agriculture Loan)"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    />
-                    <input
-                      value={newProductDescription}
-                      onChange={(e) => setNewProductDescription(e.target.value)}
-                      placeholder="Short description"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    />
-                    <select
-                      value={newProductIcon}
-                      onChange={(e) => setNewProductIcon(e.target.value)}
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+                <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/60 overflow-hidden">
+                  <div className="flex items-center justify-between gap-4 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800">Add custom loan product</p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Optional — turn on only when the product is not listed above.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={showAddProduct}
+                      aria-label="Show add custom loan product form"
+                      onClick={() => setShowAddProduct((prev) => !prev)}
+                      className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-200 focus:ring-offset-2 ${
+                        showAddProduct ? "border-cyan-500 bg-cyan-500" : "border-slate-300 bg-slate-200"
+                      }`}
                     >
-                      {PRODUCT_ICONS.map((icon) => (
-                        <option key={icon} value={icon}>
-                          {icon}
-                        </option>
-                      ))}
-                    </select>
+                      <span
+                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                          showAddProduct ? "translate-x-6" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={addLoanProduct}
-                    className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 text-white text-sm font-semibold hover:from-cyan-700 hover:to-blue-700"
-                  >
-                    Add Product
-                  </button>
+
+                  {showAddProduct && (
+                    <div className="border-t border-slate-200 bg-white p-4 space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <FieldLabel htmlFor="new-product-name">Product name</FieldLabel>
+                          <input
+                            id="new-product-name"
+                            value={newProductName}
+                            onChange={(e) => setNewProductName(e.target.value)}
+                            placeholder="e.g. Agriculture Loan"
+                            className={fieldClass}
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel htmlFor="new-product-description" optional>
+                            Short description
+                          </FieldLabel>
+                          <input
+                            id="new-product-description"
+                            value={newProductDescription}
+                            onChange={(e) => setNewProductDescription(e.target.value)}
+                            placeholder="Brief product summary"
+                            className={fieldClass}
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel htmlFor="new-product-icon">Product icon</FieldLabel>
+                          <select
+                            id="new-product-icon"
+                            value={newProductIcon}
+                            onChange={(e) => setNewProductIcon(e.target.value)}
+                            className={fieldClass}
+                          >
+                            {PRODUCT_ICONS.map((icon) => (
+                              <option key={icon} value={icon}>
+                                {icon}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={addLoanProduct}
+                          disabled={!newProductName.trim()}
+                          className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 text-white text-sm font-semibold hover:from-cyan-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Add product
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAddProduct(false);
+                            setNewProductName("");
+                            setNewProductDescription("");
+                          }}
+                          className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -612,83 +792,137 @@ export default function NewLoanRequestPage() {
 
                 <div className="mt-6 rounded-xl border border-cyan-100 bg-white p-4 space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <input
-                      value={customerDetails.customerNo}
-                      onChange={(e) =>
-                        setCustomerDetails((prev) => ({ ...prev, customerNo: e.target.value }))
-                      }
-                      placeholder="Customer Number *"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    />
-                    <input
-                      value={customerDetails.fullName}
-                      onChange={(e) =>
-                        setCustomerDetails((prev) => ({ ...prev, fullName: e.target.value }))
-                      }
-                      placeholder="Full Name *"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    />
-                    <input
-                      value={customerDetails.nic}
-                      onChange={(e) =>
-                        setCustomerDetails((prev) => ({ ...prev, nic: e.target.value }))
-                      }
-                      placeholder="NIC / Passport *"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    />
-                    <input
-                      value={customerDetails.mobile}
-                      onChange={(e) =>
-                        setCustomerDetails((prev) => ({ ...prev, mobile: e.target.value }))
-                      }
-                      placeholder="Mobile Number *"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    />
-                    <input
-                      value={customerDetails.businessName}
-                      onChange={(e) =>
-                        setCustomerDetails((prev) => ({ ...prev, businessName: e.target.value }))
-                      }
-                      placeholder="Business Name (Optional)"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900 md:col-span-2"
-                    />
-                    <input
-                      type="number"
-                      min="0"
-                      value={customerDetails.monthlyIncome}
-                      onChange={(e) =>
-                        setCustomerDetails((prev) => ({ ...prev, monthlyIncome: e.target.value }))
-                      }
-                      placeholder="Monthly Income *"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    />
-                    <input
-                      value={customerDetails.incomeSource}
-                      onChange={(e) =>
-                        setCustomerDetails((prev) => ({ ...prev, incomeSource: e.target.value }))
-                      }
-                      placeholder="Primary Income Source *"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                    />
-                    <input
-                      type="number"
-                      min="0"
-                      value={customerDetails.additionalIncome}
-                      onChange={(e) =>
-                        setCustomerDetails((prev) => ({ ...prev, additionalIncome: e.target.value }))
-                      }
-                      placeholder="Additional Income (Optional)"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900 md:col-span-2"
-                    />
-                    <textarea
-                      value={customerDetails.address}
-                      onChange={(e) =>
-                        setCustomerDetails((prev) => ({ ...prev, address: e.target.value }))
-                      }
-                      placeholder="Customer Address *"
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900 md:col-span-2"
-                      rows={3}
-                    />
+                    <div>
+                      <FieldLabel htmlFor="customer-no">Customer number *</FieldLabel>
+                      <div className="flex gap-2">
+                        <input
+                          id="customer-no"
+                          value={customerDetails.customerNo}
+                          readOnly
+                          placeholder="Auto-generated on open"
+                          className={readOnlyFieldClass}
+                          title="Branch + loan type + date/time"
+                        />
+                        <button
+                          type="button"
+                          onClick={applyGeneratedCustomerNumber}
+                          className="shrink-0 px-3 py-2 rounded-xl border border-cyan-200 bg-cyan-50 text-xs font-semibold text-cyan-800 hover:bg-cyan-100"
+                        >
+                          Regenerate
+                        </button>
+                      </div>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Format: branch – loan type – date/time
+                        {branchName ? ` (${branchName})` : ""}
+                        {selectedProduct ? ` · ${selectedProduct.name}` : ""}
+                      </p>
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="customer-full-name">Full name *</FieldLabel>
+                      <input
+                        id="customer-full-name"
+                        value={customerDetails.fullName}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, fullName: e.target.value }))
+                        }
+                        placeholder="As per NIC / passport"
+                        className={fieldClass}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="customer-nic">NIC / passport number *</FieldLabel>
+                      <input
+                        id="customer-nic"
+                        value={customerDetails.nic}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, nic: e.target.value }))
+                        }
+                        placeholder="National ID or passport"
+                        className={fieldClass}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="customer-mobile">Mobile number *</FieldLabel>
+                      <input
+                        id="customer-mobile"
+                        type="tel"
+                        value={customerDetails.mobile}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, mobile: e.target.value }))
+                        }
+                        placeholder="e.g. 0771234567"
+                        className={fieldClass}
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <FieldLabel htmlFor="customer-business" optional>
+                        Business name
+                      </FieldLabel>
+                      <input
+                        id="customer-business"
+                        value={customerDetails.businessName}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, businessName: e.target.value }))
+                        }
+                        placeholder="If applicant is a business"
+                        className={fieldClass}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="customer-monthly-income">Monthly income (LKR) *</FieldLabel>
+                      <input
+                        id="customer-monthly-income"
+                        type="number"
+                        min="0"
+                        value={customerDetails.monthlyIncome}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, monthlyIncome: e.target.value }))
+                        }
+                        placeholder="0.00"
+                        className={fieldClass}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="customer-income-source">Primary income source *</FieldLabel>
+                      <input
+                        id="customer-income-source"
+                        value={customerDetails.incomeSource}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, incomeSource: e.target.value }))
+                        }
+                        placeholder="e.g. Salary, business, farming"
+                        className={fieldClass}
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <FieldLabel htmlFor="customer-additional-income" optional>
+                        Additional income (LKR)
+                      </FieldLabel>
+                      <input
+                        id="customer-additional-income"
+                        type="number"
+                        min="0"
+                        value={customerDetails.additionalIncome}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, additionalIncome: e.target.value }))
+                        }
+                        placeholder="Other monthly income, if any"
+                        className={fieldClass}
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <FieldLabel htmlFor="customer-address">Residential / business address *</FieldLabel>
+                      <textarea
+                        id="customer-address"
+                        value={customerDetails.address}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, address: e.target.value }))
+                        }
+                        placeholder="Full address"
+                        className={fieldClass}
+                        rows={3}
+                      />
+                    </div>
                   </div>
                 </div>
               </>
@@ -699,7 +933,7 @@ export default function NewLoanRequestPage() {
                 <p className="mt-6 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700">Step 3</p>
                 <h2 className="mt-1 text-2xl font-extrabold text-slate-900">Guarantor Details</h2>
                 <p className="text-sm text-slate-600 mt-1">
-                  Guarantor is optional. If entered, complete all required fields.
+                  Guarantor is optional. If you add a guarantor, complete every field marked with * for that person.
                 </p>
 
                 <div className="mt-6 rounded-xl border border-cyan-100 bg-white p-4 space-y-3">
@@ -733,43 +967,74 @@ export default function NewLoanRequestPage() {
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <input
-                          value={item.fullName}
-                          onChange={(e) => updateGuarantor(index, "fullName", e.target.value)}
-                          placeholder="Full Name *"
-                          className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                        />
-                        <input
-                          value={item.nic}
-                          onChange={(e) => updateGuarantor(index, "nic", e.target.value)}
-                          placeholder="NIC / Passport *"
-                          className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                        />
-                        <input
-                          value={item.mobile}
-                          onChange={(e) => updateGuarantor(index, "mobile", e.target.value)}
-                          placeholder="Mobile Number *"
-                          className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                        />
-                        <input
-                          value={item.relation}
-                          onChange={(e) => updateGuarantor(index, "relation", e.target.value)}
-                          placeholder="Relationship to Customer *"
-                          className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                        />
-                        <input
-                          value={item.monthlyIncome}
-                          onChange={(e) => updateGuarantor(index, "monthlyIncome", e.target.value)}
-                          placeholder="Monthly Income (Optional)"
-                          className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
-                        />
-                        <textarea
-                          value={item.address}
-                          onChange={(e) => updateGuarantor(index, "address", e.target.value)}
-                          placeholder="Address *"
-                          className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900 md:col-span-2"
-                          rows={2}
-                        />
+                        <div>
+                          <FieldLabel htmlFor={`guarantor-${index}-name`}>Full name *</FieldLabel>
+                          <input
+                            id={`guarantor-${index}-name`}
+                            value={item.fullName}
+                            onChange={(e) => updateGuarantor(index, "fullName", e.target.value)}
+                            placeholder="Guarantor full name"
+                            className={fieldClass}
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel htmlFor={`guarantor-${index}-nic`}>NIC / passport *</FieldLabel>
+                          <input
+                            id={`guarantor-${index}-nic`}
+                            value={item.nic}
+                            onChange={(e) => updateGuarantor(index, "nic", e.target.value)}
+                            placeholder="National ID or passport"
+                            className={fieldClass}
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel htmlFor={`guarantor-${index}-mobile`}>Mobile number *</FieldLabel>
+                          <input
+                            id={`guarantor-${index}-mobile`}
+                            type="tel"
+                            value={item.mobile}
+                            onChange={(e) => updateGuarantor(index, "mobile", e.target.value)}
+                            placeholder="e.g. 0771234567"
+                            className={fieldClass}
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel htmlFor={`guarantor-${index}-relation`}>
+                            Relationship to customer *
+                          </FieldLabel>
+                          <input
+                            id={`guarantor-${index}-relation`}
+                            value={item.relation}
+                            onChange={(e) => updateGuarantor(index, "relation", e.target.value)}
+                            placeholder="e.g. Spouse, parent, sibling"
+                            className={fieldClass}
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel htmlFor={`guarantor-${index}-income`} optional>
+                            Monthly income (LKR)
+                          </FieldLabel>
+                          <input
+                            id={`guarantor-${index}-income`}
+                            type="number"
+                            min="0"
+                            value={item.monthlyIncome}
+                            onChange={(e) => updateGuarantor(index, "monthlyIncome", e.target.value)}
+                            placeholder="If known"
+                            className={fieldClass}
+                          />
+                        </div>
+                        <div className="md:col-span-2">
+                          <FieldLabel htmlFor={`guarantor-${index}-address`}>Address *</FieldLabel>
+                          <textarea
+                            id={`guarantor-${index}-address`}
+                            value={item.address}
+                            onChange={(e) => updateGuarantor(index, "address", e.target.value)}
+                            placeholder="Full address"
+                            className={fieldClass}
+                            rows={2}
+                          />
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -785,56 +1050,61 @@ export default function NewLoanRequestPage() {
 
                 <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">
-                      Selected Product
-                    </label>
+                    <FieldLabel htmlFor="loan-selected-product">Selected loan product</FieldLabel>
                     <input
+                      id="loan-selected-product"
                       value={selectedProduct?.name || "-"}
                       readOnly
                       className="w-full rounded-xl border border-cyan-100 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">
-                      Installment Frequency
-                    </label>
+                    <FieldLabel htmlFor="loan-frequency">Installment frequency *</FieldLabel>
                     <select
+                      id="loan-frequency"
                       value={frequency}
                       onChange={(e) => setFrequency(e.target.value as "monthly" | "weekly")}
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+                      className={fieldClass}
                     >
                       <option value="monthly">Monthly</option>
                       <option value="weekly">Weekly</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">
-                      Principal Amount
-                    </label>
+                    <FieldLabel htmlFor="loan-principal">Principal amount (LKR) *</FieldLabel>
                     <input
+                      id="loan-principal"
+                      type="number"
+                      min="0"
                       value={principal}
                       onChange={(e) => setPrincipal(e.target.value)}
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+                      placeholder="Loan amount"
+                      className={fieldClass}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">
-                      Interest Rate % (Yearly)
-                    </label>
+                    <FieldLabel htmlFor="loan-rate">Interest rate per year (%) *</FieldLabel>
                     <input
+                      id="loan-rate"
+                      type="number"
+                      min="0"
+                      step="0.01"
                       value={annualRate}
                       onChange={(e) => setAnnualRate(e.target.value)}
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+                      placeholder="e.g. 18"
+                      className={fieldClass}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-2">
-                      Tenure (Months)
-                    </label>
+                    <FieldLabel htmlFor="loan-tenure">Loan tenure (months) *</FieldLabel>
                     <input
+                      id="loan-tenure"
+                      type="number"
+                      min="1"
                       value={tenureMonths}
                       onChange={(e) => setTenureMonths(e.target.value)}
-                      className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+                      placeholder="e.g. 36"
+                      className={fieldClass}
                     />
                   </div>
                 </div>
@@ -845,36 +1115,46 @@ export default function NewLoanRequestPage() {
               <>
                 <p className="mt-6 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700">Step 5</p>
                 <h2 className="mt-1 text-2xl font-extrabold text-slate-900">Review</h2>
-                <p className="text-sm text-slate-600 mt-1">
+                <p className="text-sm text-slate-800 mt-1">
                   Confirm selected product, customer, guarantor, and loan terms.
                 </p>
 
-                <div className="mt-4 rounded-xl border border-cyan-100 bg-cyan-50/40 p-4 space-y-2 text-sm">
+                <div className="mt-4 rounded-xl border border-cyan-200 bg-white p-4 space-y-2.5 text-sm text-slate-900">
                   <p>
-                    <span className="font-semibold text-slate-700">Product:</span> {selectedProduct?.name || "-"}
+                    <span className="font-semibold text-cyan-900">Product:</span>{" "}
+                    <span className="font-medium text-slate-900">{selectedProduct?.name || "-"}</span>
                   </p>
                   <p>
-                    <span className="font-semibold text-slate-700">Customer:</span> {customerDetails.fullName || "-"} ({
-                      customerDetails.customerNo || "-"
-                    })
+                    <span className="font-semibold text-cyan-900">Customer:</span>{" "}
+                    <span className="font-medium text-slate-900">
+                      {customerDetails.fullName || "-"} ({customerDetails.customerNo || "-"})
+                    </span>
                   </p>
                   <p>
-                    <span className="font-semibold text-slate-700">Monthly Income:</span> {formatAmount(Number(customerDetails.monthlyIncome || 0))}
+                    <span className="font-semibold text-cyan-900">Monthly Income:</span>{" "}
+                    <span className="font-medium text-slate-900">
+                      {formatAmount(Number(customerDetails.monthlyIncome || 0))}
+                    </span>
                   </p>
                   <p>
-                    <span className="font-semibold text-slate-700">Income Source:</span> {customerDetails.incomeSource || "-"}
+                    <span className="font-semibold text-cyan-900">Income Source:</span>{" "}
+                    <span className="font-medium text-slate-900">{customerDetails.incomeSource || "-"}</span>
                   </p>
                   <p>
-                    <span className="font-semibold text-slate-700">Guarantors:</span> {guarantors.length}
+                    <span className="font-semibold text-cyan-900">Guarantors:</span>{" "}
+                    <span className="font-medium text-slate-900">{guarantors.length}</span>
                   </p>
                   <p>
-                    <span className="font-semibold text-slate-700">Principal:</span> {formatAmount(Number(principal || 0))}
+                    <span className="font-semibold text-cyan-900">Principal:</span>{" "}
+                    <span className="font-medium text-slate-900">{formatAmount(Number(principal || 0))}</span>
                   </p>
                   <p>
-                    <span className="font-semibold text-slate-700">Interest:</span> {annualRate || "0"}%
+                    <span className="font-semibold text-cyan-900">Interest:</span>{" "}
+                    <span className="font-medium text-slate-900">{annualRate || "0"}%</span>
                   </p>
                   <p>
-                    <span className="font-semibold text-slate-700">Tenure:</span> {tenureMonths || "0"} months
+                    <span className="font-semibold text-cyan-900">Tenure:</span>{" "}
+                    <span className="font-medium text-slate-900">{tenureMonths || "0"} months</span>
                   </p>
                 </div>
               </>
@@ -887,15 +1167,16 @@ export default function NewLoanRequestPage() {
                 <p className="text-sm text-slate-600 mt-1">Upload one or more supporting documents before submission.</p>
 
                 <div className="mt-6 rounded-xl border border-cyan-100 bg-white p-4 space-y-3">
-                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600">
-                    Supporting Documents (Multiple files allowed: PDF, DOC, DOCX, JPG, PNG)
-                  </label>
+                  <FieldLabel htmlFor="loan-documents">
+                    Supporting documents * (PDF, DOC, DOCX, JPG, PNG — multiple files allowed)
+                  </FieldLabel>
                   <input
+                    id="loan-documents"
                     type="file"
                     multiple
                     accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
                     onChange={handleDocumentSelect}
-                    className="w-full rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+                    className={fieldClass}
                   />
 
                   {documents.length > 0 ? (

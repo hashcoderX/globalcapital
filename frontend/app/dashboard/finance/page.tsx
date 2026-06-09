@@ -116,7 +116,7 @@ export default function FinanceManagementPage() {
   const fetchData = async (authToken: string) => {
     setLoading(true);
     try {
-      const response = await axios.get('http://localhost:8000/api/finances', {
+      const response = await axios.get('/api/finances', {
         headers: {
           Authorization: `Bearer ${authToken}`,
           Accept: 'application/json',
@@ -145,7 +145,7 @@ export default function FinanceManagementPage() {
 
   const fetchProductTypes = async (authToken: string) => {
     try {
-      const response = await axios.get('http://localhost:8000/api/finance-product-types', {
+      const response = await axios.get('/api/finance-product-types', {
         headers: {
           Authorization: `Bearer ${authToken}`,
           Accept: 'application/json',
@@ -246,7 +246,7 @@ export default function FinanceManagementPage() {
   const loadLatestRegisteredCustomerNo = async (authToken: string) => {
     try {
       setGeneratingCustomerNo(true);
-      const response = await axios.get('http://localhost:8000/api/customers', {
+      const response = await axios.get('/api/customers', {
         headers: {
           Authorization: `Bearer ${authToken}`,
           Accept: 'application/json',
@@ -336,7 +336,7 @@ export default function FinanceManagementPage() {
       setErrorMessage('');
 
       const createResponse = await axios.post(
-        'http://localhost:8000/api/finances',
+        '/api/finances',
         {
           customer_no: regCustomerNo.trim(),
           finance_type: regFinanceType,
@@ -387,7 +387,7 @@ export default function FinanceManagementPage() {
           formData.append('file', file);
 
           await axios.post(
-            `http://localhost:8000/api/finances/${financeId}/documents`,
+            `/api/finances/${financeId}/documents`,
             formData,
             {
               headers: {
@@ -689,7 +689,7 @@ export default function FinanceManagementPage() {
                               if (!name) return;
                               try {
                                 const response = await axios.post(
-                                  'http://localhost:8000/api/finance-product-types',
+                                  '/api/finance-product-types',
                                   {
                                     name,
                                     description: newProductTypeDescription.trim() || undefined,
