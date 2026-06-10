@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use App\Models\Candidate;
+use App\Models\Company;
 use App\Models\Customer;
 use App\Models\MicrofinanceLoanRequestDocument;
 use App\Support\StoredFile;
@@ -30,6 +31,14 @@ Route::get('/media/customers/{customer}/photo', function (Customer $customer) {
 
     return StoredFile::response($customer->photo_path);
 })->name('customer.photo');
+
+Route::get('/media/companies/{company}/logo', function (Company $company) {
+    if (!$company->logo_path) {
+        abort(404);
+    }
+
+    return StoredFile::response($company->logo_path);
+})->name('company.logo');
 
 Route::get('/media/loan-documents/{document}', function (MicrofinanceLoanRequestDocument $document) {
     if (!$document->file_path) {

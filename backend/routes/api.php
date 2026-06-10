@@ -127,6 +127,7 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     Route::post('system/reset', [CompanyController::class, 'resetSystem']);
     Route::get('manager-candidates', [CompanyController::class, 'managerCandidates']);
     Route::apiResource('companies', CompanyController::class);
+    Route::post('companies/{company}/logo', [CompanyController::class, 'uploadLogo']);
     Route::get('companies/{company}/backup', [CompanyController::class, 'backup']);
     Route::get('companies/{company}/database-backup', [CompanyController::class, 'databaseBackup']);
     Route::get('companies/{company}/document-templates', [CompanyDocumentTemplateController::class, 'index']);

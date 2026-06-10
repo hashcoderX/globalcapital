@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Model;
+use App\Support\StoredFile;
 
 class Company extends Model
 {
@@ -16,8 +17,13 @@ class Company extends Model
         'website',
         'country',
         'currency',
+        'logo_path',
         'manager_user_id',
         'opening_asset',
+    ];
+
+    protected $appends = [
+        'logo_url',
     ];
 
     protected $casts = [
@@ -42,5 +48,14 @@ class Company extends Model
     public function accountingExpenses(): HasMany
     {
         return $this->hasMany(AccountingExpense::class);
+    }
+
+    public function getLogoUrlAttribute(): ?string
+    {
+        if (!$this->logo_path) {
+            return null;
+        }
+
+        return StoredFile::publicPath($this->logo_path);
     }
 }

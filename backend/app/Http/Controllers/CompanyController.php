@@ -125,6 +125,7 @@ class CompanyController extends Controller
             'website' => 'nullable|url',
             'country' => 'nullable|string|max:100',
             'currency' => 'nullable|string|max:10',
+            'logo_path' => 'nullable|string|max:255',
             'manager_user_id' => 'nullable|exists:users,id',
             'opening_asset' => 'nullable|numeric|min:0',
             'cash_opening_balance' => 'nullable|numeric|min:0',
@@ -148,6 +149,7 @@ class CompanyController extends Controller
             'website',
             'country',
             'currency',
+            'logo_path',
             'manager_user_id',
             'opening_asset',
         ])->all();
@@ -182,6 +184,7 @@ class CompanyController extends Controller
             'website' => 'nullable|url',
             'country' => 'nullable|string|max:100',
             'currency' => 'nullable|string|max:10',
+            'logo_path' => 'nullable|string|max:255',
             'manager_user_id' => 'nullable|exists:users,id',
             'opening_asset' => 'nullable|numeric|min:0',
         ]);
@@ -189,6 +192,22 @@ class CompanyController extends Controller
         $company->update($request->all());
 
         return response()->json($company->load('manager:id,name,email'));
+    }
+
+    public function uploadLogo(Request $request, Company $company)
+    {
+        $request->validate([
+            'logo' => 'required|image|mimes:jpg,jpeg,png,webp|max:5120',
+        ]);
+
+        if ($company->logo_path) {
+            Storage::disk('public')->delete($company->logo_path);
+        }
+
+        $path = $request->file('logo')->store('company_logos', 'public');
+        $company->update(['logo_path' => $path]);
+
+        return response()->json($company->fresh()->load('manager:id,name,email'));
     }
 
     public function destroy(Company $company)
@@ -229,11 +248,18 @@ class CompanyController extends Controller
             'website' => $company->website,
             'country' => $company->country,
             'currency' => $company->currency,
+            'logo_path' => $company->logo_path,
             'created_at' => $company->created_at,
             'updated_at' => $company->updated_at,
         ];
 
         $templatesPayload = [];
+
+        if (!empty($company->logo_path) && Storage::disk('public')->exists($company->logo_path)) {
+            $logoAbsolutePath = Storage::disk('public')->path($company->logo_path);
+            $logoName = basename((string) $company->logo_path);
+            $zip->addFile($logoAbsolutePath, 'company_logo/' . $logoName);
+        }
 
         foreach ($company->documentTemplates as $template) {
             $templatesPayload[] = [

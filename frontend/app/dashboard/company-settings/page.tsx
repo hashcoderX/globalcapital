@@ -29,6 +29,7 @@ import {
   X,
 } from 'lucide-react';
 import CompanyAccountingPanel from '@/app/components/accounting/CompanyAccountingPanel';
+import { getBackendOrigin, resolveStorageAssetUrl } from '@/lib/api';
 
 type SettingsSection = 'profile' | 'accounting' | 'templates' | 'holidays' | 'system';
 
@@ -54,6 +55,8 @@ type Company = {
   website?: string | null;
   country?: string | null;
   currency?: string | null;
+  logo_path?: string | null;
+  logo_url?: string | null;
 };
 
 type CompanyTemplate = {
@@ -96,6 +99,9 @@ export default function CompanySettingsPage() {
   const [website, setWebsite] = useState('');
   const [country, setCountry] = useState('');
   const [currency, setCurrency] = useState('');
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState('');
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [templates, setTemplates] = useState<CompanyTemplate[]>([]);
@@ -123,6 +129,7 @@ export default function CompanySettingsPage() {
   const [holidayForm, setHolidayForm] = useState({ id: 0, holiday_date: '', name: '', note: '', is_active: true });
   const [holidaySaving, setHolidaySaving] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
+  const backendOrigin = useMemo(() => getBackendOrigin(), []);
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -148,6 +155,19 @@ export default function CompanySettingsPage() {
     [holidays]
   );
 
+  const resolveCompanyLogoUrl = (company: Company | null): string => {
+    const direct = String(company?.logo_url || '').trim();
+    if (direct) {
+      const normalized = resolveStorageAssetUrl(direct);
+      return normalized.startsWith('/') ? `${backendOrigin}${normalized}` : normalized;
+    }
+
+    const path = String(company?.logo_path || '').trim();
+    if (!path) return '';
+    const normalized = resolveStorageAssetUrl(path);
+    return normalized.startsWith('/') ? `${backendOrigin}${normalized}` : normalized;
+  };
+
   const loadFormFromCompany = (company: Company | null) => {
     setName(company?.name || '');
     setEmail(company?.email || '');
@@ -156,6 +176,8 @@ export default function CompanySettingsPage() {
     setWebsite(company?.website || '');
     setCountry(company?.country || '');
     setCurrency(company?.currency || '');
+    setLogoPreview(resolveCompanyLogoUrl(company));
+    setLogoFile(null);
   };
 
   const templateLabel = (type: CompanyTemplate['template_type']) => {
@@ -271,6 +293,14 @@ export default function CompanySettingsPage() {
     fetchSystemStatus(token);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    if (!logoFile) return;
+
+    const objectUrl = URL.createObjectURL(logoFile);
+    setLogoPreview(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [logoFile]);
 
   const onCompanyChange = (companyId: number) => {
     setSelectedCompanyId(companyId);
@@ -574,6 +604,70 @@ export default function CompanySettingsPage() {
     }
   };
 
+  const handleLogoChange = (file: File | null) => {
+    if (!file) {
+      setLogoFile(null);
+      setLogoPreview(resolveCompanyLogoUrl(selectedCompany));
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setNotice({ type: 'error', text: 'Please choose an image file for the company logo.' });
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setNotice({ type: 'error', text: 'Logo file must be 5 MB or smaller.' });
+      return;
+    }
+
+    setLogoFile(file);
+    setNotice(null);
+  };
+
+  const handleLogoUpload = async () => {
+    if (!token || !selectedCompany || !logoFile) {
+      setNotice({ type: 'error', text: 'Select a company and logo file first.' });
+      return;
+    }
+
+    setUploadingLogo(true);
+    setNotice(null);
+
+    const formData = new FormData();
+    formData.append('logo', logoFile);
+
+    try {
+      const response = await axios.post(`/api/companies/${selectedCompany.id}/logo`, formData, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      const updated = response.data as Company;
+      const nextCompanies = companies.map((company) => (company.id === updated.id ? { ...company, ...updated } : company));
+      setCompanies(nextCompanies);
+      const refreshed = nextCompanies.find((company) => company.id === updated.id) || null;
+      loadFormFromCompany(refreshed);
+      if (refreshed) {
+        const nextLogo = resolveCompanyLogoUrl(refreshed);
+        setLogoPreview(nextLogo ? `${nextLogo}${nextLogo.includes('?') ? '&' : '?'}t=${Date.now()}` : '');
+      }
+      setNotice({ type: 'success', text: 'Company logo uploaded successfully.' });
+    } catch (error: any) {
+      const validationErrors = error?.response?.data?.errors;
+      if (validationErrors) {
+        const message = Object.values(validationErrors).flat().join(' ');
+        setNotice({ type: 'error', text: message || 'Logo upload failed.' });
+      } else {
+        setNotice({ type: 'error', text: error?.response?.data?.message || 'Logo upload failed.' });
+      }
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
@@ -850,6 +944,49 @@ export default function CompanySettingsPage() {
                             ))
                           )}
                         </select>
+                      </div>
+
+                      <div className="md:col-span-2 rounded-2xl border border-cyan-100 bg-cyan-50/40 p-4">
+                        <p className="text-xs font-bold text-slate-700 mb-2">Company logo</p>
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                          <div className="h-24 w-24 rounded-xl border border-cyan-200 bg-white overflow-hidden flex items-center justify-center shrink-0">
+                            {logoPreview ? (
+                              <img src={logoPreview} alt="Company logo preview" className="h-full w-full object-cover" />
+                            ) : (
+                              <Building2 className="h-8 w-8 text-cyan-300" />
+                            )}
+                          </div>
+                          <div className="flex-1 space-y-2">
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp,image/*"
+                              onChange={(e) => handleLogoChange(e.target.files?.[0] || null)}
+                              className={`${inputClass} file:mr-3 file:rounded-lg file:border-0 file:bg-cyan-100 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-cyan-800`}
+                            />
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={handleLogoUpload}
+                                disabled={!selectedCompany || !logoFile || uploadingLogo}
+                                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-60"
+                              >
+                                <Upload className="h-3.5 w-3.5" />
+                                {uploadingLogo ? 'Uploading…' : 'Upload logo'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setLogoFile(null);
+                                  setLogoPreview(resolveCompanyLogoUrl(selectedCompany));
+                                }}
+                                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              >
+                                Clear selection
+                              </button>
+                            </div>
+                            <p className="text-[11px] text-slate-500">JPG, PNG, or WEBP up to 5 MB.</p>
+                          </div>
+                        </div>
                       </div>
 
                       <div>
