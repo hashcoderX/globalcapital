@@ -50,6 +50,8 @@ class StoreEmployeeRequest extends FormRequest
             'designation_id' => 'required|exists:designations,id',
             'branch_id' => 'required|exists:companies,id',
             'status' => 'in:active,inactive',
+            'create_wallet' => 'nullable|boolean',
+            'wallet_opening_balance' => 'nullable|numeric|min:0',
         ];
     }
 }

@@ -29,7 +29,7 @@ import {
   X,
 } from 'lucide-react';
 import CompanyAccountingPanel from '@/app/components/accounting/CompanyAccountingPanel';
-import { getBackendOrigin, resolveStorageAssetUrl } from '@/lib/api';
+import { resolveStorageAssetUrl } from '@/lib/api';
 
 type SettingsSection = 'profile' | 'accounting' | 'templates' | 'holidays' | 'system';
 
@@ -129,8 +129,6 @@ export default function CompanySettingsPage() {
   const [holidayForm, setHolidayForm] = useState({ id: 0, holiday_date: '', name: '', note: '', is_active: true });
   const [holidaySaving, setHolidaySaving] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
-  const backendOrigin = useMemo(() => getBackendOrigin(), []);
-
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
@@ -159,13 +157,13 @@ export default function CompanySettingsPage() {
     const direct = String(company?.logo_url || '').trim();
     if (direct) {
       const normalized = resolveStorageAssetUrl(direct);
-      return normalized.startsWith('/') ? `${backendOrigin}${normalized}` : normalized;
+      return normalized;
     }
 
     const path = String(company?.logo_path || '').trim();
     if (!path) return '';
     const normalized = resolveStorageAssetUrl(path);
-    return normalized.startsWith('/') ? `${backendOrigin}${normalized}` : normalized;
+    return normalized;
   };
 
   const loadFormFromCompany = (company: Company | null) => {

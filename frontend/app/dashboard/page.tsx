@@ -50,6 +50,7 @@ export default function Dashboard() {
   const [token, setToken] = useState('');
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loadingPrivileges, setLoadingPrivileges] = useState(true);
+  const [logoLoadFailed, setLogoLoadFailed] = useState(false);
   const router = useRouter();
   const apiBaseUrl = getApiBaseUrl();
 
@@ -69,6 +70,7 @@ export default function Dashboard() {
     authUser?.role ||
     (roleNames.some((roleName) => roleName.includes('admin')) ? 'Super Admin' : 'User');
   const primaryRoleName = String(primaryRoleRaw || 'User').trim();
+  const isCollectionOfficer = roleNames.some((roleName) => roleName.includes('collection officer'));
 
   const isSuperAdmin =
     authUser?.email === 'superadmin@softcodelk.com' ||
@@ -301,9 +303,13 @@ export default function Dashboard() {
     },
   ];
 
-  const otherModules = allModules.filter((module) =>
-    canAccess(module.requiredModules, module.requiredPermissionKeywords || [])
-  );
+  const otherModules = allModules.filter((module) => {
+    if (isCollectionOfficer && (module.name === 'Office Collection Center' || module.name === 'Accounting')) {
+      return false;
+    }
+
+    return canAccess(module.requiredModules, module.requiredPermissionKeywords || []);
+  });
 
   const settings: DashboardSetting[] = [
     {
@@ -380,18 +386,20 @@ export default function Dashboard() {
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         {/* Hero Section */}
         <div className="text-center mb-12">
-          <div className="inline-block p-1 bg-gradient-to-r from-red-500 to-pink-500 rounded-full mb-6">
-            <div className="bg-white rounded-full p-4">
-              <span className="text-3xl sm:text-4xl">🚀</span>
+          <div className="inline-block p-1 bg-gradient-to-r from-red-500 to-pink-500 rounded-3xl mb-6">
+            <div className="bg-white rounded-3xl p-3">
+              {logoLoadFailed ? (
+                <span className="text-3xl sm:text-4xl">🚀</span>
+              ) : (
+                <img
+                  src="/media/company/logo"
+                  alt="Company logo"
+                  className="h-28 w-28 sm:h-36 sm:w-36 rounded-2xl object-contain"
+                  onError={() => setLogoLoadFailed(true)}
+                />
+              )}
             </div>
           </div>
-          <h2 className="text-2xl sm:text-3xl lg:text-5xl font-bold text-gray-900 mb-4">
-            Welcome to <span className="bg-gradient-to-r from-red-600 to-pink-600 bg-clip-text text-transparent">Desk of Finance</span>
-          </h2>
-          <p className="text-base sm:text-lg text-gray-600 max-w-3xl mx-auto leading-relaxed">
-            Transform your business operations with our comprehensive management suite.
-            Streamline processes, boost productivity, and drive growth with intelligent automation.
-          </p>
           <div className="flex flex-col sm:flex-row items-center justify-center mt-6 gap-2 sm:gap-4">
             <div className="flex items-center space-x-2 text-xs sm:text-sm text-gray-500">
               <div className="w-2 h-2 bg-green-500 rounded-full"></div>

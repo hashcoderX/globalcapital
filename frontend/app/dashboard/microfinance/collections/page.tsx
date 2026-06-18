@@ -1,7 +1,7 @@
 'use client';
 
 import axios from 'axios';
-import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { getApiBaseUrl, getBackendOrigin, resolveStorageAssetUrl } from '@/lib/api';
 import CollectionReceiptBill, {
   type CollectionReceipt,
 } from '@/app/components/collections/CollectionReceiptBill';
@@ -30,7 +30,7 @@ type LoanRow = {
   route_name?: string | null;
   route_code?: string | null;
   route?: { id: number; name: string; code: string } | null;
-  center?: { id: number; name: string; code: string } | null;
+  center?: { id: number; name: string; code: string; meeting_day?: string | null } | null;
   group?: { id: number; name: string; code: string } | null;
   loan_amount?: number | string;
   installment_amount: number | string;
@@ -95,6 +95,15 @@ type AuthUser = {
   designation?: { id: number; name: string } | null;
   employee?: { id: number; first_name?: string; last_name?: string; email?: string } | null;
   roles?: Array<{ id?: number; name?: string }>;
+};
+
+type CompanyInfo = {
+  id: number;
+  name?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  logo_path?: string | null;
+  logo_url?: string | null;
 };
 
 const API_BASE = getApiBaseUrl();
@@ -168,6 +177,18 @@ export default function CollectionManagementPage() {
     open: false,
     loan: null,
   });
+  const [receiptCompany, setReceiptCompany] = useState<{
+    name: string;
+    address: string;
+    contactNo: string;
+    logoUrl: string;
+  }>({
+    name: 'BMS Collection Center',
+    address: '',
+    contactNo: '',
+    logoUrl: '/media/company/logo',
+  });
+  const backendOrigin = useMemo(() => getBackendOrigin(), []);
 
   const normalizeText = (value: string) =>
     String(value || '')
@@ -226,6 +247,25 @@ export default function CollectionManagementPage() {
       Accept: 'application/json',
     }),
     [token]
+  );
+
+  const resolveCompanyLogoUrl = useCallback(
+    (company: CompanyInfo | null) => {
+      const direct = String(company?.logo_url || '').trim();
+      if (direct) {
+        const normalized = resolveStorageAssetUrl(direct);
+        return normalized.startsWith('/') ? `${backendOrigin}${normalized}` : normalized;
+      }
+
+      const path = String(company?.logo_path || '').trim();
+      if (path) {
+        const normalized = resolveStorageAssetUrl(path);
+        return normalized.startsWith('/') ? `${backendOrigin}${normalized}` : normalized;
+      }
+
+      return '/media/company/logo';
+    },
+    [backendOrigin]
   );
 
   const scopeKey = useMemo(
@@ -334,6 +374,40 @@ export default function CollectionManagementPage() {
 
   useEffect(() => {
     if (!token) return;
+
+    const loadReceiptCompany = async () => {
+      try {
+        const response = await axios.get(`${API_BASE}/companies`, { headers });
+        const list = Array.isArray(response.data)
+          ? response.data
+          : Array.isArray(response.data?.data)
+            ? response.data.data
+            : [];
+
+        const branchId = Number(authUser?.branch_id || 0);
+        const matched = (list as CompanyInfo[]).find((item) => Number(item.id) === branchId) || (list[0] as CompanyInfo | undefined);
+
+        if (!matched) return;
+
+        setReceiptCompany({
+          name: String(matched.name || 'BMS Collection Center'),
+          address: String(matched.address || ''),
+          contactNo: String(matched.phone || ''),
+          logoUrl: resolveCompanyLogoUrl(matched),
+        });
+      } catch {
+        setReceiptCompany((prev) => ({
+          ...prev,
+          logoUrl: '/media/company/logo',
+        }));
+      }
+    };
+
+    loadReceiptCompany();
+  }, [authUser?.branch_id, headers, resolveCompanyLogoUrl, token]);
+
+  useEffect(() => {
+    if (!token) return;
     void loadLoans();
   }, [token, loadLoans]);
 
@@ -406,21 +480,50 @@ export default function CollectionManagementPage() {
     return Math.max(totalPayable - paidTotal, 0);
   };
 
-  const shiftDateByRefundOption = (date: Date, refundOption: string) => {
+  const alignToMeetingDay = (date: Date, meetingDay?: string | null) => {
+    const dayName = String(meetingDay || '')
+      .trim()
+      .toLowerCase();
+
+    if (!dayName) {
+      return new Date(date);
+    }
+
+    const dayMap: Record<string, number> = {
+      sunday: 0,
+      monday: 1,
+      tuesday: 2,
+      wednesday: 3,
+      thursday: 4,
+      friday: 5,
+      saturday: 6,
+    };
+
+    if (!(dayName in dayMap)) {
+      return new Date(date);
+    }
+
+    const cursor = new Date(date);
+    const delta = (dayMap[dayName] - cursor.getDay() + 7) % 7;
+    cursor.setDate(cursor.getDate() + delta);
+    return cursor;
+  };
+
+  const shiftDateByRefundOption = (date: Date, refundOption: string, meetingDay?: string | null) => {
     const next = new Date(date);
 
     if (refundOption === 'day') {
       next.setDate(next.getDate() + 1);
-      return next;
+      return alignToMeetingDay(next, meetingDay);
     }
 
     if (refundOption === 'week') {
       next.setDate(next.getDate() + 7);
-      return next;
+      return alignToMeetingDay(next, meetingDay);
     }
 
     next.setMonth(next.getMonth() + 1);
-    return next;
+    return alignToMeetingDay(next, meetingDay);
   };
 
   const getProjectedArrearsBalance = (loan: LoanRow) => {
@@ -428,7 +531,7 @@ export default function CollectionManagementPage() {
     const installmentAmount = Number(loan.installment_amount || 0);
     if (installmentAmount <= 0 || !loan.due_date) return balance;
 
-    let dueCursor = new Date(`${loan.due_date}T00:00:00`);
+    let dueCursor = alignToMeetingDay(new Date(`${loan.due_date}T00:00:00`), loan.center?.meeting_day);
     if (Number.isNaN(dueCursor.getTime())) return balance;
 
     const today = new Date();
@@ -438,7 +541,7 @@ export default function CollectionManagementPage() {
 
     while (dueCursor <= today) {
       balance += installmentAmount;
-      dueCursor = shiftDateByRefundOption(dueCursor, mode);
+      dueCursor = shiftDateByRefundOption(dueCursor, mode, loan.center?.meeting_day);
     }
 
     return balance;
@@ -1998,17 +2101,28 @@ export default function CollectionManagementPage() {
         </div>
 
         {collectModal.open && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 backdrop-blur-sm px-4 py-6">
-            <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-emerald-100 bg-white shadow-[0_30px_90px_-35px_rgba(15,23,42,0.75)]">
+          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-900/55 backdrop-blur-sm px-4 py-4 sm:py-6">
+            <div className="my-auto w-full max-w-2xl max-h-[calc(100vh-2rem)] overflow-hidden rounded-3xl border border-emerald-100 bg-white shadow-[0_30px_90px_-35px_rgba(15,23,42,0.75)]">
               <div className="relative bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 px-5 py-5 text-white">
                 <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-white/20 blur-2xl"></div>
-                <p className="text-[11px] uppercase tracking-[0.18em] text-white/85">Collection Desk</p>
-                <h3 className="text-xl font-extrabold mt-1">Collect Installment</h3>
-                <p className="mt-1 text-sm text-white/90">{collectModal.customerName} | {collectModal.loanCode}</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-white/85">Collection Desk</p>
+                    <h3 className="text-xl font-extrabold mt-1">Collect Installment</h3>
+                    <p className="mt-1 text-sm text-white/90 break-words">{collectModal.customerName} | {collectModal.loanCode}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeCollectModal}
+                    className="px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 border border-white/30 text-white text-sm font-semibold"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
 
-              <div className="p-5 space-y-4 text-black bg-gradient-to-b from-emerald-50/35 to-white">
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-2 rounded-2xl border border-emerald-100 bg-white p-3 text-xs">
+              <div className="max-h-[calc(100vh-14rem)] overflow-y-auto p-4 sm:p-5 space-y-4 text-black bg-gradient-to-b from-emerald-50/35 to-white">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 rounded-2xl border border-emerald-100 bg-white p-3 text-xs">
                   <div>
                     <p className="uppercase text-slate-500">Due Date</p>
                     <p className="font-semibold text-slate-800">{formatDateDisplay(collectModal.dueDate)}</p>
@@ -2025,7 +2139,7 @@ export default function CollectionManagementPage() {
                     <p className="uppercase text-slate-500">Late Days</p>
                     <p className="font-semibold text-slate-800">{penaltyPreview.lateDays}</p>
                   </div>
-                  <div className="col-span-2 md:col-span-1">
+                  <div className="sm:col-span-2 lg:col-span-1">
                     <p className="uppercase text-slate-500">Est. Penalty</p>
                     <p className="font-semibold text-rose-700">{penaltyPreview.penaltyAmount.toFixed(2)}</p>
                   </div>
@@ -2088,11 +2202,11 @@ export default function CollectionManagementPage() {
                 </div>
               </div>
 
-              <div className="border-t border-emerald-100 bg-white px-5 py-4 flex justify-end gap-2">
+              <div className="border-t border-emerald-100 bg-white px-4 sm:px-5 py-4 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
                 <button
                   type="button"
                   onClick={closeCollectModal}
-                  className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold hover:bg-slate-200"
+                  className="w-full sm:w-auto px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold hover:bg-slate-200"
                 >
                   Cancel
                 </button>
@@ -2100,7 +2214,7 @@ export default function CollectionManagementPage() {
                   type="button"
                   onClick={submitCollection}
                   disabled={collectSaving}
-                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-sm font-semibold disabled:opacity-60"
+                  className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-sm font-semibold disabled:opacity-60"
                 >
                   {collectSaving ? 'Saving...' : 'Confirm Collection'}
                 </button>
@@ -2188,6 +2302,10 @@ export default function CollectionManagementPage() {
         <CollectionReceiptBill
           open={receiptModal.open}
           receipt={receiptModal.receipt}
+          companyName={receiptCompany.name}
+          companyAddress={receiptCompany.address}
+          companyContactNo={receiptCompany.contactNo}
+          companyLogoUrl={receiptCompany.logoUrl}
           onClose={() => setReceiptModal({ open: false, receipt: null })}
         />
 

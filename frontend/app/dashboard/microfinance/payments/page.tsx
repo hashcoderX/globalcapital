@@ -76,6 +76,82 @@ type PaymentRow = {
   arrears_outstanding_after?: number | string | null;
 };
 
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const parseDateValue = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  if (DATE_ONLY_PATTERN.test(raw)) {
+    const [yearText, monthText, dayText] = raw.split('-');
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+      return null;
+    }
+
+    const parsed = new Date(year, month - 1, day, 0, 0, 0, 0);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const hasExplicitTime = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  return /T\d{2}:\d{2}|\s\d{2}:\d{2}/.test(raw);
+};
+
+const extractDateOnlyText = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  if (DATE_ONLY_PATTERN.test(raw)) return raw;
+
+  const datePrefix = raw.slice(0, 10);
+  if (DATE_ONLY_PATTERN.test(datePrefix)) return datePrefix;
+
+  return '';
+};
+
+const formatDateOnlyText = (value?: string | null) => {
+  const dateText = extractDateOnlyText(value);
+  if (!dateText) return '';
+
+  const [yearText, monthText, dayText] = dateText.split('-');
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return dateText;
+  }
+
+  const parsed = new Date(year, month - 1, day, 0, 0, 0, 0);
+  if (Number.isNaN(parsed.getTime())) return dateText;
+
+  return new Intl.DateTimeFormat('en-LK', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+  }).format(parsed);
+};
+
+const getPaymentPrimaryDate = (row: PaymentRow) => {
+  const collectionRaw = String(row.collection_date || '').trim();
+  const createdRaw = String(row.created_at || '').trim();
+
+  if (collectionRaw !== '') {
+    return parseDateValue(collectionRaw);
+  }
+
+  return parseDateValue(createdRaw);
+};
+
 const API_BASE = getApiBaseUrl();
 
 export default function MicrofinancePaymentsPage() {
@@ -334,8 +410,7 @@ export default function MicrofinancePaymentsPage() {
     const to = toDate ? new Date(`${toDate}T23:59:59`) : null;
 
     return payments.filter((row) => {
-      const rowDateText = String(row.collection_date || row.created_at || '').trim();
-      const rowDate = rowDateText ? new Date(rowDateText) : null;
+      const rowDate = getPaymentPrimaryDate(row);
 
       if (from && rowDate && !Number.isNaN(rowDate.getTime()) && rowDate < from) {
         return false;
@@ -458,8 +533,8 @@ export default function MicrofinancePaymentsPage() {
     return payments
       .filter((row) => Number(row.mf_loan_request_id || 0) === selectedLoanId)
       .sort((a, b) => {
-        const aTime = new Date(String(a.collection_date || a.created_at || '')).getTime();
-        const bTime = new Date(String(b.collection_date || b.created_at || '')).getTime();
+        const aTime = getPaymentPrimaryDate(a)?.getTime() ?? 0;
+        const bTime = getPaymentPrimaryDate(b)?.getTime() ?? 0;
         return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
       });
   }, [payments, selectedLoanId]);
@@ -468,8 +543,8 @@ export default function MicrofinancePaymentsPage() {
     if (!selectedLoan) return [];
 
     const orderedPayments = [...selectedLoanPayments].sort((a, b) => {
-      const aTime = new Date(String(a.collection_date || a.created_at || '')).getTime();
-      const bTime = new Date(String(b.collection_date || b.created_at || '')).getTime();
+      const aTime = getPaymentPrimaryDate(a)?.getTime() ?? 0;
+      const bTime = getPaymentPrimaryDate(b)?.getTime() ?? 0;
       return (Number.isNaN(aTime) ? 0 : aTime) - (Number.isNaN(bTime) ? 0 : bTime);
     });
 
@@ -598,26 +673,53 @@ export default function MicrofinancePaymentsPage() {
     const dateText = String(collectionDate || '').trim();
     const createdText = String(createdAt || '').trim();
 
-    const parsedCollection = dateText ? new Date(dateText) : null;
-    const parsedCreated = createdText ? new Date(createdText) : null;
+    // Business collection date should be treated as a pure date, without timezone-converted time.
+    const collectionDateOnly = formatDateOnlyText(dateText);
+    if (collectionDateOnly) {
+      const parsedCreated = parseDateValue(createdText);
+      const createdHasTime = hasExplicitTime(createdText);
 
-    const hasValidCollection = parsedCollection && !Number.isNaN(parsedCollection.getTime());
-    const hasValidCreated = parsedCreated && !Number.isNaN(parsedCreated.getTime());
+      if (parsedCreated && createdHasTime) {
+        const timePart = new Intl.DateTimeFormat('en-LK', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        }).format(parsedCreated);
 
-    if (!hasValidCollection && !hasValidCreated) {
+        return `${collectionDateOnly} ${timePart}`;
+      }
+
+      return collectionDateOnly;
+    }
+
+    const parsedCollection = parseDateValue(dateText);
+    const parsedCreated = parseDateValue(createdText);
+
+    const hasCollection = parsedCollection !== null;
+    const hasCreated = parsedCreated !== null;
+
+    if (!hasCollection && !hasCreated) {
       return dateText || createdText || '-';
     }
 
-    const baseDate = hasValidCollection ? parsedCollection! : parsedCreated!;
+    const baseDate = hasCollection ? parsedCollection! : parsedCreated!;
     const datePart = new Intl.DateTimeFormat('en-LK', {
       year: 'numeric',
       month: 'short',
       day: '2-digit',
     }).format(baseDate);
 
-    // If collection_date already includes time use it; otherwise use created_at time when available.
-    const hasCollectionTime = /T|\s\d{2}:\d{2}/.test(dateText);
-    const timeSource = hasCollectionTime && hasValidCollection ? parsedCollection : hasValidCreated ? parsedCreated : null;
+    // Show time only when the source value explicitly includes time.
+    const collectionHasTime = hasExplicitTime(dateText);
+    const createdHasTime = hasExplicitTime(createdText);
+
+    let timeSource: Date | null = null;
+    if (hasCollection && collectionHasTime) {
+      timeSource = parsedCollection;
+    } else if (!hasCollection && hasCreated && createdHasTime) {
+      timeSource = parsedCreated;
+    }
 
     if (!timeSource) return datePart;
 

@@ -6,6 +6,8 @@ import "./globals.css";
 const APP_NAME = "Desk of Finance";
 const APP_DESCRIPTION = "Modern finance management platform with HRM";
 
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   applicationName: APP_NAME,
   title: {
@@ -22,8 +24,14 @@ export const metadata: Metadata = {
     telephone: false,
   },
   icons: {
-    icon: [{ url: "/icons/icon.svg", type: "image/svg+xml" }],
-    apple: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+    icon: [
+      { url: "/media/company/logo", type: "image/png" },
+      { url: "/icons/icon.svg", type: "image/svg+xml" },
+    ],
+    apple: [
+      { url: "/media/company/logo", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
   },
 };
 
@@ -32,6 +40,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
+  userScalable: false,
 };
 
 export default function RootLayout({

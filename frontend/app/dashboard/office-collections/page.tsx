@@ -121,6 +121,12 @@ export default function OfficeCollectionsPage() {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [filterCustomerName, setFilterCustomerName] = useState("");
+  const [filterCustomerNo, setFilterCustomerNo] = useState("");
+  const [filterNic, setFilterNic] = useState("");
+  const [filterRoute, setFilterRoute] = useState("");
+  const [filterGroup, setFilterGroup] = useState("");
+  const [filterCenter, setFilterCenter] = useState("");
   const [typeFilter, setTypeFilter] = useState<CollectionType>("all");
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState<number>(15);
@@ -220,6 +226,59 @@ export default function OfficeCollectionsPage() {
     if (!token) return;
     searchAccounts();
   }, [token, searchAccounts]);
+
+  const includesText = (source: unknown, needle: string) => {
+    const text = String(source ?? "").toLowerCase().trim();
+    const query = String(needle || "").toLowerCase().trim();
+    if (!query) return true;
+    return text.includes(query);
+  };
+
+  const filteredAccounts = useMemo(() => {
+    return accounts.filter((account) => {
+      const raw = account as CollectibleAccount & Record<string, unknown>;
+      const routeObj = (raw.route as { name?: string } | undefined) || undefined;
+      const groupObj = (raw.group as { name?: string } | undefined) || undefined;
+      const centerObj = (raw.center as { name?: string } | undefined) || undefined;
+
+      const customerName = account.customer_name || "";
+      const customerNo = account.customer_no || String(raw.customer_code || "");
+      const nic = String(raw.customer_nic || raw.nic || raw.national_id || raw.national_identity_card || "");
+      const routeName = String(raw.route_name || routeObj?.name || "");
+      const groupName = String(raw.group_name || groupObj?.name || "");
+      const centerName = String(raw.center_name || centerObj?.name || "");
+
+      return (
+        includesText(customerName, filterCustomerName) &&
+        includesText(customerNo, filterCustomerNo) &&
+        includesText(nic, filterNic) &&
+        includesText(routeName, filterRoute) &&
+        includesText(groupName, filterGroup) &&
+        includesText(centerName, filterCenter)
+      );
+    });
+  }, [
+    accounts,
+    filterCenter,
+    filterCustomerName,
+    filterCustomerNo,
+    filterGroup,
+    filterNic,
+    filterRoute,
+  ]);
+
+  const hasAdvancedFilters = useMemo(
+    () =>
+      [
+        filterCustomerName,
+        filterCustomerNo,
+        filterNic,
+        filterRoute,
+        filterGroup,
+        filterCenter,
+      ].some((value) => value.trim() !== ""),
+    [filterCenter, filterCustomerName, filterCustomerNo, filterGroup, filterNic, filterRoute]
+  );
 
   const openCollectModal = (account: CollectibleAccount) => {
     setSelected(account);
@@ -405,6 +464,60 @@ export default function OfficeCollectionsPage() {
                 className="w-full rounded-xl border border-indigo-100 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-900 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
               />
             </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              <input
+                value={filterCustomerName}
+                onChange={(e) => setFilterCustomerName(e.target.value)}
+                placeholder="Filter by customer name"
+                className="w-full rounded-xl border border-indigo-100 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+              />
+              <input
+                value={filterCustomerNo}
+                onChange={(e) => setFilterCustomerNo(e.target.value)}
+                placeholder="Filter by customer no"
+                className="w-full rounded-xl border border-indigo-100 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+              />
+              <input
+                value={filterNic}
+                onChange={(e) => setFilterNic(e.target.value)}
+                placeholder="Filter by NIC"
+                className="w-full rounded-xl border border-indigo-100 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+              />
+              <input
+                value={filterRoute}
+                onChange={(e) => setFilterRoute(e.target.value)}
+                placeholder="Filter by route"
+                className="w-full rounded-xl border border-indigo-100 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+              />
+              <input
+                value={filterGroup}
+                onChange={(e) => setFilterGroup(e.target.value)}
+                placeholder="Filter by group"
+                className="w-full rounded-xl border border-indigo-100 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+              />
+              <div className="flex gap-2">
+                <input
+                  value={filterCenter}
+                  onChange={(e) => setFilterCenter(e.target.value)}
+                  placeholder="Filter by center"
+                  className="w-full rounded-xl border border-indigo-100 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterCustomerName("");
+                    setFilterCustomerNo("");
+                    setFilterNic("");
+                    setFilterRoute("");
+                    setFilterGroup("");
+                    setFilterCenter("");
+                  }}
+                  className="shrink-0 rounded-xl border border-indigo-200 bg-white px-3 py-2.5 text-xs font-bold text-indigo-800 hover:bg-indigo-50"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
             <div className="flex flex-wrap gap-2">
               {TYPE_FILTERS.map((filter) => {
                 const active = typeFilter === filter.key;
@@ -451,11 +564,15 @@ export default function OfficeCollectionsPage() {
                   <div key={i} className="h-12 animate-pulse rounded-lg bg-gradient-to-r from-slate-100 via-indigo-50 to-slate-100" />
                 ))}
               </div>
-            ) : pagination.total === 0 ? (
+            ) : filteredAccounts.length === 0 ? (
               <div className="py-16 text-center">
                 <Banknote className="mx-auto h-10 w-10 text-indigo-400" />
                 <p className="mt-3 text-lg font-bold text-slate-900">No accounts to collect</p>
-                <p className="mt-1 text-sm text-slate-600">Try another search term or product filter.</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {hasAdvancedFilters
+                    ? "No records match your selected filters."
+                    : "Try another search term or product filter."}
+                </p>
               </div>
             ) : (
               <div className="overflow-x-auto -mx-1">
@@ -477,7 +594,7 @@ export default function OfficeCollectionsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {accounts.map((account) => {
+                    {filteredAccounts.map((account) => {
                       const styles = typeStyles(account.type);
                       return (
                         <tr
@@ -539,11 +656,11 @@ export default function OfficeCollectionsPage() {
               </div>
             )}
 
-            {!loading && pagination.total > 0 ? (
+            {!loading && filteredAccounts.length > 0 ? (
               <div className="mt-5 flex flex-col gap-3 border-t border-indigo-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-wrap items-center gap-3 text-xs text-slate-700">
                   <span className="font-semibold text-slate-900">
-                    Showing {pagination.from ?? 0}–{pagination.to ?? 0} of {pagination.total}
+                    Showing {hasAdvancedFilters ? filteredAccounts.length : `${pagination.from ?? 0}–${pagination.to ?? 0}`} of {hasAdvancedFilters ? filteredAccounts.length : pagination.total}
                   </span>
                   <label className="inline-flex items-center gap-2">
                     <span className="font-medium">Per page</span>

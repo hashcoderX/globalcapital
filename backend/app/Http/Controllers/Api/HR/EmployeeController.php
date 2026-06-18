@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\HR;
 
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
+use App\Models\EmployeeWallet;
 use App\Models\User;
 use App\Http\Requests\StoreEmployeeRequest;
 use Illuminate\Http\Request;
@@ -124,10 +125,26 @@ class EmployeeController extends Controller
                 'designation_id' => $validated['designation_id'],
             ]);
 
+            $shouldCreateWallet = (bool) ($validated['create_wallet'] ?? false);
+            if ($shouldCreateWallet) {
+                $openingBalance = (float) ($validated['wallet_opening_balance'] ?? 0);
+                $walletNo = 'EW' . str_pad((string) $employee->id, 6, '0', STR_PAD_LEFT);
+
+                EmployeeWallet::create([
+                    'tenant_id' => $employee->tenant_id,
+                    'branch_id' => $employee->branch_id,
+                    'employee_id' => $employee->id,
+                    'wallet_no' => $walletNo,
+                    'opening_balance' => $openingBalance,
+                    'current_balance' => $openingBalance,
+                    'status' => 'active',
+                ]);
+            }
+
             return $employee;
         });
 
-        return response()->json($employee->load(['department', 'designation', 'branch']), 201);
+        return response()->json($employee->load(['department', 'designation', 'branch', 'wallet']), 201);
     }
 
     /**
@@ -135,7 +152,7 @@ class EmployeeController extends Controller
      */
     public function show(Employee $employee): JsonResponse
     {
-        return response()->json($employee->load(['department', 'designation', 'branch']));
+        return response()->json($employee->load(['department', 'designation', 'branch', 'wallet']));
     }
 
     /**

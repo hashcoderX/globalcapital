@@ -33,7 +33,7 @@ type LoanRequest = {
   status: string;
   route?: { id: number; name: string; code: string } | null;
   branch?: { id: number; name: string } | null;
-  center?: { id: number; name: string; code: string } | null;
+  center?: { id: number; name: string; code: string; meeting_day?: string | null } | null;
   group?: { id: number; name: string; code: string } | null;
   loan_request_date: string;
   documents_requested?: boolean;
@@ -115,14 +115,41 @@ const shiftDateFromBase = (
   return toInputDate(base);
 };
 
+const alignToCenterMeetingDay = (baseDate: string, meetingDay?: string | null) => {
+  const normalized = String(meetingDay || '').trim().toLowerCase();
+  if (!normalized) return baseDate;
+
+  const dayMap: Record<string, number> = {
+    sunday: 0,
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6,
+  };
+
+  if (!(normalized in dayMap)) return baseDate;
+
+  const base = new Date(`${baseDate}T12:00:00`);
+  if (Number.isNaN(base.getTime())) return baseDate;
+
+  const targetDay = dayMap[normalized];
+  const currentDay = base.getDay();
+  const delta = (targetDay - currentDay + 7) % 7;
+  base.setDate(base.getDate() + delta);
+  return toInputDate(base);
+};
+
 const buildDefaultLoanSchedule = (loan: LoanRequest): LoanSchedule => {
   const approvalDate = toInputDate(new Date());
   const termCount = Math.max(Number(loan.terms_count || 1), 1);
+  const nextPaymentDate = alignToCenterMeetingDay(approvalDate, loan.center?.meeting_day);
 
   return {
     approvalDate,
-    nextPaymentDate: shiftDateFromBase(approvalDate, loan.refund_option, 1),
-    loanEndDate: shiftDateFromBase(approvalDate, loan.refund_option, termCount),
+    nextPaymentDate,
+    loanEndDate: shiftDateFromBase(nextPaymentDate, loan.refund_option, Math.max(termCount - 1, 0)),
   };
 };
 
@@ -390,13 +417,14 @@ export default function LoanApprovalsPage() {
 
   const handleApprovalDateChange = (loan: LoanRequest, approvalDate: string) => {
     const termCount = Math.max(Number(loan.terms_count || 1), 1);
+  const nextPaymentDate = alignToCenterMeetingDay(approvalDate, loan.center?.meeting_day);
 
     setScheduleByLoanId((prev) => ({
       ...prev,
       [loan.id]: {
         approvalDate,
-        nextPaymentDate: shiftDateFromBase(approvalDate, loan.refund_option, 1),
-        loanEndDate: shiftDateFromBase(approvalDate, loan.refund_option, termCount),
+        nextPaymentDate,
+      loanEndDate: shiftDateFromBase(nextPaymentDate, loan.refund_option, Math.max(termCount - 1, 0)),
       },
     }));
   };
@@ -758,7 +786,7 @@ export default function LoanApprovalsPage() {
                   <div>
                     <label className="block text-xs uppercase tracking-wide text-gray-600 mb-1">Auto Next Payment Date</label>
                     <p className="text-xs text-gray-500 mb-2">
-                      Calculated using refund option.
+                      Calculated using refund option and nearest center meeting day.
                     </p>
                     <div className="w-full px-3 py-2 rounded-lg border border-orange-100 text-sm text-black bg-slate-50 font-semibold">
                       {schedule.nextPaymentDate}

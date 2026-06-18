@@ -40,6 +40,23 @@ Route::get('/media/companies/{company}/logo', function (Company $company) {
     return StoredFile::response($company->logo_path);
 })->name('company.logo');
 
+Route::get('/media/company/logo', function () {
+    $companyWithLogo = Company::query()
+        ->whereNotNull('logo_path')
+        ->where('logo_path', '!=', '')
+        ->orderByDesc('updated_at')
+        ->first();
+
+    if (!$companyWithLogo) {
+        abort(404);
+    }
+
+    $response = StoredFile::response($companyWithLogo->logo_path);
+    $response->headers->set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+
+    return $response;
+})->name('company.logo.current');
+
 Route::get('/media/loan-documents/{document}', function (MicrofinanceLoanRequestDocument $document) {
     if (!$document->file_path) {
         abort(404);

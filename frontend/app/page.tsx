@@ -124,7 +124,7 @@ export default function Home() {
             Desk of Finance
           </div>
           <h1 className="mt-4 text-4xl font-black leading-tight text-slate-900 sm:text-5xl">
-            Smart Finance
+            Global Capital Credit
             <span className="block bg-gradient-to-r from-cyan-600 to-emerald-600 bg-clip-text text-transparent">
               Operations Portal
             </span>
@@ -132,6 +132,14 @@ export default function Home() {
           <p className="mt-4 max-w-lg text-sm leading-relaxed text-slate-600 sm:text-base">
             Manage lending, collections, and team workflows from one secure workspace designed for day-to-day field and office operations.
           </p>
+
+          <div className="mt-6">
+            <img
+              src="/media/company/logo"
+              alt="Company logo"
+              className="h-44 w-full max-w-md rounded-2xl border border-cyan-100 bg-white object-contain p-3 shadow-lg sm:h-56"
+            />
+          </div>
 
           <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-cyan-100 bg-white/80 p-4">

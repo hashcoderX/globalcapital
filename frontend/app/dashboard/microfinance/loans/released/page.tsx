@@ -1187,7 +1187,7 @@ export default function ReleasedLoansPage() {
           <div className="overflow-x-auto rounded-xl border border-slate-200">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="bg-slate-900 text-left text-white">
+                <tr className="bg-red-700 text-left text-white">
                   <th className="px-3 py-2.5 font-semibold">Date</th>
                   <th className="px-3 py-2.5 font-semibold">Loan Code</th>
                   <th className="px-3 py-2.5 font-semibold">Customer</th>
@@ -1331,7 +1331,7 @@ export default function ReleasedLoansPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3 mt-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-7 gap-3 mt-4">
                   <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
                     <p className="text-xs uppercase tracking-wide text-gray-500">Refundable</p>
                     <p className="text-sm font-bold text-gray-900">{Number(loan.refundable_amount || 0).toFixed(2)}</p>
@@ -1339,6 +1339,10 @@ export default function ReleasedLoansPage() {
                   <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
                     <p className="text-xs uppercase tracking-wide text-gray-500">Installment</p>
                     <p className="text-sm font-bold text-gray-900">{Number(loan.installment_amount || 0).toFixed(2)}</p>
+                  </div>
+                  <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Loan Request Date</p>
+                    <p className="text-sm font-bold text-gray-900">{formatDisplayDate(loan.loan_request_date)}</p>
                   </div>
                   <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
                     <p className="text-xs uppercase tracking-wide text-gray-500">Next Payment Date</p>

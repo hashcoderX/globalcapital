@@ -9,6 +9,18 @@ type MFRoute = { id: number; name: string; code: string };
 type MFCenter = { id: number; mf_route_id: number; name: string; code: string };
 type MFGroup = { id: number; mf_route_id: number; mf_center_id: number; name: string; code: string };
 type ManagerOption = { id: number; name: string; designation: string; branch: string };
+type MFLoanProduct = {
+  id: number;
+  name: string;
+  loan_amount?: number | string | null;
+  amount?: number | string | null;
+  principal_amount?: number | string | null;
+  interest_rate: number;
+  interest_type: 'flat' | 'reducing';
+  terms_count: number;
+  refund_option: 'day' | 'week' | 'month';
+  is_active: boolean;
+};
 
 type Guarantor = {
   name: string;
@@ -40,6 +52,7 @@ type ExistingCustomer = {
 };
 
 const CUSTOMER_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
 
 type ExistingLoanRequest = {
   customer_no?: string;
@@ -102,6 +115,102 @@ const finalizeInterestRate = (value: string) => {
   return `${whole || '0'}.${trimmedFraction}`;
 };
 
+const resolveLoanAmountFromProduct = (product: MFLoanProduct): string => {
+  const directCandidates = [product.loan_amount, product.amount, product.principal_amount];
+  for (const candidate of directCandidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric.toFixed(2);
+    }
+  }
+
+  const fromNameMatch = String(product.name || '').match(/(\d+(?:\.\d+)?)/);
+  if (!fromNameMatch) return '';
+
+  const fromName = Number(fromNameMatch[1]);
+  if (!Number.isFinite(fromName) || fromName <= 0) return '';
+  return fromName.toFixed(2);
+};
+
+const isAllowedImageType = (file: File) => {
+  const mime = String(file.type || '').toLowerCase();
+  if (ALLOWED_IMAGE_TYPES.has(mime)) {
+    return true;
+  }
+
+  const lowerName = String(file.name || '').toLowerCase();
+  return ['.jpg', '.jpeg', '.png', '.webp'].some((ext) => lowerName.endsWith(ext));
+};
+
+const loadImageElement = (file: File) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Image decode failed'));
+    };
+    image.src = objectUrl;
+  });
+
+const compressImageIfNeeded = async (file: File, maxBytes = CUSTOMER_PHOTO_MAX_BYTES): Promise<File> => {
+  if (file.size <= maxBytes) {
+    return file;
+  }
+
+  const image = await loadImageElement(file);
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return file;
+  }
+
+  let width = image.width;
+  let height = image.height;
+  canvas.width = width;
+  canvas.height = height;
+  context.drawImage(image, 0, 0, width, height);
+
+  const outputType = 'image/jpeg';
+  const qualitySteps = [0.9, 0.82, 0.74, 0.66, 0.58, 0.5, 0.42];
+  let scale = 1;
+  let bestFile = file;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    for (const quality of qualitySteps) {
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, outputType, quality));
+      if (!blob) continue;
+
+      const candidate = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+        type: outputType,
+        lastModified: Date.now(),
+      });
+
+      if (candidate.size < bestFile.size) {
+        bestFile = candidate;
+      }
+
+      if (candidate.size <= maxBytes) {
+        return candidate;
+      }
+    }
+
+    scale *= 0.85;
+    width = Math.max(720, Math.round(image.width * scale));
+    height = Math.max(720, Math.round(image.height * scale));
+    canvas.width = width;
+    canvas.height = height;
+    context.clearRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+  }
+
+  return bestFile;
+};
+
 export default function RequestLoanPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
@@ -126,6 +235,7 @@ export default function RequestLoanPage() {
   const [routes, setRoutes] = useState<MFRoute[]>([]);
   const [centers, setCenters] = useState<MFCenter[]>([]);
   const [groups, setGroups] = useState<MFGroup[]>([]);
+  const [loanProducts, setLoanProducts] = useState<MFLoanProduct[]>([]);
   const [managers, setManagers] = useState<ManagerOption[]>([]);
   const [fieldOfficers, setFieldOfficers] = useState<ManagerOption[]>([]);
   const [managersLoading, setManagersLoading] = useState(false);
@@ -141,9 +251,11 @@ export default function RequestLoanPage() {
   const [customerPhotoPreview, setCustomerPhotoPreview] = useState('');
   const [existingCustomerPhotoUrl, setExistingCustomerPhotoUrl] = useState('');
   const [activeStep, setActiveStep] = useState(1);
+  const [isProductDetailsEditable, setIsProductDetailsEditable] = useState(false);
 
   const [form, setForm] = useState({
     loan_scope: 'center_loan',
+    loan_product_id: 0,
     mf_route_id: 0,
     mf_center_id: 0,
     mf_group_id: 0,
@@ -235,6 +347,11 @@ export default function RequestLoanPage() {
 
   const normalizeCustomerNo = (value: string) => value.trim().toUpperCase();
 
+  const selectedLoanProduct = useMemo(
+    () => loanProducts.find((product) => product.id === Number(form.loan_product_id || 0)) || null,
+    [loanProducts, form.loan_product_id]
+  );
+
   const resolveCustomerPhotoUrl = useCallback((customer: ExistingCustomer): string => {
     const directUrl = String(customer.photo_url || '').trim();
     if (directUrl) {
@@ -249,24 +366,30 @@ export default function RequestLoanPage() {
     return resolveStorageAssetUrl(rawPath);
   }, []);
 
-  const handleCustomerPhotoChange = (file: File | null) => {
+  const handleCustomerPhotoChange = async (file: File | null) => {
     if (!file) {
       setCustomerPhotoFile(null);
       setCustomerPhotoPreview(existingCustomerPhotoUrl);
       return;
     }
 
-    if (!file.type.startsWith('image/')) {
+    if (!isAllowedImageType(file)) {
       openModal('Please choose a valid image file (JPG, PNG, or WEBP).', 'Validation');
       return;
     }
 
-    if (file.size > CUSTOMER_PHOTO_MAX_BYTES) {
-      openModal('Customer photo must be 5 MB or smaller.', 'Validation');
-      return;
-    }
+    try {
+      const optimizedFile = await compressImageIfNeeded(file, CUSTOMER_PHOTO_MAX_BYTES);
 
-    setCustomerPhotoFile(file);
+      if (optimizedFile.size > CUSTOMER_PHOTO_MAX_BYTES) {
+        openModal('Customer photo is too large. Please use an image under 5 MB.', 'Validation');
+        return;
+      }
+
+      setCustomerPhotoFile(optimizedFile);
+    } catch {
+      openModal('Unable to process this image. Please choose another file.', 'Validation');
+    }
   };
 
   const clearCustomerPhotoSelection = () => {
@@ -315,6 +438,29 @@ export default function RequestLoanPage() {
       }
 
       return { ...prev, interest_rate: finalized };
+    });
+  };
+
+  const applyLoanProduct = (productId: number) => {
+    const selected = loanProducts.find((item) => item.id === productId);
+    setIsProductDetailsEditable(false);
+    setForm((prev) => {
+      if (!selected) {
+        return {
+          ...prev,
+          loan_product_id: 0,
+        };
+      }
+
+      return {
+        ...prev,
+        loan_product_id: selected.id,
+        loan_amount: resolveLoanAmountFromProduct(selected) || prev.loan_amount,
+        interest_rate: finalizeInterestRate(String(selected.interest_rate ?? '')) || '0',
+        interest_type: selected.interest_type || 'flat',
+        terms_count: String(selected.terms_count ?? ''),
+        refund_option: selected.refund_option || 'month',
+      };
     });
   };
 
@@ -372,10 +518,11 @@ export default function RequestLoanPage() {
     const loadMasterData = async () => {
       setManagersLoading(true);
       try {
-        const [routeRes, centerRes, groupRes, employeeRes, customerRes, loanRequestRes] = await Promise.all([
+        const [routeRes, centerRes, groupRes, loanProductRes, employeeRes, customerRes, loanRequestRes] = await Promise.all([
           axios.get(`${API_BASE}/microfinance/settings/routes`, { headers }),
           axios.get(`${API_BASE}/microfinance/settings/centers`, { headers }),
           axios.get(`${API_BASE}/microfinance/settings/groups`, { headers }),
+          axios.get(`${API_BASE}/microfinance/settings/loan-products`, { headers }),
           axios.get(`${API_BASE}/hr/employees`, { headers }),
           axios.get(`${API_BASE}/customers`, { headers, params: { per_page: 1000 } }),
           axios.get(`${API_BASE}/microfinance/loan-requests`, { headers }),
@@ -384,6 +531,7 @@ export default function RequestLoanPage() {
         setRoutes(routeRes.data || []);
         setCenters(centerRes.data || []);
         setGroups(groupRes.data || []);
+        setLoanProducts(Array.isArray(loanProductRes.data) ? loanProductRes.data : []);
 
         const employeeRows = Array.isArray(employeeRes.data?.data) ? employeeRes.data.data : [];
         const mappedEmployees: ManagerOption[] = employeeRows
@@ -402,9 +550,11 @@ export default function RequestLoanPage() {
           })
           .filter((emp: ManagerOption) => emp.id > 0 && emp.name);
 
-        const managerOnly = mappedEmployees.filter((emp) => /manager/i.test(emp.designation));
+        const managerOnly = mappedEmployees.filter((emp) =>
+          normalizeText(String(emp.designation || '')).includes('manager')
+        );
         const officerOnly = mappedEmployees.filter((emp) => /officer/i.test(emp.designation));
-        setManagers(managerOnly.length > 0 ? managerOnly : mappedEmployees);
+        setManagers(managerOnly);
         setFieldOfficers(officerOnly.length > 0 ? officerOnly : mappedEmployees);
 
         const customerRows = Array.isArray(customerRes.data?.data) ? customerRes.data.data : [];
@@ -694,8 +844,28 @@ export default function RequestLoanPage() {
     setDocuments((prev) => prev.map((doc, i) => (i === index ? { ...doc, document_type: value } : doc)));
   };
 
-  const updateDocumentFile = (index: number, file: File | null) => {
-    setDocuments((prev) => prev.map((doc, i) => (i === index ? { ...doc, file } : doc)));
+  const updateDocumentFile = async (index: number, file: File | null) => {
+    if (!file) {
+      setDocuments((prev) => prev.map((doc, i) => (i === index ? { ...doc, file: null } : doc)));
+      return;
+    }
+
+    if (!isAllowedImageType(file)) {
+      openModal('Only JPG, JPEG, PNG, and WEBP images are allowed.', 'Validation');
+      return;
+    }
+
+    try {
+      const optimizedFile = await compressImageIfNeeded(file, CUSTOMER_PHOTO_MAX_BYTES);
+      if (optimizedFile.size > CUSTOMER_PHOTO_MAX_BYTES) {
+        openModal('Selected image is too large. Please use an image under 5 MB.', 'Validation');
+        return;
+      }
+
+      setDocuments((prev) => prev.map((doc, i) => (i === index ? { ...doc, file: optimizedFile } : doc)));
+    } catch {
+      openModal('Unable to process this image. Please choose another file.', 'Validation');
+    }
   };
 
   const validateStep = (step: number): string | null => {
@@ -1183,8 +1353,11 @@ export default function RequestLoanPage() {
                             ref={customerPhotoInputRef}
                             className="customerPhotoInput"
                             type="file"
-                            accept="image/jpeg,image/png,image/webp,image/*"
-                            onChange={(e) => handleCustomerPhotoChange(e.target.files?.[0] ?? null)}
+                            accept="image/*"
+                            capture="environment"
+                            onChange={(e) => {
+                              void handleCustomerPhotoChange(e.target.files?.[0] ?? null);
+                            }}
                           />
                           <p className="mt-2 text-xs text-slate-500">
                             JPG, PNG, or WEBP up to 5 MB. Saved on the customer profile and attached to this loan request.
@@ -1263,7 +1436,11 @@ export default function RequestLoanPage() {
                           onChange={(e) => updateDocumentType(index, e.target.value)}
                         >
                           <option value="">Select document type</option>
-                          <option value="NIC">NIC</option>
+                          <option value="Customer NIC Front">Customer NIC Front</option>
+                          <option value="Customer NIC Back">Customer NIC Back</option>
+                          <option value="Guarantor Photo">Guarantor Photo</option>
+                          <option value="Guarantor Document">Guarantor Document</option>
+                          <option value="Customer Photo">Customer Photo</option>
                           <option value="GS Certificate">GS Certificate</option>
                           <option value="Utility Bill">Utility Bill</option>
                           <option value="Income Proof">Income Proof</option>
@@ -1275,7 +1452,11 @@ export default function RequestLoanPage() {
                         <input
                           className="input"
                           type="file"
-                          onChange={(e) => updateDocumentFile(index, e.target.files?.[0] ?? null)}
+                          accept="image/*"
+                          capture="environment"
+                          onChange={(e) => {
+                            void updateDocumentFile(index, e.target.files?.[0] ?? null);
+                          }}
                         />
                       </div>
                       <div className="flex items-end justify-end">
@@ -1294,94 +1475,277 @@ export default function RequestLoanPage() {
               {activeStep === 6 && (
               <div className="sectionCard blue">
                 <h2 className="sectionTitle">Loan Details</h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-                  <div>
-                    <label className="fieldLabel">Loan Code</label>
-                    <input className="input bg-slate-100" placeholder="Auto generated from scope/route/center" value={form.customer_no} readOnly />
+                <div className="mt-4 space-y-4">
+                  <div className="rounded-xl border border-blue-200 bg-white/90 p-4">
+                    <h3 className="text-sm font-bold uppercase tracking-wide text-blue-800">Select Loan Product</h3>
+                    <p className="mt-1 text-xs text-slate-600">Choose a product from settings to auto-fill interest type, rate, terms count, and refund option.</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                      <div>
+                        <label className="fieldLabel">Loan Product</label>
+                        <select
+                          className="input"
+                          value={form.loan_product_id}
+                          onChange={(e) => applyLoanProduct(Number(e.target.value))}
+                        >
+                          <option value={0}>Select Loan Product (Optional)</option>
+                          {loanProducts
+                            .filter((product) => Boolean(product.is_active))
+                            .map((product) => (
+                              <option key={product.id} value={product.id}>
+                                {product.name} - {finalizeInterestRate(String(product.interest_rate || 0))}% ({product.interest_type}) / {product.terms_count} {product.refund_option}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-slate-700">
+                        {selectedLoanProduct ? (
+                          <div className="space-y-1">
+                            <p><span className="font-semibold text-slate-900">Selected:</span> {selectedLoanProduct.name}</p>
+                            <p><span className="font-semibold text-slate-900">Rate:</span> {finalizeInterestRate(String(selectedLoanProduct.interest_rate || 0))}% ({selectedLoanProduct.interest_type})</p>
+                            <p><span className="font-semibold text-slate-900">Terms:</span> {selectedLoanProduct.terms_count} ({selectedLoanProduct.refund_option})</p>
+                          </div>
+                        ) : (
+                          <p>Select a product to auto-fill defaults. You can still modify values below.</p>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <label className="fieldLabel">Loan Amount *</label>
-                    <input className="input" type="number" min="0" step="0.01" placeholder="Enter loan amount" value={form.loan_amount} onChange={(e) => setForm((p) => ({ ...p, loan_amount: e.target.value }))} required />
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Reason</label>
-                    <input className="input" placeholder="Enter reason for loan" value={form.reason} onChange={(e) => setForm((p) => ({ ...p, reason: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Refund Option *</label>
-                    <select className="input" value={form.refund_option} onChange={(e) => setForm((p) => ({ ...p, refund_option: e.target.value }))} required>
-                      <option value="day">Day</option>
-                      <option value="week">Week</option>
-                      <option value="month">Month</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Interest Rate (%) *</label>
-                    <input
-                      className="input"
-                      type="number"
-                      min="0"
-                      step="0.0000001"
-                      inputMode="decimal"
-                      placeholder="e.g. 5.5555555"
-                      value={form.interest_rate}
-                      onChange={(e) => handleInterestRateChange(e.target.value)}
-                      onBlur={handleInterestRateBlur}
-                      required
-                    />
-                    <p className="text-[11px] text-slate-500 mt-1">Up to {INTEREST_RATE_MAX_DECIMALS} decimal places</p>
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Interest Type *</label>
-                    <select className="input" value={form.interest_type} onChange={(e) => setForm((p) => ({ ...p, interest_type: e.target.value }))} required>
-                      <option value="flat">Flat</option>
-                      <option value="reducing">Reducing</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Terms Count ({termUnitLabel}) *</label>
-                    <input className="input" type="number" min="1" step="1" placeholder={`Enter number of ${termUnitLabel.toLowerCase()}`} value={form.terms_count} onChange={(e) => setForm((p) => ({ ...p, terms_count: e.target.value }))} required />
-                    <p className="text-[11px] text-slate-500 mt-1">Conversion: 4 weeks = 1 month, 25 days = 1 month</p>
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Refundable Amount</label>
-                    <input className="input bg-slate-100" placeholder="Auto calculated" value={form.refundable_amount} readOnly />
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Installment Amount</label>
-                    <input className="input bg-slate-100" placeholder="Auto calculated" value={form.installment_amount} readOnly />
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Document Charges</label>
-                    <input className="input" type="number" min="0" step="0.01" placeholder="Enter document charges" value={form.document_charges} onChange={(e) => setForm((p) => ({ ...p, document_charges: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Stamp Charges</label>
-                    <input className="input" type="number" min="0" step="0.01" placeholder="Enter stamp charges" value={form.stamp_charges} onChange={(e) => setForm((p) => ({ ...p, stamp_charges: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Insurance Charges</label>
-                    <input className="input" type="number" min="0" step="0.01" placeholder="Enter insurance charges" value={form.insurance_charges} onChange={(e) => setForm((p) => ({ ...p, insurance_charges: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Charges Collection Mode *</label>
-                    <select className="input" value={form.charge_payment_mode} onChange={(e) => setForm((p) => ({ ...p, charge_payment_mode: e.target.value }))} required>
-                      <option value="hand_cash">Collect by Hand Cash</option>
-                      <option value="deduct_from_loan">Reduce from Loan Amount</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Balance Amount</label>
-                    <input
-                      className="input bg-slate-100"
-                      value={balanceAmount.toFixed(2)}
-                      readOnly
-                    />
-                  </div>
-                  <div>
-                    <label className="fieldLabel">Loan Request Date *</label>
-                    <input className="input" type="date" value={form.loan_request_date} onChange={(e) => setForm((p) => ({ ...p, loan_request_date: e.target.value }))} required />
-                  </div>
+
+                  {!selectedLoanProduct ? (
+                    <div className="rounded-xl border border-blue-200 bg-white/95 p-4">
+                      <h3 className="text-sm font-bold uppercase tracking-wide text-blue-800">Custom Loan Details</h3>
+                      <p className="mt-1 text-xs text-slate-600">Adjust any values below as needed before final submission.</p>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+                        <div>
+                          <label className="fieldLabel">Loan Code</label>
+                          <input className="input bg-slate-100" placeholder="Auto generated from scope/route/center" value={form.customer_no} readOnly />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Loan Amount *</label>
+                          <input
+                            className="input bg-slate-100"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="Enter loan amount"
+                            value={form.loan_amount}
+                            onChange={(e) => setForm((p) => ({ ...p, loan_amount: e.target.value }))}
+                            required
+                            disabled
+                          />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Reason</label>
+                          <input className="input" placeholder="Enter reason for loan" value={form.reason} onChange={(e) => setForm((p) => ({ ...p, reason: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Refund Option *</label>
+                          <select className="input" value={form.refund_option} onChange={(e) => setForm((p) => ({ ...p, refund_option: e.target.value }))} required>
+                            <option value="day">Day</option>
+                            <option value="week">Week</option>
+                            <option value="month">Month</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Interest Rate (%) *</label>
+                          <input
+                            className="input"
+                            type="number"
+                            min="0"
+                            step="0.0000001"
+                            inputMode="decimal"
+                            placeholder="e.g. 5.5555555"
+                            value={form.interest_rate}
+                            onChange={(e) => handleInterestRateChange(e.target.value)}
+                            onBlur={handleInterestRateBlur}
+                            required
+                          />
+                          <p className="text-[11px] text-slate-500 mt-1">Up to {INTEREST_RATE_MAX_DECIMALS} decimal places</p>
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Interest Type *</label>
+                          <select className="input" value={form.interest_type} onChange={(e) => setForm((p) => ({ ...p, interest_type: e.target.value }))} required>
+                            <option value="flat">Flat</option>
+                            <option value="reducing">Reducing</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Terms Count ({termUnitLabel}) *</label>
+                          <input className="input" type="number" min="1" step="1" placeholder={`Enter number of ${termUnitLabel.toLowerCase()}`} value={form.terms_count} onChange={(e) => setForm((p) => ({ ...p, terms_count: e.target.value }))} required />
+                          <p className="text-[11px] text-slate-500 mt-1">Conversion: 4 weeks = 1 month, 25 days = 1 month</p>
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Refundable Amount</label>
+                          <input className="input bg-slate-100" placeholder="Auto calculated" value={form.refundable_amount} readOnly />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Installment Amount</label>
+                          <input className="input bg-slate-100" placeholder="Auto calculated" value={form.installment_amount} readOnly />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Document Charges</label>
+                          <input className="input" type="number" min="0" step="0.01" placeholder="Enter document charges" value={form.document_charges} onChange={(e) => setForm((p) => ({ ...p, document_charges: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Stamp Charges</label>
+                          <input className="input" type="number" min="0" step="0.01" placeholder="Enter stamp charges" value={form.stamp_charges} onChange={(e) => setForm((p) => ({ ...p, stamp_charges: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Insurance Charges</label>
+                          <input className="input" type="number" min="0" step="0.01" placeholder="Enter insurance charges" value={form.insurance_charges} onChange={(e) => setForm((p) => ({ ...p, insurance_charges: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Charges Collection Mode *</label>
+                          <select className="input" value={form.charge_payment_mode} onChange={(e) => setForm((p) => ({ ...p, charge_payment_mode: e.target.value }))} required>
+                            <option value="hand_cash">Collect by Hand Cash</option>
+                            <option value="deduct_from_loan">Reduce from Loan Amount</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Balance Amount</label>
+                          <input
+                            className="input bg-slate-100"
+                            value={balanceAmount.toFixed(2)}
+                            readOnly
+                          />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Loan Request Date *</label>
+                          <input className="input" type="date" value={form.loan_request_date} onChange={(e) => setForm((p) => ({ ...p, loan_request_date: e.target.value }))} required />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-blue-200 bg-white/95 p-4">
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                          <h3 className="text-sm font-bold uppercase tracking-wide text-blue-800">Product Loan Details</h3>
+                          <p className="mt-1 text-xs text-slate-600">Loan terms are auto-filled from selected product. Custom section is hidden.</p>
+                        </div>
+                        <label className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2 text-xs font-semibold text-blue-800">
+                          <input
+                            type="checkbox"
+                            checked={isProductDetailsEditable}
+                            onChange={(e) => setIsProductDetailsEditable(e.target.checked)}
+                          />
+                          Enable edit
+                        </label>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+                        <div>
+                          <label className="fieldLabel">Loan Code</label>
+                          <input className="input bg-slate-100" placeholder="Auto generated from scope/route/center" value={form.customer_no} readOnly />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Loan Amount *</label>
+                          <input
+                            className={`input ${isProductDetailsEditable ? '' : 'bg-slate-100'}`}
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="Enter loan amount"
+                            value={form.loan_amount}
+                            onChange={(e) => setForm((p) => ({ ...p, loan_amount: e.target.value }))}
+                            required
+                            disabled={!isProductDetailsEditable}
+                            readOnly={!isProductDetailsEditable}
+                          />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Reason</label>
+                          <input className="input" placeholder="Enter reason for loan" value={form.reason} onChange={(e) => setForm((p) => ({ ...p, reason: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Refund Option</label>
+                          <select
+                            className={`input ${isProductDetailsEditable ? '' : 'bg-slate-100'}`}
+                            value={form.refund_option}
+                            onChange={(e) => setForm((p) => ({ ...p, refund_option: e.target.value }))}
+                            disabled={!isProductDetailsEditable}
+                          >
+                            <option value="day">Day</option>
+                            <option value="week">Week</option>
+                            <option value="month">Month</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Interest Rate (%)</label>
+                          <input
+                            className={`input ${isProductDetailsEditable ? '' : 'bg-slate-100'}`}
+                            type="number"
+                            min="0"
+                            step="0.0000001"
+                            inputMode="decimal"
+                            value={form.interest_rate}
+                            onChange={(e) => handleInterestRateChange(e.target.value)}
+                            onBlur={handleInterestRateBlur}
+                            disabled={!isProductDetailsEditable}
+                            readOnly={!isProductDetailsEditable}
+                          />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Interest Type</label>
+                          <select
+                            className={`input ${isProductDetailsEditable ? '' : 'bg-slate-100'}`}
+                            value={form.interest_type}
+                            onChange={(e) => setForm((p) => ({ ...p, interest_type: e.target.value }))}
+                            disabled={!isProductDetailsEditable}
+                          >
+                            <option value="flat">Flat</option>
+                            <option value="reducing">Reducing</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Terms Count ({termUnitLabel})</label>
+                          <input
+                            className={`input ${isProductDetailsEditable ? '' : 'bg-slate-100'}`}
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={form.terms_count || ''}
+                            onChange={(e) => setForm((p) => ({ ...p, terms_count: e.target.value }))}
+                            disabled={!isProductDetailsEditable}
+                            readOnly={!isProductDetailsEditable}
+                          />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Refundable Amount</label>
+                          <input className="input bg-slate-100" placeholder="Auto calculated" value={form.refundable_amount} readOnly />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Installment Amount</label>
+                          <input className="input bg-slate-100" placeholder="Auto calculated" value={form.installment_amount} readOnly />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Document Charges</label>
+                          <input className="input" type="number" min="0" step="0.01" placeholder="Enter document charges" value={form.document_charges} onChange={(e) => setForm((p) => ({ ...p, document_charges: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Stamp Charges</label>
+                          <input className="input" type="number" min="0" step="0.01" placeholder="Enter stamp charges" value={form.stamp_charges} onChange={(e) => setForm((p) => ({ ...p, stamp_charges: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Insurance Charges</label>
+                          <input className="input" type="number" min="0" step="0.01" placeholder="Enter insurance charges" value={form.insurance_charges} onChange={(e) => setForm((p) => ({ ...p, insurance_charges: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Charges Collection Mode *</label>
+                          <select className="input" value={form.charge_payment_mode} onChange={(e) => setForm((p) => ({ ...p, charge_payment_mode: e.target.value }))} required>
+                            <option value="hand_cash">Collect by Hand Cash</option>
+                            <option value="deduct_from_loan">Reduce from Loan Amount</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Balance Amount</label>
+                          <input className="input bg-slate-100" value={balanceAmount.toFixed(2)} readOnly />
+                        </div>
+                        <div>
+                          <label className="fieldLabel">Loan Request Date *</label>
+                          <input className="input" type="date" value={form.loan_request_date} onChange={(e) => setForm((p) => ({ ...p, loan_request_date: e.target.value }))} required />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
               )}

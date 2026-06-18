@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
@@ -14,13 +14,19 @@ type LoanStatRow = {
   due_date?: string | null;
   loan_amount?: number | string;
   refundable_amount?: number | string;
+  loan_balance?: number | string;
   arrears_balance?: number | string;
+  document_charges?: number | string;
+  stamp_charges?: number | string;
+  insurance_charges?: number | string;
 };
 
 type CollectionStatRow = {
   mf_loan_request_id: number | string;
   collection_date?: string | null;
+  created_at?: string | null;
   collected_amount: number | string;
+  capital_amount?: number | string;
   interest_amount?: number | string;
   penalty_amount?: number | string;
 };
@@ -45,6 +51,15 @@ type AuthUser = {
   }>;
 };
 
+type ChargeByOfficerRow = {
+  officer: string;
+  documentCharges: number;
+  stampCharges: number;
+  insuranceCharges: number;
+  totalCharges: number;
+  loanCount: number;
+};
+
 export default function MicrofinanceDashboard() {
   const [token, setToken] = useState('');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -65,6 +80,8 @@ export default function MicrofinanceDashboard() {
     monthProfit: 0,
   });
   const [statsLoading, setStatsLoading] = useState(false);
+  const [chargesByOfficer, setChargesByOfficer] = useState<ChargeByOfficerRow[]>([]);
+  const [selectedChargeOfficer, setSelectedChargeOfficer] = useState('all');
   const router = useRouter();
   const apiBase = getApiBaseUrl();
 
@@ -75,6 +92,13 @@ export default function MicrofinanceDashboard() {
       .replace(/[^a-z0-9]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+
+  const toLocalDateKey = (value: Date) => {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
 
   const designationName = normalizeText(String(authUser?.designation?.name || ''));
   const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
@@ -192,10 +216,6 @@ export default function MicrofinanceDashboard() {
       return hasMicrofinanceSettingsAccess;
     }
 
-    if (isFieldOfficer) {
-      return module.name !== 'Loan Management';
-    }
-
     return true;
   });
 
@@ -208,6 +228,15 @@ export default function MicrofinanceDashboard() {
       description: 'Summarize daily and period-wise collection performance.',
       path: '/dashboard/microfinance/reports/collection',
       permissionTokens: ['collection report', 'micro finance related reports', '/dashboard/microfinance/reports/collection'],
+    },
+    {
+      name: 'Charges Report',
+      icon: '🧮',
+      color: 'from-cyan-500 to-teal-500',
+      bgColor: 'from-cyan-50 to-teal-50',
+      description: 'Detailed loan charge analysis with officer and status filters.',
+      path: '/dashboard/microfinance/reports/charges',
+      permissionTokens: ['charges report', '/dashboard/microfinance/reports/charges'],
     },
     {
       name: 'Field Officer Collection Report',
@@ -380,6 +409,28 @@ export default function MicrofinanceDashboard() {
     isAdminUser || hasAnyPermissionName(item.permissionNames)
   );
 
+  const visibleChargeRows = useMemo(() => {
+    if (selectedChargeOfficer === 'all') {
+      return chargesByOfficer;
+    }
+
+    return chargesByOfficer.filter((row) => row.officer === selectedChargeOfficer);
+  }, [chargesByOfficer, selectedChargeOfficer]);
+
+  const chargeTotals = useMemo(() => {
+    return visibleChargeRows.reduce(
+      (acc, row) => {
+        acc.document += row.documentCharges;
+        acc.stamp += row.stampCharges;
+        acc.insurance += row.insuranceCharges;
+        acc.total += row.totalCharges;
+        acc.loans += row.loanCount;
+        return acc;
+      },
+      { document: 0, stamp: 0, insurance: 0, total: 0, loans: 0 }
+    );
+  }, [visibleChargeRows]);
+
   useEffect(() => {
     if (!token) return;
 
@@ -432,17 +483,30 @@ export default function MicrofinanceDashboard() {
         const scopedCollections = allCollections.filter((row) => scopedLoanIds.has(Number(row.mf_loan_request_id || 0)));
 
         const paidByLoan = new Map<number, number>();
+        const paidTowardRefundableByLoan = new Map<number, number>();
         const principalPaidByLoan = new Map<number, number>();
         scopedCollections.forEach((row) => {
           const loanId = Number(row.mf_loan_request_id || 0);
           if (!loanId) return;
 
           const collected = Number(row.collected_amount || 0);
+          const capitalRaw = row.capital_amount;
+          const hasCapitalAmount = capitalRaw !== undefined && capitalRaw !== null && String(capitalRaw).trim() !== '';
+          const capital = hasCapitalAmount ? Number(capitalRaw) : Number.NaN;
           const interest = Number(row.interest_amount || 0);
           const penalty = Number(row.penalty_amount || 0);
-          const principalPortion = Math.max(collected - interest - penalty, 0);
+          const principalPortion = Number.isFinite(capital)
+            ? Math.max(capital, 0)
+            : Math.max(collected - interest - penalty, 0);
+          const refundablePortion = Number.isFinite(capital)
+            ? Math.max(capital, 0) + Math.max(interest, 0)
+            : Math.max(collected - penalty, 0);
 
           paidByLoan.set(loanId, (paidByLoan.get(loanId) || 0) + collected);
+          paidTowardRefundableByLoan.set(
+            loanId,
+            (paidTowardRefundableByLoan.get(loanId) || 0) + refundablePortion
+          );
           principalPaidByLoan.set(loanId, (principalPaidByLoan.get(loanId) || 0) + principalPortion);
         });
 
@@ -450,6 +514,41 @@ export default function MicrofinanceDashboard() {
           const status = String(loan.status || '').toLowerCase();
           return status === 'approved' || status === 'released';
         });
+
+        const chargeMap = new Map<string, ChargeByOfficerRow>();
+        scopedLoans.forEach((loan) => {
+          const officer = String(loan.field_officer || '').trim() || 'Unassigned';
+          const documentCharges = Number(loan.document_charges || 0);
+          const stampCharges = Number(loan.stamp_charges || 0);
+          const insuranceCharges = Number(loan.insurance_charges || 0);
+
+          const existing = chargeMap.get(officer) || {
+            officer,
+            documentCharges: 0,
+            stampCharges: 0,
+            insuranceCharges: 0,
+            totalCharges: 0,
+            loanCount: 0,
+          };
+
+          existing.documentCharges += documentCharges;
+          existing.stampCharges += stampCharges;
+          existing.insuranceCharges += insuranceCharges;
+          existing.totalCharges += documentCharges + stampCharges + insuranceCharges;
+          existing.loanCount += 1;
+          chargeMap.set(officer, existing);
+        });
+
+        const nextChargeRows = Array.from(chargeMap.values()).sort((a, b) => b.totalCharges - a.totalCharges);
+        setChargesByOfficer(nextChargeRows);
+        if (nextChargeRows.length === 0) {
+          setSelectedChargeOfficer('all');
+        } else if (
+          selectedChargeOfficer !== 'all' &&
+          !nextChargeRows.some((row) => row.officer === selectedChargeOfficer)
+        ) {
+          setSelectedChargeOfficer('all');
+        }
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -461,7 +560,7 @@ export default function MicrofinanceDashboard() {
           if (Number.isNaN(dueDate.getTime()) || dueDate > today) return false;
 
           const totalPayable = Number(loan.refundable_amount || 0);
-          const paid = paidByLoan.get(Number(loan.id)) || 0;
+          const paid = paidTowardRefundableByLoan.get(Number(loan.id)) || 0;
           return totalPayable - paid > 0;
         }).length;
 
@@ -475,7 +574,7 @@ export default function MicrofinanceDashboard() {
           if (Number.isNaN(dueDate.getTime()) || dueDate >= today) return false;
 
           const totalPayable = Number(loan.refundable_amount || 0);
-          const paid = paidByLoan.get(Number(loan.id)) || 0;
+          const paid = paidTowardRefundableByLoan.get(Number(loan.id)) || 0;
           return totalPayable - paid > 0;
         }).length;
 
@@ -486,29 +585,49 @@ export default function MicrofinanceDashboard() {
 
         const defaultRate = activeLoans.length > 0 ? (defaultedCount / activeLoans.length) * 100 : 0;
 
-        const todayKey = new Date().toISOString().slice(0, 10);
+        const todayKey = toLocalDateKey(new Date());
         const monthKey = todayKey.slice(0, 7);
 
         const totalOutstandingAmount = activeLoans.reduce((sum, loan) => {
           const refundable = Number(loan.refundable_amount || 0);
-          const paid = paidByLoan.get(Number(loan.id)) || 0;
-          return sum + Math.max(refundable - paid, 0);
+          const collected = paidByLoan.get(Number(loan.id)) || 0;
+
+          // Outstanding due amount = refundable total - total collected for each loan.
+          if (Number.isFinite(refundable) && refundable > 0) {
+            return sum + Math.max(refundable - collected, 0);
+          }
+
+          // Legacy fallback when refundable_amount is missing.
+          const loanBalance = Number(loan.loan_balance);
+          if (Number.isFinite(loanBalance) && loanBalance >= 0) {
+            return sum + loanBalance;
+          }
+
+          return sum;
         }, 0);
 
         const assetValueTotal = activeLoans.reduce((sum, loan) => {
+          // Asset value should represent remaining principal. Prefer loan_balance
+          // because it is persisted and already reconciled on backend updates.
+          const loanBalance = Number(loan.loan_balance);
+          if (Number.isFinite(loanBalance) && loanBalance >= 0) {
+            return sum + loanBalance;
+          }
+
+          // Fallback for legacy records where loan_balance is absent.
           const principal = Number(loan.loan_amount || 0);
           const principalPaid = principalPaidByLoan.get(Number(loan.id)) || 0;
           return sum + Math.max(principal - principalPaid, 0);
         }, 0);
 
         const todayCollection = scopedCollections.reduce((sum, row) => {
-          const dateKey = String(row.collection_date || '').slice(0, 10);
+          const dateKey = String(row.collection_date || row.created_at || '').slice(0, 10);
           if (dateKey !== todayKey) return sum;
           return sum + Number(row.collected_amount || 0);
         }, 0);
 
         const monthCollection = scopedCollections.reduce((sum, row) => {
-          const dateKey = String(row.collection_date || '').slice(0, 7);
+          const dateKey = String(row.collection_date || row.created_at || '').slice(0, 7);
           if (dateKey !== monthKey) return sum;
           return sum + Number(row.collected_amount || 0);
         }, 0);
@@ -520,13 +639,13 @@ export default function MicrofinanceDashboard() {
         }, 0);
 
         const todayProfit = scopedCollections.reduce((sum, row) => {
-          const dateKey = String(row.collection_date || '').slice(0, 10);
+          const dateKey = String(row.collection_date || row.created_at || '').slice(0, 10);
           if (dateKey !== todayKey) return sum;
           return sum + Number(row.interest_amount || 0) + Number(row.penalty_amount || 0);
         }, 0);
 
         const monthProfit = scopedCollections.reduce((sum, row) => {
-          const dateKey = String(row.collection_date || '').slice(0, 7);
+          const dateKey = String(row.collection_date || row.created_at || '').slice(0, 7);
           if (dateKey !== monthKey) return sum;
           return sum + Number(row.interest_amount || 0) + Number(row.penalty_amount || 0);
         }, 0);
@@ -563,6 +682,8 @@ export default function MicrofinanceDashboard() {
           todayProfit: 0,
           monthProfit: 0,
         });
+        setChargesByOfficer([]);
+        setSelectedChargeOfficer('all');
       } finally {
         setStatsLoading(false);
       }
@@ -758,6 +879,114 @@ export default function MicrofinanceDashboard() {
             {visibleSummaryReportCards.length === 0 && (
               <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                 No summary cards are available for your current permissions.
+              </div>
+            )}
+          </div>
+
+          <div className="mb-8 rounded-2xl border border-cyan-100 bg-white/80 p-5">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+              <div>
+                <h4 className="text-lg font-bold text-slate-900">Charges Report</h4>
+                <p className="text-xs text-slate-600 mt-1">
+                  Document, stamp, and insurance charges grouped by field officer.
+                </p>
+              </div>
+              <div className="flex w-full md:w-auto items-end gap-2">
+                <div className="w-full md:w-72">
+                  <label className="text-xs font-semibold text-slate-600">Filter by Field Officer</label>
+                  <select
+                    className="mt-1 w-full rounded-lg border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-800"
+                    value={selectedChargeOfficer}
+                    onChange={(e) => setSelectedChargeOfficer(e.target.value)}
+                  >
+                    <option value="all">All Field Officers</option>
+                    {chargesByOfficer.map((row) => (
+                      <option key={row.officer} value={row.officer}>
+                        {row.officer}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => router.push('/dashboard/microfinance/reports/charges')}
+                  className="h-10 shrink-0 rounded-lg border border-cyan-200 bg-cyan-50 px-3 text-xs font-semibold text-cyan-800 hover:bg-cyan-100"
+                >
+                  Open Detailed Report
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mb-4">
+              <div className="rounded-xl border border-cyan-100 bg-white p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Document Charges</p>
+                <p className="text-base font-extrabold text-slate-900">
+                  {statsLoading
+                    ? '...'
+                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.document)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-cyan-100 bg-white p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stamp Charges</p>
+                <p className="text-base font-extrabold text-slate-900">
+                  {statsLoading
+                    ? '...'
+                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.stamp)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-cyan-100 bg-white p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Insurance Charges</p>
+                <p className="text-base font-extrabold text-slate-900">
+                  {statsLoading
+                    ? '...'
+                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.insurance)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-cyan-100 bg-white p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Charges</p>
+                <p className="text-base font-extrabold text-cyan-700">
+                  {statsLoading
+                    ? '...'
+                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.total)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-cyan-100 bg-white p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Loans Count</p>
+                <p className="text-base font-extrabold text-slate-900">
+                  {statsLoading ? '...' : chargeTotals.loans.toLocaleString()}
+                </p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border border-cyan-100 bg-white">
+              <table className="min-w-full text-sm">
+                <thead className="bg-cyan-50 text-slate-700">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-semibold">Field Officer</th>
+                    <th className="px-3 py-2 text-right font-semibold">Loans</th>
+                    <th className="px-3 py-2 text-right font-semibold">Document</th>
+                    <th className="px-3 py-2 text-right font-semibold">Stamp</th>
+                    <th className="px-3 py-2 text-right font-semibold">Insurance</th>
+                    <th className="px-3 py-2 text-right font-semibold">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleChargeRows.map((row) => (
+                    <tr key={row.officer} className="border-t border-cyan-50">
+                      <td className="px-3 py-2 text-slate-800">{row.officer}</td>
+                      <td className="px-3 py-2 text-right text-slate-700">{row.loanCount.toLocaleString()}</td>
+                      <td className="px-3 py-2 text-right text-slate-700">{row.documentCharges.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-right text-slate-700">{row.stampCharges.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-right text-slate-700">{row.insuranceCharges.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-cyan-700">{row.totalCharges.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {!statsLoading && visibleChargeRows.length === 0 && (
+              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                No charge records found for the selected field officer.
               </div>
             )}
           </div>

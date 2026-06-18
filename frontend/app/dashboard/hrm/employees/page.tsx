@@ -203,6 +203,8 @@ export default function Employees() {
   const [branchId, setBranchId] = useState('');
   const [reportingPerson, setReportingPerson] = useState('');
   const [status, setStatus] = useState<'active' | 'inactive'>('active');
+  const [createWallet, setCreateWallet] = useState(true);
+  const [walletOpeningBalance, setWalletOpeningBalance] = useState('');
 
   // Documents state
   const [documents, setDocuments] = useState<EmployeeDocument[]>([]);
@@ -574,6 +576,8 @@ export default function Employees() {
     setBranchId('');
     setReportingPerson('');
     setStatus('active');
+    setCreateWallet(true);
+    setWalletOpeningBalance('');
     setEmployeeLeaveBalances([]);
     setSelectedLeaveType('');
     setLeaveDays('');
@@ -619,6 +623,11 @@ export default function Employees() {
       branch_id: parseInt(branchId),
       reporting_person: reportingPerson.trim() ? reportingPerson.trim() : undefined,
       status,
+      create_wallet: !editingEmployee ? createWallet : undefined,
+      wallet_opening_balance:
+        !editingEmployee && createWallet && walletOpeningBalance !== ''
+          ? parseFloat(walletOpeningBalance)
+          : undefined,
       leave_balances: employeeLeaveBalances.length > 0 ? employeeLeaveBalances : undefined,
     };
 
@@ -681,6 +690,8 @@ export default function Employees() {
     setBranchId(employee.branch?.id?.toString?.() || '');
     setReportingPerson(employee.reporting_person || '');
     setStatus(employee.status);
+    setCreateWallet(false);
+    setWalletOpeningBalance('');
     setShowForm(true);
 
     if (!token) return;
@@ -716,6 +727,8 @@ export default function Employees() {
       setBranchId(String(full.branch?.id ?? full.branch_id ?? ''));
       setReportingPerson(full.reporting_person || '');
       setStatus(full.status || 'active');
+      setCreateWallet(false);
+      setWalletOpeningBalance('');
     } catch (error) {
       console.error('Error loading employee for edit:', error);
     } finally {
@@ -1677,6 +1690,40 @@ export default function Employees() {
                   <h4 className="text-sm font-semibold text-indigo-900">Other Details</h4>
                   <p className="text-xs text-indigo-700 mt-1">Compensation, statutory contributions, tax setup, and organizational assignment.</p>
                 </div>
+
+                {!editingEmployee && (
+                  <div className="md:col-span-2 rounded-xl border border-emerald-100 bg-emerald-50/70 px-4 py-3">
+                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                      <div>
+                        <h4 className="text-sm font-semibold text-emerald-900">Employee Wallet</h4>
+                        <p className="text-xs text-emerald-700 mt-1">Optionally create a wallet when registering this employee.</p>
+                      </div>
+                      <label className="inline-flex items-center gap-2 text-sm font-medium text-emerald-900">
+                        <input
+                          type="checkbox"
+                          checked={createWallet}
+                          onChange={(e) => setCreateWallet(e.target.checked)}
+                          className="h-4 w-4 rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        Create wallet
+                      </label>
+                    </div>
+                    {createWallet && (
+                      <div className="mt-3 max-w-xs">
+                        <label className="block text-xs font-semibold text-emerald-800 mb-1">Opening Balance</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={walletOpeningBalance}
+                          onChange={(e) => setWalletOpeningBalance(e.target.value)}
+                          className="w-full px-4 py-2.5 border border-emerald-200 rounded-xl bg-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 text-gray-900"
+                          placeholder="0.00"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">

@@ -3,9 +3,29 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+type AuthUser = {
+    designation?: { name?: string } | null;
+    roles?: Array<{ name?: string | null }> | null;
+};
+
 export default function LoanManagementPage() {
     const [token, setToken] = useState('');
+    const [authUser, setAuthUser] = useState<AuthUser | null>(null);
     const router = useRouter();
+
+    const normalizeText = (value: string) =>
+        String(value || '')
+            .toLowerCase()
+            .trim()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+    const designationName = normalizeText(String(authUser?.designation?.name || ''));
+    const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+    const isFieldOfficer =
+        designationName.includes('field officer') ||
+        roleNames.some((role) => role.includes('field officer'));
 
     useEffect(() => {
         const storedToken = localStorage.getItem('token');
@@ -13,6 +33,16 @@ export default function LoanManagementPage() {
             router.push('/');
         } else {
             setToken(storedToken);
+            const storedUser = localStorage.getItem('auth_user');
+            if (storedUser) {
+                try {
+                    setAuthUser(JSON.parse(storedUser));
+                } catch {
+                    setAuthUser(null);
+                }
+            } else {
+                setAuthUser(null);
+            }
         }
     }, [router]);
 
@@ -48,6 +78,7 @@ export default function LoanManagementPage() {
             path: '/dashboard/microfinance/loans/released',
         },
     ];
+    const visibleOptions = options.filter((option) => !(isFieldOfficer && option.title === 'Loan Approvals'));
 
     if (!token) {
         return (
@@ -88,7 +119,7 @@ export default function LoanManagementPage() {
                     <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div className="rounded-xl border border-cyan-100 bg-white/90 p-4">
                             <p className="text-xs text-slate-500 uppercase tracking-wide">Workspaces</p>
-                            <p className="text-2xl font-extrabold text-slate-900 mt-1">{options.length}</p>
+                            <p className="text-2xl font-extrabold text-slate-900 mt-1">{visibleOptions.length}</p>
                         </div>
                         <div className="rounded-xl border border-cyan-100 bg-white/90 p-4">
                             <p className="text-xs text-slate-500 uppercase tracking-wide">Status</p>
@@ -102,7 +133,7 @@ export default function LoanManagementPage() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                    {options.map((option, index) => (
+                    {visibleOptions.map((option, index) => (
                         <button
                             key={option.title}
                             type="button"

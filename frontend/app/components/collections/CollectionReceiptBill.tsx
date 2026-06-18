@@ -134,6 +134,9 @@ type Props = {
   receipt: CollectionReceipt | null;
   onClose: () => void;
   companyName?: string;
+  companyAddress?: string;
+  companyContactNo?: string;
+  companyLogoUrl?: string;
   defaultPrintFormat?: ReceiptPrintFormat;
 };
 
@@ -142,6 +145,9 @@ export default function CollectionReceiptBill({
   receipt,
   onClose,
   companyName = "BMS Collection Center",
+  companyAddress = "",
+  companyContactNo = "",
+  companyLogoUrl = "",
   defaultPrintFormat = "thermal-80",
 }: Props) {
   const printRef = useRef<HTMLDivElement>(null);
@@ -218,7 +224,16 @@ export default function CollectionReceiptBill({
             className={`mx-auto w-full ${previewWidthClass(printFormat)} bg-white border border-dashed border-slate-400 p-3 font-mono text-[11px] text-black shadow-sm`}
           >
             <div className="center text-center mb-2">
+              {companyLogoUrl ? (
+                <img
+                  src={companyLogoUrl}
+                  alt="Company logo"
+                  className="mx-auto mb-1 h-14 w-14 object-contain"
+                />
+              ) : null}
               <p className="title text-xs font-bold uppercase">{companyName}</p>
+              {companyAddress ? <p className="text-[10px] mt-0.5">{companyAddress}</p> : null}
+              {companyContactNo ? <p className="text-[10px] mt-0.5">Contact: {companyContactNo}</p> : null}
               <p className="text-[10px] font-bold uppercase mt-1">OFFICIAL COLLECTION RECEIPT</p>
               <p className="text-[10px] mt-0.5">{receipt.product_label}</p>
             </div>

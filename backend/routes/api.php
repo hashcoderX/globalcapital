@@ -31,6 +31,7 @@ use App\Http\Controllers\Api\Microfinance\GroupController as MicrofinanceGroupCo
 use App\Http\Controllers\Api\Microfinance\CenterController as MicrofinanceCenterController;
 use App\Http\Controllers\Api\Microfinance\HolidayController as MicrofinanceHolidayController;
 use App\Http\Controllers\Api\Microfinance\PenaltySettingController as MicrofinancePenaltySettingController;
+use App\Http\Controllers\Api\Microfinance\LoanProductController as MicrofinanceLoanProductController;
 use App\Http\Controllers\Api\Microfinance\LoanRequestController as MicrofinanceLoanRequestController;
 use App\Http\Controllers\Api\Microfinance\LoanCollectionController as MicrofinanceLoanCollectionController;
 use App\Http\Controllers\Api\FinanceController;
@@ -323,6 +324,7 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
         Route::apiResource('routes', MicrofinanceRouteController::class);
         Route::apiResource('groups', MicrofinanceGroupController::class);
         Route::apiResource('centers', MicrofinanceCenterController::class);
+        Route::apiResource('loan-products', MicrofinanceLoanProductController::class);
         Route::apiResource('holidays', MicrofinanceHolidayController::class);
         Route::get('penalty-rate', [MicrofinancePenaltySettingController::class, 'show']);
         Route::post('penalty-rate', [MicrofinancePenaltySettingController::class, 'store']);

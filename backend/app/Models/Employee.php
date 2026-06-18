@@ -161,6 +161,11 @@ class Employee extends Model
         return $this->hasOne(User::class);
     }
 
+    public function wallet(): HasOne
+    {
+        return $this->hasOne(EmployeeWallet::class);
+    }
+
     public function getFullNameAttribute(): string
     {
         return $this->first_name . ' ' . $this->last_name;

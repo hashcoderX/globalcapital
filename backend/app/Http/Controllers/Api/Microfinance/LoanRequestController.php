@@ -849,7 +849,10 @@ class LoanRequestController extends Controller
 
     private function shiftByRefundOption(\DateTimeImmutable $date, string $refundOption, int $steps = 1): \DateTimeImmutable
     {
-        $safeSteps = max($steps, 1);
+        $safeSteps = max($steps, 0);
+        if ($safeSteps === 0) {
+            return $date;
+        }
 
         if ($refundOption === 'day') {
             return $date->modify('+' . $safeSteps . ' days');
@@ -1002,7 +1005,7 @@ class LoanRequestController extends Controller
         $query = MicrofinanceLoanRequest::with([
             'branch:id,name',
             'route:id,name,code',
-            'center:id,name,code',
+            'center:id,name,code,meeting_day',
             'group:id,name,code',
             'guarantors',
             'documents',
@@ -1723,13 +1726,32 @@ class LoanRequestController extends Controller
         $refundOption = (string)$loanRequest->refund_option;
         $termCount = max((int)$loanRequest->terms_count, 1);
 
+        $meetingDay = (string) optional($loanRequest->center)->meeting_day;
+        $approvalBaseDate = $approveDate->format('Y-m-d');
+        if (!empty($loanRequest->loan_request_date)) {
+            try {
+                $requestDate = new \DateTimeImmutable((string) $loanRequest->loan_request_date);
+                if ($requestDate > $approveDate) {
+                    $approvalBaseDate = $requestDate->format('Y-m-d');
+                }
+            } catch (\Throwable $e) {
+                // keep approval date fallback
+            }
+        }
         $nextPaymentDate = !empty($validated['next_payment_date'])
             ? (string) $validated['next_payment_date']
-            : $this->shiftByRefundOption($approveDate, $refundOption, 1)->format('Y-m-d');
+            : $approvalBaseDate;
+        $nextPaymentDate = $this->alignDateToUpcomingMeetingDay($nextPaymentDate, $meetingDay);
+
         $dueDate = $nextPaymentDate;
         $loanEndDate = !empty($validated['loan_end_date'])
             ? (string) $validated['loan_end_date']
-            : $this->shiftByRefundOption($approveDate, $refundOption, $termCount)->format('Y-m-d');
+            : $this->shiftByRefundOption(
+                new \DateTimeImmutable($nextPaymentDate),
+                $refundOption,
+                max($termCount - 1, 0)
+            )->format('Y-m-d');
+        $loanEndDate = $this->alignDateToMeetingDay($loanEndDate, $meetingDay);
 
         $penaltyStartsOn = (new \DateTimeImmutable($dueDate))
             ->modify('+' . ($graceDays + 1) . ' days')
@@ -1749,11 +1771,63 @@ class LoanRequestController extends Controller
             'message' => 'Loan approved successfully.',
             'data' => $loanRequest->load([
                 'route:id,name,code',
-                'center:id,name,code',
+                'center:id,name,code,meeting_day',
                 'group:id,name,code',
                 'guarantors',
             ]),
         ]);
+    }
+
+    private function alignDateToMeetingDay(string $date, string $meetingDay): string
+    {
+        $normalizedDay = strtolower(trim($meetingDay));
+        if ($normalizedDay === '') {
+            return $date;
+        }
+
+        $dayMap = [
+            'sunday' => 0,
+            'monday' => 1,
+            'tuesday' => 2,
+            'wednesday' => 3,
+            'thursday' => 4,
+            'friday' => 5,
+            'saturday' => 6,
+        ];
+
+        if (!array_key_exists($normalizedDay, $dayMap)) {
+            return $date;
+        }
+
+        try {
+            $cursor = new \DateTimeImmutable($date);
+        } catch (\Throwable $e) {
+            return $date;
+        }
+
+        $targetDow = $dayMap[$normalizedDay];
+        $currentDow = (int) $cursor->format('w');
+        $delta = ($targetDow - $currentDow + 7) % 7;
+
+        return $cursor->modify('+' . $delta . ' days')->format('Y-m-d');
+    }
+
+    private function alignDateToUpcomingMeetingDay(string $date, string $meetingDay): string
+    {
+        $aligned = $this->alignDateToMeetingDay($date, $meetingDay);
+
+        try {
+            $original = new \DateTimeImmutable($date);
+            $next = new \DateTimeImmutable($aligned);
+        } catch (\Throwable $e) {
+            return $aligned;
+        }
+
+        if ($next <= $original) {
+            return $next->modify('+7 days')->format('Y-m-d');
+        }
+
+        return $aligned;
     }
 
     public function reject(Request $request, MicrofinanceLoanRequest $loanRequest)

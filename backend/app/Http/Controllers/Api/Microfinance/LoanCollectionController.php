@@ -52,10 +52,43 @@ class LoanCollectionController extends Controller
         return $branchId > 0 ? $branchId : null;
     }
 
-    private function shiftDateByRefundOption(\DateTimeImmutable $date, string $refundOption, int $steps = 1): \DateTimeImmutable
+    private function alignDateToMeetingDay(\DateTimeImmutable $date, ?string $meetingDay): \DateTimeImmutable
+    {
+        $normalizedDay = strtolower(trim((string) $meetingDay));
+        if ($normalizedDay === '') {
+            return $date;
+        }
+
+        $dayMap = [
+            'sunday' => 0,
+            'monday' => 1,
+            'tuesday' => 2,
+            'wednesday' => 3,
+            'thursday' => 4,
+            'friday' => 5,
+            'saturday' => 6,
+        ];
+
+        if (!array_key_exists($normalizedDay, $dayMap)) {
+            return $date;
+        }
+
+        $targetDow = $dayMap[$normalizedDay];
+        $currentDow = (int) $date->format('w');
+        $delta = ($targetDow - $currentDow + 7) % 7;
+
+        return $date->modify('+' . $delta . ' days');
+    }
+
+    private function shiftDateByRefundOption(
+        \DateTimeImmutable $date,
+        string $refundOption,
+        int $steps = 1,
+        ?string $meetingDay = null
+    ): \DateTimeImmutable
     {
         if ($steps === 0) {
-            return $date;
+            return $this->alignDateToMeetingDay($date, $meetingDay);
         }
 
         $interval = '+1 month';
@@ -74,6 +107,8 @@ class LoanCollectionController extends Controller
             } else {
                 $cursor = $cursor->modify(str_replace('+', '-', $interval));
             }
+
+            $cursor = $this->alignDateToMeetingDay($cursor, $meetingDay);
         }
 
         return $cursor;
@@ -163,7 +198,8 @@ class LoanCollectionController extends Controller
             }
         }
 
-        $loanRequest = MicrofinanceLoanRequest::findOrFail((int)$validated['loan_request_id']);
+        $loanRequest = MicrofinanceLoanRequest::with('center:id,meeting_day')->findOrFail((int)$validated['loan_request_id']);
+        $meetingDay = (string) optional($loanRequest->center)->meeting_day;
 
         $branchId = $this->scopedBranchId($request);
         if ($branchId !== null && (int) ($loanRequest->branch_id ?? 0) !== $branchId) {
@@ -191,6 +227,7 @@ class LoanCollectionController extends Controller
         $dueCursor = !empty($loanRequest->due_date)
             ? new \DateTimeImmutable((string)$loanRequest->due_date)
             : $collectionDate;
+        $dueCursor = $this->alignDateToMeetingDay($dueCursor, $meetingDay);
         $refundOption = (string)($loanRequest->refund_option ?: 'month');
 
         $accrualCapDate = $collectionDate;
@@ -211,7 +248,7 @@ class LoanCollectionController extends Controller
         // Accrue expected installments for all due cycles reached by collection date.
         while ($dueCursor <= $accrualCapDate) {
             $arrearsBalanceBefore += $installmentAmount;
-            $dueCursor = $this->shiftDateByRefundOption($dueCursor, $refundOption);
+            $dueCursor = $this->shiftDateByRefundOption($dueCursor, $refundOption, 1, $meetingDay);
             $accruedInstallmentCount++;
         }
 
@@ -272,6 +309,7 @@ class LoanCollectionController extends Controller
         $nextPaymentBaseDate = !empty($loanRequest->next_payment_date)
             ? new \DateTimeImmutable((string)$loanRequest->next_payment_date)
             : $collectionDate;
+        $nextPaymentBaseDate = $this->alignDateToMeetingDay($nextPaymentBaseDate, $meetingDay);
 
         if ($collectionDate > $nextPaymentBaseDate) {
             $nextPaymentBaseDate = $collectionDate;
@@ -280,6 +318,7 @@ class LoanCollectionController extends Controller
         $dueBaseDate = !empty($loanRequest->due_date)
             ? new \DateTimeImmutable((string)$loanRequest->due_date)
             : $collectionDate;
+        $dueBaseDate = $this->alignDateToMeetingDay($dueBaseDate, $meetingDay);
 
         if ($collectionDate > $dueBaseDate) {
             $dueBaseDate = $collectionDate;
@@ -287,7 +326,9 @@ class LoanCollectionController extends Controller
 
         $loanRequest->next_payment_date = $this->shiftDateByRefundOption(
             $nextPaymentBaseDate,
-            (string)$loanRequest->refund_option
+            (string)$loanRequest->refund_option,
+            1,
+            $meetingDay
         )->format('Y-m-d');
 
         // Due date must represent the next unpaid schedule point after accrual.
@@ -379,10 +420,12 @@ class LoanCollectionController extends Controller
 
     private function rebuildLoanStateFromCollections(MicrofinanceLoanRequest $loanRequest): void
     {
+        $loanRequest->loadMissing('center:id,meeting_day');
         $loanAmount = (float) $loanRequest->loan_amount;
         $termCount = max((int) $loanRequest->terms_count, 1);
         $installmentAmount = (float) $loanRequest->installment_amount;
         $refundOption = (string) ($loanRequest->refund_option ?: 'month');
+        $meetingDay = (string) optional($loanRequest->center)->meeting_day;
 
         $loanEndDate = null;
         if (!empty($loanRequest->loan_end_date)) {
@@ -416,7 +459,7 @@ class LoanCollectionController extends Controller
 
             while ($dueCursor <= $accrualCapDate) {
                 $arrearsBalance += $installmentAmount;
-                $dueCursor = $this->shiftDateByRefundOption($dueCursor, $refundOption);
+                $dueCursor = $this->shiftDateByRefundOption($dueCursor, $refundOption, 1, $meetingDay);
             }
 
             $arrearsBalance = round($arrearsBalance - $collectedAmount, 2);
@@ -426,7 +469,7 @@ class LoanCollectionController extends Controller
                 $nextPaymentDate = $collectionDate;
             }
 
-            $nextPaymentDate = $this->shiftDateByRefundOption($nextPaymentDate, $refundOption);
+            $nextPaymentDate = $this->shiftDateByRefundOption($nextPaymentDate, $refundOption, 1, $meetingDay);
         }
 
         $graceDays = max((int) ($loanRequest->penalty_grace_days ?? 2), 0);
@@ -494,23 +537,25 @@ class LoanCollectionController extends Controller
 
     private function resolveFirstDueDate(MicrofinanceLoanRequest $loanRequest, string $refundOption, int $termCount): \DateTimeImmutable
     {
+        $meetingDay = (string) optional($loanRequest->center)->meeting_day;
+
         if (!empty($loanRequest->loan_end_date)) {
             $loanEndDate = new \DateTimeImmutable((string) $loanRequest->loan_end_date);
             if ($termCount <= 1) {
-                return $loanEndDate;
+                return $this->alignDateToMeetingDay($loanEndDate, $meetingDay);
             }
 
-            return $this->shiftDateByRefundOption($loanEndDate, $refundOption, 0 - ($termCount - 1));
+            return $this->shiftDateByRefundOption($loanEndDate, $refundOption, 0 - ($termCount - 1), $meetingDay);
         }
 
         if (!empty($loanRequest->next_payment_date)) {
-            return new \DateTimeImmutable((string) $loanRequest->next_payment_date);
+            return $this->alignDateToMeetingDay(new \DateTimeImmutable((string) $loanRequest->next_payment_date), $meetingDay);
         }
 
         if (!empty($loanRequest->due_date)) {
-            return new \DateTimeImmutable((string) $loanRequest->due_date);
+            return $this->alignDateToMeetingDay(new \DateTimeImmutable((string) $loanRequest->due_date), $meetingDay);
         }
 
-        return new \DateTimeImmutable(date('Y-m-d'));
+        return $this->alignDateToMeetingDay(new \DateTimeImmutable(date('Y-m-d')), $meetingDay);
     }
 }
