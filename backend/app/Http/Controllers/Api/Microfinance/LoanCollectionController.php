@@ -3,14 +3,91 @@
 namespace App\Http\Controllers\Api\Microfinance;
 
 use App\Http\Controllers\Controller;
+use App\Models\EmployeeWallet;
 use App\Models\MicrofinanceLoanCollection;
 use App\Models\MicrofinanceLoanRequest;
+use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class LoanCollectionController extends Controller
 {
+    private function buildBaseWalletNo(int $employeeId): string
+    {
+        return 'EW' . str_pad((string) $employeeId, 6, '0', STR_PAD_LEFT);
+    }
+
+    private function generateUniqueWalletNo(int $employeeId): string
+    {
+        $baseWalletNo = $this->buildBaseWalletNo($employeeId);
+        $walletNo = $baseWalletNo;
+        $suffix = 1;
+
+        while (EmployeeWallet::query()->where('wallet_no', $walletNo)->exists()) {
+            $walletNo = $baseWalletNo . '-' . $suffix;
+            $suffix++;
+        }
+
+        return $walletNo;
+    }
+
+    private function ensureCollectorWallet(
+        MicrofinanceLoanRequest $loanRequest,
+        User $collectorUser,
+        int $employeeId
+    ): ?EmployeeWallet {
+        $existing = EmployeeWallet::query()
+            ->where('employee_id', $employeeId)
+            ->lockForUpdate()
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        $employee = $collectorUser->employee;
+        if (!$employee || (int) $employee->id !== $employeeId) {
+            return null;
+        }
+
+        return EmployeeWallet::create([
+            'tenant_id' => (int) ($employee->tenant_id ?? $loanRequest->tenant_id ?? $loanRequest->branch_id ?? 1),
+            'branch_id' => (int) ($employee->branch_id ?? $loanRequest->branch_id ?? 1),
+            'employee_id' => $employeeId,
+            'wallet_no' => $this->generateUniqueWalletNo($employeeId),
+            'opening_balance' => 0,
+            'current_balance' => 0,
+            'status' => 'active',
+        ]);
+    }
+
+    private function adjustCollectorWalletBalance(MicrofinanceLoanRequest $loanRequest, ?int $createdByUserId, float $amountDelta): void
+    {
+        if ($amountDelta == 0.0 || !$createdByUserId) {
+            return;
+        }
+
+        $collectorUser = User::query()->with('employee')->find((int) $createdByUserId);
+        if (!$collectorUser) {
+            return;
+        }
+
+        $employeeId = (int) ($collectorUser->employee_id ?? 0);
+        if ($employeeId <= 0) {
+            return;
+        }
+
+        $wallet = $this->ensureCollectorWallet($loanRequest, $collectorUser, $employeeId);
+        if (!$wallet) {
+            return;
+        }
+
+        $newBalance = round((float) ($wallet->current_balance ?? 0) + $amountDelta, 2);
+        $wallet->current_balance = $newBalance;
+        $wallet->save();
+    }
+
     private function isAdminUser(?object $user): bool
     {
         if (!$user) {
@@ -50,6 +127,31 @@ class LoanCollectionController extends Controller
 
         $branchId = (int) ($request->user()?->branch_id ?? 0);
         return $branchId > 0 ? $branchId : null;
+    }
+
+    private function isManagerUser(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        $designationName = strtolower(trim((string) optional($user->designation)->name));
+        if ($designationName !== '' && str_contains($designationName, 'manager')) {
+            return true;
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        foreach ($user->roles()->pluck('name') as $roleName) {
+            $normalized = strtolower(trim((string) $roleName));
+            if ($normalized !== '' && str_contains($normalized, 'manager')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function alignDateToMeetingDay(\DateTimeImmutable $date, ?string $meetingDay): \DateTimeImmutable
@@ -116,9 +218,21 @@ class LoanCollectionController extends Controller
 
     public function index(Request $request)
     {
+        $user = $request->user();
+        $includeDeletedRequested = filter_var($request->get('include_deleted', false), FILTER_VALIDATE_BOOLEAN);
+        $canViewDeleted = $this->isAdminUser($user) || $this->isManagerUser($user);
+        $includeDeleted = $includeDeletedRequested && $canViewDeleted;
+
         $query = MicrofinanceLoanCollection::query()
-            ->with('loanRequest:id,customer_no,customer_name')
+            ->with([
+                'loanRequest:id,customer_no,customer_name',
+                'deletedByUser:id,name,email',
+            ])
             ->orderByDesc('id');
+
+        if ($includeDeleted) {
+            $query->withTrashed();
+        }
 
         if ($request->filled('loan_request_id')) {
             $query->where('mf_loan_request_id', (int)$request->get('loan_request_id'));
@@ -137,6 +251,9 @@ class LoanCollectionController extends Controller
             $interestAmount = (float) ($collection->interest_amount ?? 0);
             $penaltyAmount = (float) ($collection->penalty_amount ?? 0);
             $payload['profit_amount'] = round($interestAmount + $penaltyAmount, 2);
+            $payload['is_deleted'] = $collection->trashed();
+            $payload['deleted_by_name'] = $collection->deletedByUser?->name;
+            $payload['deleted_by_email'] = $collection->deletedByUser?->email;
 
             return $payload;
         })->values();
@@ -254,7 +371,6 @@ class LoanCollectionController extends Controller
 
         $arrearsOutstandingBefore = max($arrearsBalanceBefore, 0);
         $arrearsDeducted = min($collectedAmount, $arrearsOutstandingBefore);
-        $remainingAfterArrears = max($collectedAmount - $arrearsDeducted, 0);
         $arrearsBalanceAfterPayment = $arrearsBalanceBefore - $collectedAmount;
         $arrearsOutstandingAfter = max($arrearsBalanceAfterPayment, 0);
         $extraPaymentAfter = max(-$arrearsBalanceAfterPayment, 0);
@@ -282,7 +398,9 @@ class LoanCollectionController extends Controller
 
         $outstandingPrincipal = max($loanAmount - $totalCapitalCollected, 0);
 
-        $remainingAfterPenalty = max($remainingAfterArrears - $penaltyAmount, 0);
+        // For accounting split, allocate from collected amount after penalty.
+        // Arrears remains a schedule-tracking figure and should not zero-out principal/interest split.
+        $remainingAfterPenalty = max($collectedAmount - $penaltyAmount, 0);
         $interestAmount = min($remainingAfterPenalty, $interestPerInstallment);
         $capitalAmount = max($remainingAfterPenalty - $interestAmount, 0);
 
@@ -292,19 +410,7 @@ class LoanCollectionController extends Controller
             $interestAmount += $overflow;
         }
 
-        $collection = MicrofinanceLoanCollection::create([
-            'mf_loan_request_id' => $loanRequest->id,
-            'collection_date' => $validated['collection_date'],
-            'collected_amount' => $collectedAmount,
-            'capital_amount' => $capitalAmount,
-            'interest_amount' => $interestAmount,
-            'penalty_amount' => $penaltyAmount,
-            'payment_type' => $validated['payment_type'],
-            'payment_reference' => $validated['payment_reference'] ?? null,
-            'note' => $validated['note'] ?? null,
-            'client_reference' => $validated['client_reference'] ?? null,
-            'created_by' => optional($request->user())->id,
-        ]);
+        $collection = null;
 
         $nextPaymentBaseDate = !empty($loanRequest->next_payment_date)
             ? new \DateTimeImmutable((string)$loanRequest->next_payment_date)
@@ -324,22 +430,55 @@ class LoanCollectionController extends Controller
             $dueBaseDate = $collectionDate;
         }
 
-        $loanRequest->next_payment_date = $this->shiftDateByRefundOption(
+        DB::transaction(function () use (
+            $request,
+            $validated,
+            $loanRequest,
+            $collectedAmount,
+            $capitalAmount,
+            $interestAmount,
+            $penaltyAmount,
             $nextPaymentBaseDate,
-            (string)$loanRequest->refund_option,
-            1,
-            $meetingDay
-        )->format('Y-m-d');
+            $meetingDay,
+            $dueCursor,
+            $arrearsBalanceAfterPayment,
+            $outstandingPrincipal,
+            &$collection
+        ): void {
+            $collection = MicrofinanceLoanCollection::create([
+                'mf_loan_request_id' => $loanRequest->id,
+                'collection_date' => $validated['collection_date'],
+                'collected_amount' => $collectedAmount,
+                'capital_amount' => $capitalAmount,
+                'interest_amount' => $interestAmount,
+                'penalty_amount' => $penaltyAmount,
+                'payment_type' => $validated['payment_type'],
+                'payment_reference' => $validated['payment_reference'] ?? null,
+                'note' => $validated['note'] ?? null,
+                'client_reference' => $validated['client_reference'] ?? null,
+                'created_by' => optional($request->user())->id,
+            ]);
 
-        // Due date must represent the next unpaid schedule point after accrual.
-        $loanRequest->due_date = $dueCursor->format('Y-m-d');
-        $loanRequest->arrears_balance = round($arrearsBalanceAfterPayment, 2);
+            $loanRequest->next_payment_date = $this->shiftDateByRefundOption(
+                $nextPaymentBaseDate,
+                (string) $loanRequest->refund_option,
+                1,
+                $meetingDay
+            )->format('Y-m-d');
 
-        if ((float)($outstandingPrincipal - $capitalAmount) <= 0.01) {
-            $loanRequest->status = 'released';
-        }
+            // Due date must represent the next unpaid schedule point after accrual.
+            $loanRequest->due_date = $dueCursor->format('Y-m-d');
+            $loanRequest->arrears_balance = round($arrearsBalanceAfterPayment, 2);
 
-        $loanRequest->save();
+            if ((float) ($outstandingPrincipal - $capitalAmount) <= 0.01) {
+                $loanRequest->status = 'released';
+            }
+
+            $loanRequest->save();
+
+            // Credit collector wallet with received payment amount.
+            $this->adjustCollectorWalletBalance($loanRequest, (int) ($collection?->created_by ?? 0), (float) $collectedAmount);
+        });
 
         $breakdown = [
             'arrears_outstanding_before' => round($arrearsOutstandingBefore, 2),
@@ -380,6 +519,13 @@ class LoanCollectionController extends Controller
 
     public function destroy(Request $request, MicrofinanceLoanCollection $collection)
     {
+        $user = $request->user();
+        if (!$this->isAdminUser($user) && !$this->isManagerUser($user)) {
+            return response()->json([
+                'message' => 'Only manager-level users can delete payment invoices.'
+            ], 403);
+        }
+
         if ($collection->trashed()) {
             return response()->json([
                 'message' => 'Invoice is already deleted.'
@@ -405,6 +551,9 @@ class LoanCollectionController extends Controller
         }
 
         DB::transaction(function () use ($request, $collection, $validated, $loanRequest): void {
+            // Reverse collector wallet balance for deleted invoice amount.
+            $this->adjustCollectorWalletBalance($loanRequest, (int) ($collection->created_by ?? 0), 0 - (float) ($collection->collected_amount ?? 0));
+
             $collection->deleted_by = optional($request->user())->id;
             $collection->deletion_reason = $validated['deletion_reason'] ?? null;
             $collection->save();

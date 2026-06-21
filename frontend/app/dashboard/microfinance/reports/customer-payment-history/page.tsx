@@ -1,7 +1,7 @@
 'use client';
 
 import axios from 'axios';
-import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { getApiBaseUrl } from '@/lib/api';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -259,6 +259,67 @@ export default function CustomerPaymentHistoryReportPage() {
     );
   }, [filteredHistory]);
 
+  const chartData = useMemo(() => {
+    const componentRows = [
+      { key: 'collected', label: 'Collected', value: historySummary.collected, color: 'from-cyan-600 to-cyan-400' },
+      { key: 'capital', label: 'Capital', value: historySummary.capital, color: 'from-emerald-600 to-emerald-400' },
+      { key: 'interest', label: 'Interest', value: historySummary.interest, color: 'from-indigo-600 to-indigo-400' },
+      { key: 'penalty', label: 'Penalty', value: historySummary.penalty, color: 'from-rose-600 to-rose-400' },
+    ];
+
+    const maxComponent = componentRows.reduce((max, row) => Math.max(max, row.value), 0) || 1;
+
+    const timelineRows = [...filteredHistory]
+      .sort((a, b) => {
+        const aTime = new Date(a.date).getTime();
+        const bTime = new Date(b.date).getTime();
+        return (Number.isNaN(aTime) ? 0 : aTime) - (Number.isNaN(bTime) ? 0 : bTime);
+      })
+      .slice(-12)
+      .map((row, index) => {
+        const parsed = new Date(row.date);
+        const label = Number.isNaN(parsed.getTime())
+          ? `P${index + 1}`
+          : new Intl.DateTimeFormat('en-LK', { month: 'short', day: '2-digit' }).format(parsed);
+
+        return {
+          label,
+          amount: row.collected,
+        };
+      });
+
+    const maxTimeline = timelineRows.reduce((max, row) => Math.max(max, row.amount), 0) || 1;
+
+    return {
+      componentRows,
+      maxComponent,
+      timelineRows,
+      maxTimeline,
+    };
+  }, [filteredHistory, historySummary]);
+
+  const timelinePoints = useMemo(() => {
+    const rows = chartData.timelineRows;
+    if (rows.length === 0) return '';
+
+    const width = 760;
+    const height = 220;
+    const left = 30;
+    const right = 24;
+    const top = 20;
+    const bottom = 26;
+    const usableWidth = width - left - right;
+    const usableHeight = height - top - bottom;
+
+    return rows
+      .map((row, index) => {
+        const x = left + (index / Math.max(rows.length - 1, 1)) * usableWidth;
+        const y = top + (1 - row.amount / chartData.maxTimeline) * usableHeight;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(' ');
+  }, [chartData]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-fuchsia-50 via-pink-50 to-rose-100 p-5 md:p-7">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -426,6 +487,71 @@ export default function CustomerPaymentHistoryReportPage() {
                   <p className="mt-1 text-xl font-extrabold text-rose-700">{formatMoney(historySummary.penalty)}</p>
                 </div>
               </div>
+
+              {filteredHistory.length > 0 && (
+                <div className="mt-4 rounded-2xl border border-fuchsia-100 bg-white">
+                  <div className="border-b border-fuchsia-100 bg-gradient-to-r from-fuchsia-50/80 via-pink-50/80 to-rose-50/80 px-4 py-3">
+                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-700">Graphical Preview</h3>
+                    <p className="mt-1 text-xs text-slate-500">Compare payment components and review collected amount trend for latest transactions.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-2">
+                    <div className="rounded-xl border border-fuchsia-100 bg-fuchsia-50/40 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-fuchsia-700">Amount Components</p>
+                      <div className="mt-3 space-y-3">
+                        {chartData.componentRows.map((row) => {
+                          const width = Math.max((row.value / chartData.maxComponent) * 100, row.value > 0 ? 3 : 0);
+                          return (
+                            <div key={row.key}>
+                              <div className="mb-1 flex items-center justify-between text-xs text-slate-700">
+                                <span className="font-semibold">{row.label}</span>
+                                <span>{formatMoney(row.value)}</span>
+                              </div>
+                              <div className="h-3 rounded-full bg-white">
+                                <div className={`h-3 rounded-full bg-gradient-to-r ${row.color}`} style={{ width: `${width}%` }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-cyan-100 bg-cyan-50/35 p-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Collected Trend</p>
+                        <p className="text-xs text-slate-500">Latest {chartData.timelineRows.length} payments</p>
+                      </div>
+                      <svg viewBox="0 0 760 220" className="h-44 w-full">
+                        <rect x="0" y="0" width="760" height="220" fill="transparent" />
+                        {[0, 1, 2, 3, 4].map((step) => {
+                          const y = 20 + (step / 4) * (220 - 46);
+                          return <line key={`h-grid-${step}`} x1="30" y1={y} x2="736" y2={y} stroke="#bae6fd" strokeWidth="1" />;
+                        })}
+                        <polyline
+                          points={timelinePoints}
+                          fill="none"
+                          stroke="#0891b2"
+                          strokeWidth="3"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        {chartData.timelineRows.map((row, index) => {
+                          const x = 30 + (index / Math.max(chartData.timelineRows.length - 1, 1)) * (760 - 30 - 24);
+                          const y = 20 + (1 - row.amount / chartData.maxTimeline) * (220 - 20 - 26);
+                          return (
+                            <g key={`timeline-point-${index}`}>
+                              <circle cx={x} cy={y} r="4" fill="#06b6d4" />
+                              <text x={x} y={212} textAnchor="middle" fontSize="10" fill="#475569">
+                                {row.label}
+                              </text>
+                            </g>
+                          );
+                        })}
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              )}
             </>
           )}
 

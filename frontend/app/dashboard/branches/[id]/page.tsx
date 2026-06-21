@@ -20,6 +20,34 @@ type Branch = {
   } | null;
 };
 
+type BranchAccount = {
+  id: number;
+  company_id?: number;
+  account_type?: string;
+  account_name?: string;
+  bank_name?: string;
+  bank_branch?: string;
+  account_number?: string;
+  opening_balance?: number;
+  current_balance?: number;
+  is_active?: boolean;
+};
+
+type BankAccountDraft = {
+  account_name: string;
+  bank_name: string;
+  bank_branch: string;
+  account_number: string;
+  opening_balance: string;
+  notes: string;
+};
+
+type CashAccountDraft = {
+  account_name: string;
+  opening_balance: string;
+  notes: string;
+};
+
 type ReportItem = {
   title: string;
   description: string;
@@ -53,6 +81,32 @@ export default function BranchDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [branch, setBranch] = useState<Branch | null>(null);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+  const [branchAccounts, setBranchAccounts] = useState<BranchAccount[]>([]);
+  const [bankAccountModalOpen, setBankAccountModalOpen] = useState(false);
+  const [cashAccountModalOpen, setCashAccountModalOpen] = useState(false);
+  const [bankAccountRows, setBankAccountRows] = useState<BankAccountDraft[]>([
+    {
+      account_name: '',
+      bank_name: '',
+      bank_branch: '',
+      account_number: '',
+      opening_balance: '0',
+      notes: '',
+    },
+  ]);
+  const [bankAccountSaving, setBankAccountSaving] = useState(false);
+  const [cashAccountSaving, setCashAccountSaving] = useState(false);
+  const [cashAccountDraft, setCashAccountDraft] = useState<CashAccountDraft>({
+    account_name: '',
+    opening_balance: '0',
+    notes: '',
+  });
+  const [bankAccountNotice, setBankAccountNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -98,6 +152,221 @@ export default function BranchDashboardPage() {
 
     loadBranch();
   }, [apiBase, token, branchId]);
+
+  useEffect(() => {
+    if (!token || !branchId) return;
+
+    const loadBranchAccounts = async () => {
+      setAccountsLoading(true);
+      try {
+        const res = await axios.get(`${apiBase}/companies/${branchId}/accounts`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+        });
+
+        const rows = Array.isArray(res.data?.accounts) ? res.data.accounts : [];
+        setBranchAccounts(rows as BranchAccount[]);
+      } catch {
+        setBranchAccounts([]);
+      } finally {
+        setAccountsLoading(false);
+      }
+    };
+
+    loadBranchAccounts();
+  }, [apiBase, token, branchId]);
+
+  const bankAccounts = useMemo(
+    () => branchAccounts.filter((account) => String(account.account_type || '').toLowerCase() === 'bank'),
+    [branchAccounts]
+  );
+
+  const cashAccount = useMemo(
+    () =>
+      branchAccounts.find(
+        (account) => String(account.account_type || '').toLowerCase() === 'cash'
+      ) || null,
+    [branchAccounts]
+  );
+
+  const addBankAccountRow = () => {
+    setBankAccountRows((prev) => [
+      ...prev,
+      {
+        account_name: '',
+        bank_name: '',
+        bank_branch: '',
+        account_number: '',
+        opening_balance: '0',
+        notes: '',
+      },
+    ]);
+  };
+
+  const removeBankAccountRow = (index: number) => {
+    setBankAccountRows((prev) => prev.filter((_, rowIndex) => rowIndex !== index));
+  };
+
+  const updateBankAccountRow = (index: number, key: keyof BankAccountDraft, value: string) => {
+    setBankAccountRows((prev) =>
+      prev.map((row, rowIndex) => (rowIndex === index ? { ...row, [key]: value } : row))
+    );
+  };
+
+  const openBankAccountsModal = () => {
+    setBankAccountRows([
+      {
+        account_name: '',
+        bank_name: '',
+        bank_branch: '',
+        account_number: '',
+        opening_balance: '0',
+        notes: '',
+      },
+    ]);
+    setBankAccountModalOpen(true);
+  };
+
+  const openCashAccountModal = () => {
+    setCashAccountDraft({
+      account_name: cashAccount?.account_name || '',
+      opening_balance: '0',
+      notes: '',
+    });
+    setCashAccountModalOpen(true);
+  };
+
+  const submitMultipleBankAccounts = async () => {
+    if (!token || !branchId) return;
+
+    const payloadRows = bankAccountRows
+      .map((row) => ({
+        account_type: 'bank',
+        account_name: row.account_name.trim() || undefined,
+        bank_name: row.bank_name.trim(),
+        bank_branch: row.bank_branch.trim() || undefined,
+        account_number: row.account_number.trim() || undefined,
+        opening_balance: Number(row.opening_balance || 0),
+        notes: row.notes.trim() || undefined,
+      }))
+      .filter((row) => row.bank_name.length > 0);
+
+    if (payloadRows.length === 0) {
+      setBankAccountNotice({
+        open: true,
+        title: 'Validation',
+        message: 'Please add at least one row with a bank name.',
+      });
+      return;
+    }
+
+    if (payloadRows.some((row) => !Number.isFinite(row.opening_balance) || row.opening_balance < 0)) {
+      setBankAccountNotice({
+        open: true,
+        title: 'Validation',
+        message: 'Opening balance must be a valid non-negative number for all rows.',
+      });
+      return;
+    }
+
+    try {
+      setBankAccountSaving(true);
+      for (const row of payloadRows) {
+        await axios.post(`${apiBase}/companies/${branchId}/accounts`, row, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+        });
+      }
+
+      const refreshed = await axios.get(`${apiBase}/companies/${branchId}/accounts`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+      });
+      const refreshedRows = Array.isArray(refreshed.data?.accounts) ? refreshed.data.accounts : [];
+      setBranchAccounts(refreshedRows as BranchAccount[]);
+
+      setBankAccountModalOpen(false);
+      setBankAccountNotice({
+        open: true,
+        title: 'Success',
+        message: `${payloadRows.length} branch bank account(s) created successfully.`,
+      });
+    } catch (error: unknown) {
+      const message =
+        axios.isAxiosError(error) && typeof error.response?.data?.message === 'string'
+          ? error.response.data.message
+          : 'Failed to create bank accounts. Please try again.';
+
+      setBankAccountNotice({ open: true, title: 'Error', message });
+    } finally {
+      setBankAccountSaving(false);
+    }
+  };
+
+  const submitCashAccount = async () => {
+    if (!token || !branchId) return;
+
+    const openingBalance = Number(cashAccountDraft.opening_balance || 0);
+    if (!Number.isFinite(openingBalance) || openingBalance < 0) {
+      setBankAccountNotice({
+        open: true,
+        title: 'Validation',
+        message: 'Opening balance must be a valid non-negative number.',
+      });
+      return;
+    }
+
+    try {
+      setCashAccountSaving(true);
+
+      await axios.post(
+        `${apiBase}/companies/${branchId}/accounts`,
+        {
+          account_type: 'cash',
+          account_name: cashAccountDraft.account_name.trim() || undefined,
+          opening_balance: openingBalance,
+          notes: cashAccountDraft.notes.trim() || undefined,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+        }
+      );
+
+      const refreshed = await axios.get(`${apiBase}/companies/${branchId}/accounts`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+      });
+      const refreshedRows = Array.isArray(refreshed.data?.accounts) ? refreshed.data.accounts : [];
+      setBranchAccounts(refreshedRows as BranchAccount[]);
+
+      setCashAccountModalOpen(false);
+      setBankAccountNotice({
+        open: true,
+        title: 'Success',
+        message: 'Branch cash account created successfully.',
+      });
+    } catch (error: unknown) {
+      const message =
+        axios.isAxiosError(error) && typeof error.response?.data?.message === 'string'
+          ? error.response.data.message
+          : 'Failed to create cash account. Please try again.';
+
+      setBankAccountNotice({ open: true, title: 'Error', message });
+    } finally {
+      setCashAccountSaving(false);
+    }
+  };
 
   const normalizeText = (value: string) =>
     String(value || '')
@@ -379,6 +648,21 @@ export default function BranchDashboardPage() {
                 <div className="flex flex-col gap-3">
                   <button
                     type="button"
+                    onClick={openBankAccountsModal}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-teal-600 to-cyan-600 text-white text-sm font-semibold shadow-sm hover:from-teal-700 hover:to-cyan-700"
+                  >
+                    Add Branch Bank Accounts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openCashAccountModal}
+                    disabled={!!cashAccount}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 text-white text-sm font-semibold shadow-sm hover:from-amber-700 hover:to-orange-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {cashAccount ? 'Cash Account Created' : 'Create Branch Cash Account'}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => router.push(`/dashboard/reports/branch-performance?branch_id=${branchId}`)}
                     className="px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 text-white text-sm font-semibold shadow-sm hover:from-rose-700 hover:to-red-700"
                   >
@@ -414,6 +698,106 @@ export default function BranchDashboardPage() {
                   </button>
                 </div>
               </div>
+            </div>
+
+            <div className="mb-8 bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6">
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                <h2 className="text-lg font-bold text-gray-900">Branch Bank Accounts</h2>
+                <button
+                  type="button"
+                  onClick={openBankAccountsModal}
+                  className="px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm"
+                >
+                  Add Multiple
+                </button>
+              </div>
+
+              {accountsLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
+                </div>
+              ) : bankAccounts.length === 0 ? (
+                <p className="text-sm text-gray-600">No bank accounts created for this branch yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm text-left text-gray-700">
+                    <thead className="bg-gray-50 text-gray-700">
+                      <tr>
+                        <th className="px-4 py-2 font-semibold">Account Name</th>
+                        <th className="px-4 py-2 font-semibold">Bank Name</th>
+                        <th className="px-4 py-2 font-semibold">Branch</th>
+                        <th className="px-4 py-2 font-semibold">Account Number</th>
+                        <th className="px-4 py-2 font-semibold text-right">Current Balance</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bankAccounts.map((account) => (
+                        <tr key={account.id} className="border-t border-gray-100">
+                          <td className="px-4 py-2 font-semibold text-gray-900">{account.account_name || '-'}</td>
+                          <td className="px-4 py-2">{account.bank_name || '-'}</td>
+                          <td className="px-4 py-2">{account.bank_branch || '-'}</td>
+                          <td className="px-4 py-2">{account.account_number || '-'}</td>
+                          <td className="px-4 py-2 text-right font-semibold text-gray-900">
+                            {Number(account.current_balance || 0).toLocaleString(undefined, {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="mb-8 bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6">
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                <h2 className="text-lg font-bold text-gray-900">Branch Cash Account</h2>
+                <button
+                  type="button"
+                  onClick={openCashAccountModal}
+                  disabled={!!cashAccount}
+                  className="px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {cashAccount ? 'Already Created' : 'Create Cash Account'}
+                </button>
+              </div>
+
+              {!cashAccount ? (
+                <p className="text-sm text-gray-600">No cash account created for this branch yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm text-left text-gray-700">
+                    <thead className="bg-gray-50 text-gray-700">
+                      <tr>
+                        <th className="px-4 py-2 font-semibold">Account Name</th>
+                        <th className="px-4 py-2 font-semibold">Type</th>
+                        <th className="px-4 py-2 font-semibold text-right">Opening Balance</th>
+                        <th className="px-4 py-2 font-semibold text-right">Current Balance</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-t border-gray-100">
+                        <td className="px-4 py-2 font-semibold text-gray-900">{cashAccount.account_name || '-'}</td>
+                        <td className="px-4 py-2 uppercase">{String(cashAccount.account_type || '-')}</td>
+                        <td className="px-4 py-2 text-right font-semibold text-gray-900">
+                          {Number(cashAccount.opening_balance || 0).toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </td>
+                        <td className="px-4 py-2 text-right font-semibold text-gray-900">
+                          {Number(cashAccount.current_balance || 0).toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
             <div id="reports" className="mb-4">
@@ -484,6 +868,227 @@ export default function BranchDashboardPage() {
           </>
         )}
       </main>
+
+      {bankAccountModalOpen && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !bankAccountSaving && setBankAccountModalOpen(false)} />
+          <div className="relative w-full max-w-5xl rounded-2xl border border-teal-100 bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-teal-100 px-6 py-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Create Branch Bank Accounts</h3>
+                <p className="mt-1 text-sm text-slate-600">Add multiple bank accounts for this branch in one step.</p>
+              </div>
+              <button
+                onClick={() => !bankAccountSaving && setBankAccountModalOpen(false)}
+                className="text-slate-500 hover:text-slate-800"
+                disabled={bankAccountSaving}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="max-h-[65vh] overflow-y-auto px-6 py-5 space-y-4">
+              {bankAccountRows.map((row, index) => (
+                <div key={index} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <p className="text-sm font-semibold text-slate-800">Bank Account #{index + 1}</p>
+                    {bankAccountRows.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeBankAccountRow(index)}
+                        className="text-xs font-semibold text-rose-600 hover:text-rose-700"
+                        disabled={bankAccountSaving}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Account Name</label>
+                      <input
+                        type="text"
+                        value={row.account_name}
+                        onChange={(e) => updateBankAccountRow(index, 'account_name', e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-teal-200"
+                        placeholder="Optional"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Bank Name *</label>
+                      <input
+                        type="text"
+                        value={row.bank_name}
+                        onChange={(e) => updateBankAccountRow(index, 'bank_name', e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-teal-200"
+                        placeholder="Required"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Bank Branch</label>
+                      <input
+                        type="text"
+                        value={row.bank_branch}
+                        onChange={(e) => updateBankAccountRow(index, 'bank_branch', e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-teal-200"
+                        placeholder="Optional"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Account Number</label>
+                      <input
+                        type="text"
+                        value={row.account_number}
+                        onChange={(e) => updateBankAccountRow(index, 'account_number', e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-teal-200"
+                        placeholder="Optional"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Opening Balance</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={row.opening_balance}
+                        onChange={(e) => updateBankAccountRow(index, 'opening_balance', e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-teal-200"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Note</label>
+                      <input
+                        type="text"
+                        value={row.notes}
+                        onChange={(e) => updateBankAccountRow(index, 'notes', e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-teal-200"
+                        placeholder="Optional"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              <button
+                type="button"
+                onClick={addBankAccountRow}
+                className="rounded-lg border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-semibold text-teal-700 hover:bg-teal-100"
+                disabled={bankAccountSaving}
+              >
+                + Add Another Account
+              </button>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
+              <button
+                onClick={() => setBankAccountModalOpen(false)}
+                disabled={bankAccountSaving}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitMultipleBankAccounts}
+                disabled={bankAccountSaving}
+                className="rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 px-4 py-2 text-sm font-semibold text-white hover:from-teal-600 hover:to-cyan-600 disabled:opacity-60"
+              >
+                {bankAccountSaving ? 'Saving...' : 'Create Accounts'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bankAccountNotice.open && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={() => setBankAccountNotice({ open: false, title: '', message: '' })} />
+          <div className="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-xl">
+            <h3 className="text-lg font-bold text-slate-900">{bankAccountNotice.title}</h3>
+            <p className="mt-2 text-sm text-slate-600">{bankAccountNotice.message}</p>
+            <div className="mt-5 flex justify-end">
+              <button
+                onClick={() => setBankAccountNotice({ open: false, title: '', message: '' })}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cashAccountModalOpen && (
+        <div className="fixed inset-0 z-[91] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !cashAccountSaving && setCashAccountModalOpen(false)} />
+          <div className="relative w-full max-w-xl rounded-2xl border border-amber-100 bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-amber-100 px-6 py-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Create Branch Cash Account</h3>
+                <p className="mt-1 text-sm text-slate-600">Create a cash account for this branch.</p>
+              </div>
+              <button
+                onClick={() => !cashAccountSaving && setCashAccountModalOpen(false)}
+                className="text-slate-500 hover:text-slate-800"
+                disabled={cashAccountSaving}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Account Name</label>
+                <input
+                  type="text"
+                  value={cashAccountDraft.account_name}
+                  onChange={(e) => setCashAccountDraft((prev) => ({ ...prev, account_name: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  placeholder="Optional"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Opening Balance</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={cashAccountDraft.opening_balance}
+                  onChange={(e) => setCashAccountDraft((prev) => ({ ...prev, opening_balance: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-amber-200"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Note</label>
+                <input
+                  type="text"
+                  value={cashAccountDraft.notes}
+                  onChange={(e) => setCashAccountDraft((prev) => ({ ...prev, notes: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  placeholder="Optional"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
+              <button
+                onClick={() => setCashAccountModalOpen(false)}
+                disabled={cashAccountSaving}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitCashAccount}
+                disabled={cashAccountSaving}
+                className="rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 text-sm font-semibold text-white hover:from-amber-600 hover:to-orange-600 disabled:opacity-60"
+              >
+                {cashAccountSaving ? 'Saving...' : 'Create Cash Account'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

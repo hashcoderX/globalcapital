@@ -22,6 +22,7 @@ use App\Http\Controllers\Api\MortgageController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\CustomerDocumentController;
 use App\Http\Controllers\Api\AccountingExpenseController;
+use App\Http\Controllers\Api\AccountingRefundController;
 use App\Http\Controllers\Api\AccountingOverviewController;
 use App\Http\Controllers\Api\AccountingReportsController;
 use App\Http\Controllers\Api\CompanyAccountController;
@@ -54,6 +55,7 @@ Route::get('/user', function (Request $request) {
         'branch:id,name',
         'designation:id,name',
         'employee:id,first_name,last_name,email,branch_id,designation_id',
+        'employee.wallet:id,employee_id,wallet_no,opening_balance,current_balance,status',
         'roles:id,name,description',
         'roles.permissions:id,name,module,description',
     ]);
@@ -142,15 +144,27 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     Route::get('companies/{company}/expenses', [AccountingExpenseController::class, 'index']);
     Route::post('companies/{company}/expenses', [AccountingExpenseController::class, 'store']);
     Route::delete('companies/{company}/expenses/{accountingExpense}', [AccountingExpenseController::class, 'destroy']);
+    Route::get('companies/{company}/refunds', [AccountingRefundController::class, 'index']);
+    Route::post('companies/{company}/refunds', [AccountingRefundController::class, 'store']);
+    Route::delete('companies/{company}/refunds/{accountingRefund}', [AccountingRefundController::class, 'destroy']);
     Route::get('companies/{company}/accounting-overview', [AccountingOverviewController::class, 'show']);
     Route::get('companies/{company}/reports/bank-book', [AccountingReportsController::class, 'bankBookReport']);
     Route::get('companies/{company}/reports/cash-book', [AccountingReportsController::class, 'cashBookReport']);
 
     // HRM Routes
     Route::prefix('hr')->group(function () {
+        Route::get('wallet/my', [EmployeeController::class, 'myWallet']);
+        Route::post('wallet/my/deposit-bank', [EmployeeController::class, 'depositToBank']);
+        Route::post('wallet/my/cash-handover', [EmployeeController::class, 'handoverCash']);
+        Route::get('wallet/pending-transactions', [EmployeeController::class, 'pendingWalletTransactions']);
+        Route::post('wallet/pending-transactions/{type}/{id}/approve', [EmployeeController::class, 'approvePendingWalletTransaction']);
+        Route::post('wallet/accepted-handovers/{id}/transfer-cash', [EmployeeController::class, 'transferAcceptedHandoverToBranchCash']);
+
         Route::apiResource('departments', DepartmentController::class);
         Route::apiResource('designations', DesignationController::class);
         Route::apiResource('employees', EmployeeController::class);
+        Route::post('employees/{employee}/wallet', [EmployeeController::class, 'createWallet']);
+        Route::put('employees/{employee}/wallet', [EmployeeController::class, 'updateWallet']);
         Route::apiResource('candidates', CandidateController::class);
 
         // Candidate nested resources
@@ -288,6 +302,7 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     Route::get('reports/branch-performance', [BranchPerformanceReportController::class, 'index']);
     Route::get('reports/branch-profitability', [AccountingReportsController::class, 'branchProfitabilityReport']);
     Route::get('reports/investor-funding', [AccountingReportsController::class, 'investorFundingReport']);
+    Route::get('reports/collector-wallet-deposits', [AccountingReportsController::class, 'collectorWalletDepositsReport']);
     Route::get('reports/branch-collection', [BranchCollectionReportController::class, 'index']);
     Route::get('reports/branch-repayment', [BranchRepaymentReportController::class, 'index']);
 

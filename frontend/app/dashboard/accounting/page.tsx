@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   BookOpen,
   Calculator,
   FileText,
+  HandCoins,
   Landmark,
   LayoutDashboard,
   LineChart,
@@ -53,6 +54,17 @@ const hubModules: HubModule[] = [
     category: 'operations',
   },
   {
+    title: 'Refunds (Cash / Bank Deposit)',
+    description: 'Record and manage refunds in a dedicated module with separate cash and bank entries.',
+    tag: 'Refunds',
+    path: '/dashboard/accounting/refunds',
+    icon: HandCoins,
+    color: 'from-teal-500 to-cyan-600',
+    bg: 'from-teal-50/90 to-cyan-50/60',
+    accent: 'from-teal-500 to-cyan-500',
+    category: 'operations',
+  },
+  {
     title: 'Financial Overview',
     description: 'View assets, liabilities, income, expenses, and profit in one structured summary.',
     tag: 'Overview',
@@ -86,6 +98,17 @@ const hubModules: HubModule[] = [
     category: 'financial',
   },
   {
+    title: 'Payment Receive & Transfer',
+    description: 'Branch manager approval desk for pending wallet deposits, handover acceptance, and transfer to branch cash.',
+    tag: 'Approvals',
+    path: '/dashboard/accounting/payment-receive',
+    icon: HandCoins,
+    color: 'from-amber-500 to-orange-600',
+    bg: 'from-amber-50/90 to-orange-50/60',
+    accent: 'from-amber-500 to-orange-500',
+    category: 'financial',
+  },
+  {
     title: 'All Accounting Reports',
     description: 'Open trial balance, balance sheet, P&L, journal entries, bank book, and more.',
     tag: 'Reports Hub',
@@ -94,6 +117,17 @@ const hubModules: HubModule[] = [
     color: 'from-fuchsia-500 to-pink-600',
     bg: 'from-fuchsia-50/90 to-pink-50/60',
     accent: 'from-fuchsia-500 to-pink-500',
+    category: 'reports',
+  },
+  {
+    title: 'Collector Wallet Deposits Report',
+    description: 'Track field and collection officer deposit transactions with branch/date filters.',
+    tag: 'Transactions',
+    path: '/dashboard/reports/collector-wallet-deposits',
+    icon: Wallet,
+    color: 'from-emerald-500 to-cyan-600',
+    bg: 'from-emerald-50/90 to-cyan-50/60',
+    accent: 'from-emerald-500 to-cyan-500',
     category: 'reports',
   },
   {
@@ -117,18 +151,19 @@ const categoryMeta = {
 
 export default function AccountingModulePage() {
   const router = useRouter();
-  const [token, setToken] = useState('');
+  const token = useSyncExternalStore(
+    () => () => {},
+    () => localStorage.getItem('token') || '',
+    () => ''
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<'all' | HubModule['category']>('all');
 
   useEffect(() => {
-    const storedToken = localStorage.getItem('token');
-    if (!storedToken) {
+    if (!token) {
       router.push('/');
-      return;
     }
-    setToken(storedToken);
-  }, [router]);
+  }, [router, token]);
 
   const normalizedSearch = searchQuery.trim().toLowerCase();
 
@@ -236,7 +271,9 @@ export default function AccountingModulePage() {
               {[
                 { label: 'Overview', href: '/dashboard/accounting/overview' },
                 { label: 'Expenses', href: '/dashboard/accounting/expenses' },
+                { label: 'Refunds', href: '/dashboard/accounting/refunds' },
                 { label: 'General Ledger', href: '/dashboard/reports/general-ledger' },
+                { label: 'Payment Receive & Transfer', href: '/dashboard/accounting/payment-receive' },
                 { label: 'Trial Balance', href: '/dashboard/reports/trial-balance' },
                 { label: 'Balance Sheet', href: '/dashboard/reports/balance-sheet' },
               ].map((link) => (

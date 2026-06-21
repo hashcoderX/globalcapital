@@ -3,10 +3,15 @@
 namespace App\Http\Controllers\Api\HR;
 
 use App\Http\Controllers\Controller;
+use App\Models\Company;
+use App\Models\CompanyAccount;
 use App\Models\Employee;
 use App\Models\EmployeeWallet;
+use App\Models\EmployeeWalletBankDeposit;
+use App\Models\EmployeeWalletCashHandover;
 use App\Models\User;
 use App\Http\Requests\StoreEmployeeRequest;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
@@ -15,6 +20,47 @@ use Illuminate\Support\Facades\Schema;
 
 class EmployeeController extends Controller
 {
+    private function buildBaseWalletNo(int $employeeId): string
+    {
+        return 'EW' . str_pad((string) $employeeId, 6, '0', STR_PAD_LEFT);
+    }
+
+    private function generateUniqueWalletNo(int $employeeId): string
+    {
+        $baseWalletNo = $this->buildBaseWalletNo($employeeId);
+        $walletNo = $baseWalletNo;
+        $suffix = 1;
+
+        while (EmployeeWallet::query()->where('wallet_no', $walletNo)->exists()) {
+            $walletNo = $baseWalletNo . '-' . $suffix;
+            $suffix++;
+        }
+
+        return $walletNo;
+    }
+
+    private function ensureEmployeeWallet(Employee $employee, int $tenantId, int $branchId): EmployeeWallet
+    {
+        $existing = EmployeeWallet::query()
+            ->where('employee_id', (int) $employee->id)
+            ->lockForUpdate()
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        return EmployeeWallet::create([
+            'tenant_id' => $tenantId,
+            'branch_id' => $branchId,
+            'employee_id' => (int) $employee->id,
+            'wallet_no' => $this->generateUniqueWalletNo((int) $employee->id),
+            'opening_balance' => 0,
+            'current_balance' => 0,
+            'status' => 'active',
+        ]);
+    }
+
     private function canManageEmployees(Request $request, string $permission): bool
     {
         $user = $request->user();
@@ -33,7 +79,7 @@ class EmployeeController extends Controller
         $tenantId = $request->input('tenant_id');
         $branchId = $request->input('branch_id');
 
-        $query = Employee::with(['department', 'designation', 'branch']);
+        $query = Employee::with(['department', 'designation', 'branch', 'wallet']);
 
         if ($tenantId) {
             $query->where('tenant_id', $tenantId);
@@ -153,6 +199,836 @@ class EmployeeController extends Controller
     public function show(Employee $employee): JsonResponse
     {
         return response()->json($employee->load(['department', 'designation', 'branch', 'wallet']));
+    }
+
+    /**
+     * Get authenticated employee wallet summary for field/collection officers.
+     */
+    public function myWallet(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $employeeId = (int) ($user?->employee_id ?? 0);
+
+        if ($employeeId <= 0) {
+            return response()->json(['message' => 'No employee profile linked to this account.'], 422);
+        }
+
+        $employee = Employee::with('wallet')->find($employeeId);
+        if (!$employee || !$employee->wallet) {
+            return response()->json(['message' => 'Employee wallet not found.'], 404);
+        }
+
+        $wallet = $employee->wallet;
+
+        $bankAccounts = CompanyAccount::query()
+            ->where('company_id', (int) ($wallet->branch_id ?? 0))
+            ->where('account_type', CompanyAccount::TYPE_BANK)
+            ->where('is_active', true)
+            ->orderBy('account_name')
+            ->get([
+                'id',
+                'company_id',
+                'account_type',
+                'account_name',
+                'bank_name',
+                'account_number',
+                'current_balance',
+            ]);
+
+        $branchCompanyId = (int) ($wallet->branch_id ?? 0);
+        $cashAccounts = CompanyAccount::query()
+            ->where('company_id', $branchCompanyId)
+            ->whereIn('account_type', [CompanyAccount::TYPE_CASH, CompanyAccount::TYPE_MAIN])
+            ->where('is_active', true)
+            ->orderBy('account_name')
+            ->get([
+                'id',
+                'company_id',
+                'account_type',
+                'account_name',
+                'bank_name',
+                'account_number',
+                'current_balance',
+            ]);
+
+        $branch = Company::query()->with('manager:id,name,employee_id')->find($branchCompanyId);
+        $managerUser = $branch?->manager;
+        $managers = [];
+
+        if ($managerUser && (int) ($managerUser->employee_id ?? 0) > 0) {
+            $managerEmployee = Employee::query()->find((int) $managerUser->employee_id);
+            if ($managerEmployee) {
+                $managers[] = [
+                    'employee_id' => (int) $managerEmployee->id,
+                    'user_id' => (int) $managerUser->id,
+                    'name' => (string) ($managerUser->name ?: trim(($managerEmployee->first_name ?? '') . ' ' . ($managerEmployee->last_name ?? ''))),
+                    'employee_code' => (string) ($managerEmployee->employee_code ?? ''),
+                ];
+            }
+        }
+
+        $totalDeposited = (float) EmployeeWalletBankDeposit::query()
+            ->where('employee_wallet_id', $wallet->id)
+            ->where('status', 'approved')
+            ->sum('amount');
+
+        $totalHandedOver = (float) EmployeeWalletCashHandover::query()
+            ->where('employee_wallet_id', $wallet->id)
+            ->where('status', 'approved')
+            ->sum('amount');
+
+        $recentDeposits = EmployeeWalletBankDeposit::query()
+            ->with('bankAccount:id,account_name,bank_name,account_number')
+            ->where('employee_wallet_id', $wallet->id)
+            ->orderByDesc('deposit_date')
+            ->orderByDesc('id')
+            ->limit(10)
+            ->get();
+
+        $recentHandovers = EmployeeWalletCashHandover::query()
+            ->with([
+                'cashAccount:id,account_name,bank_name,account_number',
+                'managerEmployee:id,first_name,last_name,employee_code',
+            ])
+            ->where('employee_wallet_id', $wallet->id)
+            ->orderByDesc('handover_date')
+            ->orderByDesc('id')
+            ->limit(10)
+            ->get();
+
+        return response()->json([
+            'wallet' => [
+                'id' => (int) $wallet->id,
+                'wallet_no' => (string) $wallet->wallet_no,
+                'cash_in_hand' => round((float) ($wallet->current_balance ?? 0), 2),
+                'total_deposited' => round($totalDeposited, 2),
+                'total_handed_over' => round($totalHandedOver, 2),
+                'opening_balance' => round((float) ($wallet->opening_balance ?? 0), 2),
+                'status' => (string) $wallet->status,
+            ],
+            'bank_accounts' => $bankAccounts,
+            'cash_accounts' => $cashAccounts,
+            'managers' => $managers,
+            'recent_deposits' => $recentDeposits,
+            'recent_handovers' => $recentHandovers,
+            'pending' => [
+                'deposits' => (int) EmployeeWalletBankDeposit::query()
+                    ->where('employee_wallet_id', $wallet->id)
+                    ->where('status', 'pending')
+                    ->count(),
+                'handovers' => (int) EmployeeWalletCashHandover::query()
+                    ->where('employee_wallet_id', $wallet->id)
+                    ->where('status', 'pending')
+                    ->count(),
+            ],
+        ]);
+    }
+
+    /**
+     * Deposit cash-in-hand from employee wallet to a branch bank account.
+     */
+    public function depositToBank(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'amount' => 'required|numeric|min:0.01',
+            'bank_account_id' => 'required|exists:company_accounts,id',
+            'deposit_date' => 'nullable|date',
+            'note' => 'nullable|string|max:500',
+        ]);
+
+        $user = $request->user();
+        $employeeId = (int) ($user?->employee_id ?? 0);
+        if ($employeeId <= 0) {
+            return response()->json(['message' => 'No employee profile linked to this account.'], 422);
+        }
+
+        $amount = round((float) $validated['amount'], 2);
+        $summary = null;
+        $depositRow = null;
+
+        DB::transaction(function () use (
+            $validated,
+            $employeeId,
+            $amount,
+            $user,
+            &$summary,
+            &$depositRow
+        ): void {
+            $wallet = EmployeeWallet::query()
+                ->where('employee_id', $employeeId)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$wallet) {
+                throw new HttpResponseException(response()->json(['message' => 'Employee wallet not found.'], 404));
+            }
+
+            $branchCompanyId = (int) ($wallet->branch_id ?? 0);
+            if ($branchCompanyId <= 0) {
+                throw new HttpResponseException(response()->json([
+                    'message' => 'Branch is not linked for this wallet.',
+                ], 422));
+            }
+
+            $bankAccount = CompanyAccount::query()
+                ->where('id', (int) $validated['bank_account_id'])
+                ->where('account_type', CompanyAccount::TYPE_BANK)
+                ->where('company_id', $branchCompanyId)
+                ->where('is_active', true)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$bankAccount) {
+                throw new HttpResponseException(response()->json([
+                    'message' => 'Selected branch bank account is not available for this branch.',
+                ], 422));
+            }
+
+            $cashInHand = round((float) ($wallet->current_balance ?? 0), 2);
+            if ($amount > $cashInHand) {
+                throw new HttpResponseException(response()->json(['message' => 'Deposit amount exceeds cash in hand.'], 422));
+            }
+
+            $depositRow = EmployeeWalletBankDeposit::create([
+                'employee_wallet_id' => (int) $wallet->id,
+                'employee_id' => (int) $wallet->employee_id,
+                'branch_id' => (int) $wallet->branch_id,
+                'bank_account_id' => (int) $bankAccount->id,
+                'amount' => $amount,
+                'deposit_date' => $validated['deposit_date'] ?? now()->toDateString(),
+                'note' => $validated['note'] ?? null,
+                'status' => 'pending',
+                'created_by' => (int) ($user?->id ?? 0) ?: null,
+            ]);
+
+            $totalDeposited = (float) EmployeeWalletBankDeposit::query()
+                ->where('employee_wallet_id', $wallet->id)
+                ->where('status', 'approved')
+                ->sum('amount');
+
+            $summary = [
+                'wallet_no' => (string) $wallet->wallet_no,
+                'cash_in_hand' => round((float) ($wallet->current_balance ?? 0), 2),
+                'total_deposited' => round($totalDeposited, 2),
+                'pending_deposits' => (int) EmployeeWalletBankDeposit::query()
+                    ->where('employee_wallet_id', $wallet->id)
+                    ->where('status', 'pending')
+                    ->count(),
+                'bank_account_id' => (int) $bankAccount->id,
+                'bank_account_name' => (string) $bankAccount->account_name,
+                'bank_balance' => round((float) ($bankAccount->current_balance ?? 0), 2),
+            ];
+        });
+
+        return response()->json([
+            'message' => 'Deposit request submitted. Awaiting branch manager approval.',
+            'summary' => $summary,
+            'deposit' => $depositRow,
+        ]);
+    }
+
+    /**
+     * Handover cash-in-hand from employee wallet to a branch cash/main account.
+     */
+    public function handoverCash(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'amount' => 'required|numeric|min:0.01',
+            'manager_employee_id' => 'required|exists:employees,id',
+            'handover_date' => 'nullable|date',
+            'received_by' => 'nullable|string|max:255',
+            'note' => 'nullable|string|max:500',
+        ]);
+
+        $user = $request->user();
+        $employeeId = (int) ($user?->employee_id ?? 0);
+        if ($employeeId <= 0) {
+            return response()->json(['message' => 'No employee profile linked to this account.'], 422);
+        }
+
+        $amount = round((float) $validated['amount'], 2);
+        $summary = null;
+        $handoverRow = null;
+
+        DB::transaction(function () use (
+            $validated,
+            $employeeId,
+            $amount,
+            $user,
+            &$summary,
+            &$handoverRow
+        ): void {
+            $wallet = EmployeeWallet::query()
+                ->where('employee_id', $employeeId)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$wallet) {
+                throw new HttpResponseException(response()->json(['message' => 'Employee wallet not found.'], 404));
+            }
+
+            $branchCompanyId = (int) ($wallet->branch_id ?? 0);
+            if ($branchCompanyId <= 0) {
+                throw new HttpResponseException(response()->json([
+                    'message' => 'Branch is not linked for this wallet.',
+                ], 422));
+            }
+
+            $cashInHand = round((float) ($wallet->current_balance ?? 0), 2);
+            if ($amount > $cashInHand) {
+                throw new HttpResponseException(response()->json(['message' => 'Handover amount exceeds cash in hand.'], 422));
+            }
+
+            $cashAccount = CompanyAccount::query()
+                ->where('company_id', $branchCompanyId)
+                ->whereIn('account_type', [CompanyAccount::TYPE_CASH, CompanyAccount::TYPE_MAIN])
+                ->where('is_active', true)
+                ->orderByRaw("CASE WHEN account_type = 'cash' THEN 0 ELSE 1 END")
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->first();
+
+            if (!$cashAccount) {
+                throw new HttpResponseException(response()->json([
+                    'message' => 'Branch cash/main account is not available for this branch.',
+                ], 422));
+            }
+
+            $managerEmployee = Employee::query()
+                ->where('id', (int) $validated['manager_employee_id'])
+                ->where('branch_id', $branchCompanyId)
+                ->first();
+
+            if (!$managerEmployee) {
+                throw new HttpResponseException(response()->json([
+                    'message' => 'Selected manager is not valid for this branch.',
+                ], 422));
+            }
+
+            $handoverRow = EmployeeWalletCashHandover::create([
+                'employee_wallet_id' => (int) $wallet->id,
+                'employee_id' => (int) $wallet->employee_id,
+                'branch_id' => (int) $wallet->branch_id,
+                'cash_account_id' => (int) $cashAccount->id,
+                'manager_employee_id' => (int) $managerEmployee->id,
+                'amount' => $amount,
+                'handover_date' => $validated['handover_date'] ?? now()->toDateString(),
+                'received_by' => $validated['received_by'] ?? trim(($managerEmployee->first_name ?? '') . ' ' . ($managerEmployee->last_name ?? '')),
+                'note' => $validated['note'] ?? null,
+                'status' => 'pending',
+                'created_by' => (int) ($user?->id ?? 0) ?: null,
+            ]);
+
+            $totalDeposited = (float) EmployeeWalletBankDeposit::query()
+                ->where('employee_wallet_id', $wallet->id)
+                ->where('status', 'approved')
+                ->sum('amount');
+
+            $totalHandedOver = (float) EmployeeWalletCashHandover::query()
+                ->where('employee_wallet_id', $wallet->id)
+                ->where('status', 'approved')
+                ->sum('amount');
+
+            $summary = [
+                'wallet_no' => (string) $wallet->wallet_no,
+                'cash_in_hand' => round((float) ($wallet->current_balance ?? 0), 2),
+                'total_deposited' => round($totalDeposited, 2),
+                'total_handed_over' => round($totalHandedOver, 2),
+                'pending_handovers' => (int) EmployeeWalletCashHandover::query()
+                    ->where('employee_wallet_id', $wallet->id)
+                    ->where('status', 'pending')
+                    ->count(),
+                'manager_employee_id' => (int) $managerEmployee->id,
+                'manager_name' => trim((string) (($managerEmployee->first_name ?? '') . ' ' . ($managerEmployee->last_name ?? ''))),
+                'manager_wallet_balance' => null,
+            ];
+        });
+
+        return response()->json([
+            'message' => 'Cash handover request submitted. Awaiting branch manager approval.',
+            'summary' => $summary,
+            'handover' => $handoverRow,
+        ]);
+    }
+
+    /**
+     * List pending wallet transactions for branch manager approval.
+     */
+    public function pendingWalletTransactions(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+
+        $branchIds = Company::query()
+            ->where('manager_user_id', (int) $user->id)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        if (empty($branchIds)) {
+            return response()->json([
+                'deposits' => [],
+                'handovers' => [],
+                'accepted_handovers' => [],
+                'transferred_handovers' => [],
+            ]);
+        }
+
+        $deposits = EmployeeWalletBankDeposit::query()
+            ->with([
+                'employee:id,first_name,last_name,employee_code',
+                'employee.wallet:id,employee_id,wallet_no,current_balance',
+                'bankAccount:id,account_name,bank_name,account_number,current_balance',
+            ])
+            ->whereIn('branch_id', $branchIds)
+            ->where('status', 'pending')
+            ->orderByDesc('created_at')
+            ->limit(300)
+            ->get();
+
+        $handovers = EmployeeWalletCashHandover::query()
+            ->with([
+                'employee:id,first_name,last_name,employee_code',
+                'employee.wallet:id,employee_id,wallet_no,current_balance',
+                'managerEmployee:id,first_name,last_name,employee_code',
+                'managerEmployee.wallet:id,employee_id,wallet_no,current_balance',
+                'cashAccount:id,account_name,bank_name,account_number,current_balance',
+            ])
+            ->whereIn('branch_id', $branchIds)
+            ->where('status', 'pending')
+            ->orderByDesc('created_at')
+            ->limit(300)
+            ->get();
+
+        $acceptedHandovers = EmployeeWalletCashHandover::query()
+            ->with([
+                'employee:id,first_name,last_name,employee_code',
+                'employee.wallet:id,employee_id,wallet_no,current_balance',
+                'managerEmployee:id,first_name,last_name,employee_code',
+                'managerEmployee.wallet:id,employee_id,wallet_no,current_balance',
+                'cashAccount:id,account_name,bank_name,account_number,current_balance',
+            ])
+            ->whereIn('branch_id', $branchIds)
+            ->where('status', 'approved')
+            ->whereNull('branch_cash_transferred_at')
+            ->orderByDesc('approved_at')
+            ->orderByDesc('id')
+            ->limit(300)
+            ->get();
+
+        $transferredHandovers = EmployeeWalletCashHandover::query()
+            ->with([
+                'employee:id,first_name,last_name,employee_code',
+                'managerEmployee:id,first_name,last_name,employee_code',
+                'cashAccount:id,account_name,bank_name,account_number,current_balance',
+            ])
+            ->whereIn('branch_id', $branchIds)
+            ->where('status', 'approved')
+            ->whereNotNull('branch_cash_transferred_at')
+            ->orderByDesc('branch_cash_transferred_at')
+            ->orderByDesc('id')
+            ->limit(300)
+            ->get();
+
+        return response()->json([
+            'deposits' => $deposits,
+            'handovers' => $handovers,
+            'accepted_handovers' => $acceptedHandovers,
+            'transferred_handovers' => $transferredHandovers,
+        ]);
+    }
+
+    /**
+     * Approve pending wallet deposit or handover transactions.
+     */
+    public function approvePendingWalletTransaction(Request $request, string $type, int $id): JsonResponse
+    {
+        $validated = $request->validate([
+            'approval_note' => 'nullable|string|max:500',
+        ]);
+
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+
+        $approvalNote = $validated['approval_note'] ?? null;
+        $summary = null;
+
+        DB::transaction(function () use ($type, $id, $user, $approvalNote, &$summary): void {
+            if ($type === 'deposit') {
+                $row = EmployeeWalletBankDeposit::query()
+                    ->where('id', $id)
+                    ->where('status', 'pending')
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$row) {
+                    throw new HttpResponseException(response()->json(['message' => 'Pending deposit request not found.'], 404));
+                }
+
+                $branch = Company::query()
+                    ->where('id', (int) $row->branch_id)
+                    ->where('manager_user_id', (int) $user->id)
+                    ->first();
+
+                if (!$branch) {
+                    throw new HttpResponseException(response()->json(['message' => 'You are not allowed to approve this transaction.'], 403));
+                }
+
+                $wallet = EmployeeWallet::query()
+                    ->where('id', (int) $row->employee_wallet_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$wallet) {
+                    throw new HttpResponseException(response()->json(['message' => 'Employee wallet not found.'], 404));
+                }
+
+                $bankAccount = CompanyAccount::query()
+                    ->where('id', (int) $row->bank_account_id)
+                    ->where('company_id', (int) $row->branch_id)
+                    ->where('account_type', CompanyAccount::TYPE_BANK)
+                    ->where('is_active', true)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$bankAccount) {
+                    throw new HttpResponseException(response()->json(['message' => 'Branch bank account is not available.'], 422));
+                }
+
+                $amount = round((float) ($row->amount ?? 0), 2);
+                $cashInHand = round((float) ($wallet->current_balance ?? 0), 2);
+                if ($amount <= 0 || $amount > $cashInHand) {
+                    throw new HttpResponseException(response()->json(['message' => 'Collector cash in hand is insufficient for this approval.'], 422));
+                }
+
+                $wallet->current_balance = round($cashInHand - $amount, 2);
+                $wallet->save();
+
+                $bankAccount->current_balance = round((float) ($bankAccount->current_balance ?? 0) + $amount, 2);
+                $bankAccount->save();
+
+                $row->status = 'approved';
+                $row->approved_by = (int) $user->id;
+                $row->approved_at = now();
+                $row->approval_note = $approvalNote;
+                $row->save();
+
+                $summary = [
+                    'type' => 'deposit',
+                    'id' => (int) $row->id,
+                    'amount' => $amount,
+                    'wallet_cash_in_hand' => round((float) ($wallet->current_balance ?? 0), 2),
+                    'branch_account_balance' => round((float) ($bankAccount->current_balance ?? 0), 2),
+                ];
+
+                return;
+            }
+
+            if ($type === 'handover') {
+                $row = EmployeeWalletCashHandover::query()
+                    ->where('id', $id)
+                    ->where('status', 'pending')
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$row) {
+                    throw new HttpResponseException(response()->json(['message' => 'Pending handover request not found.'], 404));
+                }
+
+                $branch = Company::query()
+                    ->where('id', (int) $row->branch_id)
+                    ->where('manager_user_id', (int) $user->id)
+                    ->first();
+
+                if (!$branch) {
+                    throw new HttpResponseException(response()->json(['message' => 'You are not allowed to approve this transaction.'], 403));
+                }
+
+                $wallet = EmployeeWallet::query()
+                    ->where('id', (int) $row->employee_wallet_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$wallet) {
+                    throw new HttpResponseException(response()->json(['message' => 'Employee wallet not found.'], 404));
+                }
+
+                $managerEmployee = Employee::query()
+                    ->where('id', (int) ($row->manager_employee_id ?? 0))
+                    ->where('branch_id', (int) $row->branch_id)
+                    ->first();
+
+                if (!$managerEmployee) {
+                    throw new HttpResponseException(response()->json(['message' => 'Manager employee is not valid for this branch.'], 422));
+                }
+
+                $amount = round((float) ($row->amount ?? 0), 2);
+                $cashInHand = round((float) ($wallet->current_balance ?? 0), 2);
+                if ($amount <= 0 || $amount > $cashInHand) {
+                    throw new HttpResponseException(response()->json(['message' => 'Collector cash in hand is insufficient for this approval.'], 422));
+                }
+
+                $wallet->current_balance = round($cashInHand - $amount, 2);
+                $wallet->save();
+
+                $managerTenantId = (int) ($managerEmployee->tenant_id ?? $wallet->tenant_id ?? $row->branch_id);
+                $managerBranchId = (int) ($managerEmployee->branch_id ?? $row->branch_id);
+                $managerWallet = $this->ensureEmployeeWallet($managerEmployee, $managerTenantId, $managerBranchId);
+                $managerWallet->current_balance = round((float) ($managerWallet->current_balance ?? 0) + $amount, 2);
+                $managerWallet->save();
+
+                $row->status = 'approved';
+                $row->approved_by = (int) $user->id;
+                $row->approved_at = now();
+                $row->approval_note = $approvalNote;
+                $row->save();
+
+                $summary = [
+                    'type' => 'handover',
+                    'id' => (int) $row->id,
+                    'amount' => $amount,
+                    'wallet_cash_in_hand' => round((float) ($wallet->current_balance ?? 0), 2),
+                    'branch_account_balance' => null,
+                    'manager_wallet_balance' => round((float) ($managerWallet->current_balance ?? 0), 2),
+                ];
+
+                return;
+            }
+
+            throw new HttpResponseException(response()->json(['message' => 'Unsupported transaction type.'], 422));
+        });
+
+        return response()->json([
+            'message' => 'Transaction approved successfully.',
+            'summary' => $summary,
+        ]);
+    }
+
+    /**
+     * Transfer an accepted handover amount into branch cash/main account.
+     */
+    public function transferAcceptedHandoverToBranchCash(Request $request, int $id): JsonResponse
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+
+        $summary = null;
+
+        DB::transaction(function () use ($id, $user, &$summary): void {
+            $row = EmployeeWalletCashHandover::query()
+                ->where('id', $id)
+                ->where('status', 'approved')
+                ->lockForUpdate()
+                ->first();
+
+            if (!$row) {
+                throw new HttpResponseException(response()->json(['message' => 'Accepted handover not found.'], 404));
+            }
+
+            if (!empty($row->branch_cash_transferred_at)) {
+                throw new HttpResponseException(response()->json(['message' => 'This handover is already transferred to branch cash account.'], 422));
+            }
+
+            $branch = Company::query()
+                ->where('id', (int) $row->branch_id)
+                ->where('manager_user_id', (int) $user->id)
+                ->first();
+
+            if (!$branch) {
+                throw new HttpResponseException(response()->json(['message' => 'You are not allowed to transfer this handover.'], 403));
+            }
+
+            $managerEmployee = Employee::query()
+                ->where('id', (int) ($row->manager_employee_id ?? 0))
+                ->where('branch_id', (int) $row->branch_id)
+                ->first();
+
+            if (!$managerEmployee) {
+                throw new HttpResponseException(response()->json(['message' => 'Manager employee is not valid for this branch.'], 422));
+            }
+
+            $managerWallet = EmployeeWallet::query()
+                ->where('employee_id', (int) $managerEmployee->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$managerWallet) {
+                throw new HttpResponseException(response()->json(['message' => 'Manager wallet not found.'], 422));
+            }
+
+            $cashAccountId = (int) ($row->cash_account_id ?? 0);
+
+            $preferredCashAccount = CompanyAccount::query()
+                ->where('company_id', (int) $row->branch_id)
+                ->where('account_type', CompanyAccount::TYPE_CASH)
+                ->where('is_active', true)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->first();
+
+            $linkedAccount = null;
+            if ($cashAccountId > 0) {
+                $linkedAccount = CompanyAccount::query()
+                    ->where('id', $cashAccountId)
+                    ->where('company_id', (int) $row->branch_id)
+                    ->whereIn('account_type', [CompanyAccount::TYPE_CASH, CompanyAccount::TYPE_MAIN])
+                    ->where('is_active', true)
+                    ->lockForUpdate()
+                    ->first();
+            }
+
+            $cashAccount = $preferredCashAccount ?: $linkedAccount;
+
+            if (!$cashAccount) {
+                $cashAccount = CompanyAccount::query()
+                    ->where('company_id', (int) $row->branch_id)
+                    ->whereIn('account_type', [CompanyAccount::TYPE_CASH, CompanyAccount::TYPE_MAIN])
+                    ->where('is_active', true)
+                    ->orderByRaw("CASE WHEN account_type = 'cash' THEN 0 ELSE 1 END")
+                    ->orderBy('id')
+                    ->lockForUpdate()
+                    ->first();
+            }
+
+            if (!$cashAccount) {
+                throw new HttpResponseException(response()->json(['message' => 'Branch cash/main account is not available.'], 422));
+            }
+
+            $amount = round((float) ($row->amount ?? 0), 2);
+            $managerBalance = round((float) ($managerWallet->current_balance ?? 0), 2);
+            if ($amount <= 0 || $amount > $managerBalance) {
+                throw new HttpResponseException(response()->json(['message' => 'Manager wallet has insufficient balance for transfer.'], 422));
+            }
+
+            $managerWallet->current_balance = round($managerBalance - $amount, 2);
+            $managerWallet->save();
+
+            $cashAccount->current_balance = round((float) ($cashAccount->current_balance ?? 0) + $amount, 2);
+            $cashAccount->save();
+
+            if ((int) ($row->cash_account_id ?? 0) <= 0) {
+                $row->cash_account_id = (int) $cashAccount->id;
+            }
+            $row->branch_cash_transferred_at = now();
+            $row->branch_cash_transferred_by = (int) $user->id;
+            $row->save();
+
+            $summary = [
+                'handover_id' => (int) $row->id,
+                'amount' => $amount,
+                'manager_wallet_balance' => round((float) ($managerWallet->current_balance ?? 0), 2),
+                'branch_cash_account_id' => (int) $cashAccount->id,
+                'branch_cash_account_balance' => round((float) ($cashAccount->current_balance ?? 0), 2),
+            ];
+        });
+
+        return response()->json([
+            'message' => 'Accepted handover transferred to branch cash account successfully.',
+            'summary' => $summary,
+        ]);
+    }
+
+    /**
+     * Create wallet for an existing employee.
+     */
+    public function createWallet(Request $request, Employee $employee): JsonResponse
+    {
+        if (!$this->canManageEmployees($request, 'edit_employees') && !$this->canManageEmployees($request, 'create_employees')) {
+            return response()->json(['message' => 'You do not have permission to create employee wallets.'], 403);
+        }
+
+        $validated = $request->validate([
+            'opening_balance' => 'nullable|numeric|min:0',
+        ]);
+
+        if ($employee->wallet()->exists()) {
+            return response()->json(['message' => 'Wallet already exists for this employee.'], 422);
+        }
+
+        $openingBalance = (float) ($validated['opening_balance'] ?? 0);
+        $baseWalletNo = 'EW' . str_pad((string) $employee->id, 6, '0', STR_PAD_LEFT);
+        $walletNo = $baseWalletNo;
+        $suffix = 1;
+
+        while (EmployeeWallet::where('wallet_no', $walletNo)->exists()) {
+            $walletNo = $baseWalletNo . '-' . $suffix;
+            $suffix++;
+        }
+
+        EmployeeWallet::create([
+            'tenant_id' => $employee->tenant_id,
+            'branch_id' => $employee->branch_id,
+            'employee_id' => $employee->id,
+            'wallet_no' => $walletNo,
+            'opening_balance' => $openingBalance,
+            'current_balance' => $openingBalance,
+            'status' => 'active',
+        ]);
+
+        return response()->json([
+            'message' => 'Employee wallet created successfully.',
+            'employee' => $employee->fresh()->load(['department', 'designation', 'branch', 'wallet']),
+        ], 201);
+    }
+
+    /**
+     * Update wallet values for an employee (admin only).
+     */
+    public function updateWallet(Request $request, Employee $employee): JsonResponse
+    {
+        $user = $request->user();
+        if (!$user || !$user->isSystemAdmin()) {
+            return response()->json(['message' => 'Only administrators can edit wallet values.'], 403);
+        }
+
+        $validated = $request->validate([
+            'current_balance' => 'required|numeric|min:0',
+            'opening_balance' => 'nullable|numeric|min:0',
+            'status' => 'nullable|in:active,inactive',
+        ]);
+
+        $wallet = EmployeeWallet::query()
+            ->where('employee_id', (int) $employee->id)
+            ->first();
+
+        if (!$wallet) {
+            return response()->json(['message' => 'Wallet not found for this employee.'], 404);
+        }
+
+        DB::transaction(function () use ($wallet, $validated): void {
+            $lockedWallet = EmployeeWallet::query()
+                ->where('id', (int) $wallet->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$lockedWallet) {
+                throw new HttpResponseException(response()->json(['message' => 'Wallet not found for this employee.'], 404));
+            }
+
+            $lockedWallet->current_balance = round((float) $validated['current_balance'], 2);
+
+            if (array_key_exists('opening_balance', $validated) && $validated['opening_balance'] !== null) {
+                $lockedWallet->opening_balance = round((float) $validated['opening_balance'], 2);
+            }
+
+            if (!empty($validated['status'])) {
+                $lockedWallet->status = (string) $validated['status'];
+            }
+
+            $lockedWallet->save();
+        });
+
+        return response()->json([
+            'message' => 'Employee wallet updated successfully.',
+            'wallet' => $wallet->fresh(),
+            'employee' => $employee->fresh()->load(['department', 'designation', 'branch', 'wallet']),
+        ]);
     }
 
     /**

@@ -54,6 +54,7 @@ type CollectibleAccount = {
   due_amount: number;
   paid_amount: number;
   due_date: string | null;
+  next_payment_date?: string | null;
   balance: number;
   status: string;
   label: string;
@@ -127,6 +128,8 @@ export default function OfficeCollectionsPage() {
   const [filterRoute, setFilterRoute] = useState("");
   const [filterGroup, setFilterGroup] = useState("");
   const [filterCenter, setFilterCenter] = useState("");
+  const [filterDueDay, setFilterDueDay] = useState("");
+  const [filterNextPaymentDate, setFilterNextPaymentDate] = useState("");
   const [typeFilter, setTypeFilter] = useState<CollectionType>("all");
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState<number>(15);
@@ -234,6 +237,12 @@ export default function OfficeCollectionsPage() {
     return text.includes(query);
   };
 
+  const normalizeDateKey = useCallback((value: unknown) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return "";
+    return raw.includes("T") ? raw.split("T")[0] : raw.slice(0, 10);
+  }, []);
+
   const filteredAccounts = useMemo(() => {
     return accounts.filter((account) => {
       const raw = account as CollectibleAccount & Record<string, unknown>;
@@ -247,6 +256,21 @@ export default function OfficeCollectionsPage() {
       const routeName = String(raw.route_name || routeObj?.name || "");
       const groupName = String(raw.group_name || groupObj?.name || "");
       const centerName = String(raw.center_name || centerObj?.name || "");
+      const dueDate = normalizeDateKey(
+        account.due_date ??
+          (raw.due_date as string | null | undefined) ??
+          (raw.dueDate as string | null | undefined) ??
+          (raw.next_due_date as string | null | undefined) ??
+          ""
+      );
+      const nextPaymentDate = normalizeDateKey(
+        (raw.next_payment_date as string | null | undefined) ??
+          (raw.nextPaymentDate as string | null | undefined) ??
+          (raw.next_due_date as string | null | undefined) ??
+          account.next_payment_date ??
+          ""
+      );
+      const dueDayMatches = filterDueDay.trim() === "" || dueDate === normalizeDateKey(filterDueDay);
 
       return (
         includesText(customerName, filterCustomerName) &&
@@ -254,7 +278,9 @@ export default function OfficeCollectionsPage() {
         includesText(nic, filterNic) &&
         includesText(routeName, filterRoute) &&
         includesText(groupName, filterGroup) &&
-        includesText(centerName, filterCenter)
+        includesText(centerName, filterCenter) &&
+        dueDayMatches &&
+        (filterNextPaymentDate.trim() === "" || nextPaymentDate === filterNextPaymentDate)
       );
     });
   }, [
@@ -262,9 +288,12 @@ export default function OfficeCollectionsPage() {
     filterCenter,
     filterCustomerName,
     filterCustomerNo,
+    filterDueDay,
     filterGroup,
+    filterNextPaymentDate,
     filterNic,
     filterRoute,
+    normalizeDateKey,
   ]);
 
   const hasAdvancedFilters = useMemo(
@@ -276,8 +305,19 @@ export default function OfficeCollectionsPage() {
         filterRoute,
         filterGroup,
         filterCenter,
+        filterDueDay,
+        filterNextPaymentDate,
       ].some((value) => value.trim() !== ""),
-    [filterCenter, filterCustomerName, filterCustomerNo, filterGroup, filterNic, filterRoute]
+    [
+      filterCenter,
+      filterCustomerName,
+      filterCustomerNo,
+      filterDueDay,
+      filterGroup,
+      filterNextPaymentDate,
+      filterNic,
+      filterRoute,
+    ]
   );
 
   const openCollectModal = (account: CollectibleAccount) => {
@@ -511,11 +551,33 @@ export default function OfficeCollectionsPage() {
                     setFilterRoute("");
                     setFilterGroup("");
                     setFilterCenter("");
+                    setFilterDueDay("");
+                    setFilterNextPaymentDate("");
                   }}
                   className="shrink-0 rounded-xl border border-indigo-200 bg-white px-3 py-2.5 text-xs font-bold text-indigo-800 hover:bg-indigo-50"
                 >
                   Clear
                 </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-600 mb-1">Due Day</label>
+                <input
+                  type="date"
+                  value={filterDueDay}
+                  onChange={(e) => setFilterDueDay(e.target.value)}
+                  className="w-full rounded-xl border border-indigo-100 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-600 mb-1">Next Payment Date</label>
+                <input
+                  type="date"
+                  value={filterNextPaymentDate}
+                  onChange={(e) => setFilterNextPaymentDate(e.target.value)}
+                  className="w-full rounded-xl border border-indigo-100 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -589,6 +651,7 @@ export default function OfficeCollectionsPage() {
                       <th className="py-3 pr-4 whitespace-nowrap text-right">Paid amount</th>
                       <th className="py-3 pr-4 whitespace-nowrap text-right">Balance</th>
                       <th className="py-3 pr-4 whitespace-nowrap">Due date</th>
+                      <th className="py-3 pr-4 whitespace-nowrap">Next payment</th>
                       <th className="py-3 pr-4 whitespace-nowrap">Status</th>
                       <th className="py-3 pr-4 text-right whitespace-nowrap">Action</th>
                     </tr>
@@ -633,6 +696,7 @@ export default function OfficeCollectionsPage() {
                             {formatAmount(account.balance)}
                           </td>
                           <td className="py-3.5 pr-4 text-slate-800 whitespace-nowrap">{formatDate(account.due_date)}</td>
+                          <td className="py-3.5 pr-4 text-slate-800 whitespace-nowrap">{formatDate(account.next_payment_date || null)}</td>
                           <td className="py-3.5 pr-4 whitespace-nowrap">
                             <span className="inline-flex rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800">
                               {statusLabel(account.status)}

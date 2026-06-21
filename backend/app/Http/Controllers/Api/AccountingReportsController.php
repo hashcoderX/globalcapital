@@ -9,6 +9,7 @@ use App\Models\Customer;
 use App\Models\Finance;
 use App\Models\FinanceCollection;
 use App\Models\LoanRequest;
+use App\Models\EmployeeWalletBankDeposit;
 use App\Models\MicrofinanceLoanRequest;
 use App\Models\Mortgage;
 use App\Models\SavingsAccount;
@@ -843,6 +844,113 @@ class AccountingReportsController extends Controller
                 'net_movement' => $this->roundMoney($cashIn - $cashOut),
             ],
             'lines' => $cashLines,
+        ]);
+    }
+
+    public function collectorWalletDepositsReport(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'from_date' => ['nullable', 'date'],
+            'to_date' => ['nullable', 'date'],
+            'branch_id' => ['nullable', 'integer', 'exists:companies,id'],
+            'company_id' => ['nullable', 'integer', 'exists:companies,id'],
+            'employee_id' => ['nullable', 'integer', 'exists:employees,id'],
+        ]);
+
+        $branchId = (int) ($validated['branch_id'] ?? $validated['company_id'] ?? 0);
+        if ($branchId <= 0) {
+            $branchId = (int) ($this->scopedBranchId($request) ?? 0);
+        } elseif (!$this->isAdminUser($request->user())) {
+            $scoped = (int) ($request->user()?->branch_id ?? 0);
+            if ($scoped <= 0 || $scoped !== $branchId) {
+                return response()->json(['message' => 'You do not have access to this branch.'], 403);
+            }
+        }
+
+        if ($branchId <= 0) {
+            return response()->json(['message' => 'Select a branch to view deposit transactions.'], 422);
+        }
+
+        $company = Company::query()->findOrFail($branchId);
+        $fromDate = $validated['from_date'] ?? Carbon::today()->startOfMonth()->toDateString();
+        $toDate = $validated['to_date'] ?? Carbon::today()->toDateString();
+
+        $query = EmployeeWalletBankDeposit::query()
+            ->with([
+                'employee:id,employee_code,first_name,last_name',
+                'bankAccount:id,company_id,account_type,account_name,bank_name,account_number',
+            ])
+            ->where('branch_id', $branchId)
+            ->whereDate('deposit_date', '>=', $fromDate)
+            ->whereDate('deposit_date', '<=', $toDate);
+
+        if (!empty($validated['employee_id'])) {
+            $query->where('employee_id', (int) $validated['employee_id']);
+        }
+
+        $rows = $query
+            ->orderByDesc('deposit_date')
+            ->orderByDesc('id')
+            ->get()
+            ->map(function (EmployeeWalletBankDeposit $row) {
+                $employeeCode = trim((string) ($row->employee?->employee_code ?? ''));
+                $employeeName = trim((string) ($row->employee?->first_name ?? '') . ' ' . (string) ($row->employee?->last_name ?? ''));
+                $bankLabel = trim((string) ($row->bankAccount?->account_name ?? ''));
+                if ($bankLabel === '') {
+                    $bankLabel = trim((string) ($row->bankAccount?->bank_name ?? ''));
+                }
+
+                return [
+                    'id' => (int) $row->id,
+                    'deposit_date' => (string) ($row->deposit_date ?? ''),
+                    'amount' => $this->roundMoney((float) ($row->amount ?? 0)),
+                    'employee_id' => (int) ($row->employee_id ?? 0),
+                    'employee_code' => $employeeCode,
+                    'employee_name' => $employeeName,
+                    'bank_account_id' => (int) ($row->bank_account_id ?? 0),
+                    'bank_account_name' => $bankLabel,
+                    'bank_name' => (string) ($row->bankAccount?->bank_name ?? ''),
+                    'account_number' => (string) ($row->bankAccount?->account_number ?? ''),
+                    'account_type' => (string) ($row->bankAccount?->account_type ?? ''),
+                    'note' => (string) ($row->note ?? ''),
+                ];
+            })
+            ->values();
+
+        $employees = $rows
+            ->groupBy('employee_id')
+            ->map(function ($group) {
+                return [
+                    'employee_id' => (int) ($group->first()['employee_id'] ?? 0),
+                    'employee_code' => (string) ($group->first()['employee_code'] ?? ''),
+                    'employee_name' => (string) ($group->first()['employee_name'] ?? ''),
+                    'transactions' => $group->count(),
+                    'total_amount' => $this->roundMoney((float) $group->sum('amount')),
+                ];
+            })
+            ->sortByDesc('total_amount')
+            ->values()
+            ->all();
+
+        return response()->json([
+            'company' => [
+                'id' => $company->id,
+                'name' => $company->name,
+                'currency' => $company->currency ?: 'LKR',
+            ],
+            'filters' => [
+                'branch_id' => $branchId,
+                'from_date' => $fromDate,
+                'to_date' => $toDate,
+                'employee_id' => isset($validated['employee_id']) ? (int) $validated['employee_id'] : null,
+            ],
+            'summary' => [
+                'transaction_count' => $rows->count(),
+                'employee_count' => count($employees),
+                'total_amount' => $this->roundMoney((float) $rows->sum('amount')),
+            ],
+            'employee_totals' => $employees,
+            'rows' => $rows,
         ]);
     }
 

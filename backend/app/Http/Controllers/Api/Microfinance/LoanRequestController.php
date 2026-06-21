@@ -8,11 +8,13 @@ use App\Models\Company;
 use App\Models\CompanyDocumentTemplate;
 use App\Models\Customer;
 use App\Models\Employee;
+use App\Models\EmployeeWallet;
 use App\Models\MicrofinanceCenter;
 use App\Models\MicrofinanceGroup;
 use App\Models\MicrofinanceLoanRequest;
 use App\Models\MicrofinancePenaltySetting;
 use App\Models\MicrofinanceRoute;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -21,6 +23,138 @@ use Illuminate\Support\Facades\Storage;
 
 class LoanRequestController extends Controller
 {
+    private function buildBaseWalletNo(int $employeeId): string
+    {
+        return 'EW' . str_pad((string) $employeeId, 6, '0', STR_PAD_LEFT);
+    }
+
+    private function generateUniqueWalletNo(int $employeeId): string
+    {
+        $baseWalletNo = $this->buildBaseWalletNo($employeeId);
+        $walletNo = $baseWalletNo;
+        $suffix = 1;
+
+        while (EmployeeWallet::query()->where('wallet_no', $walletNo)->exists()) {
+            $walletNo = $baseWalletNo . '-' . $suffix;
+            $suffix++;
+        }
+
+        return $walletNo;
+    }
+
+    private function ensureCollectorWallet(User $collectorUser, int $fallbackBranchId): ?EmployeeWallet
+    {
+        $employeeId = (int) ($collectorUser->employee_id ?? 0);
+        if ($employeeId <= 0) {
+            return null;
+        }
+
+        $existing = EmployeeWallet::query()
+            ->where('employee_id', $employeeId)
+            ->lockForUpdate()
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        $employee = $collectorUser->employee;
+        if (!$employee || (int) $employee->id !== $employeeId) {
+            return null;
+        }
+
+        $resolvedBranchId = (int) ($employee->branch_id ?? $fallbackBranchId ?: 1);
+        $resolvedTenantId = (int) ($employee->tenant_id ?? $resolvedBranchId ?: 1);
+
+        return EmployeeWallet::create([
+            'tenant_id' => $resolvedTenantId,
+            'branch_id' => $resolvedBranchId,
+            'employee_id' => $employeeId,
+            'wallet_no' => $this->generateUniqueWalletNo($employeeId),
+            'opening_balance' => 0,
+            'current_balance' => 0,
+            'status' => 'active',
+        ]);
+    }
+
+    private function creditCollectorWalletForCharges(MicrofinanceLoanRequest $loanRequest, float $chargeAmount): bool
+    {
+        if ($chargeAmount <= 0) {
+            return false;
+        }
+
+        if (!empty($loanRequest->charges_wallet_credited_at)) {
+            return false;
+        }
+
+        $createdByUserId = (int) ($loanRequest->created_by ?? 0);
+        if ($createdByUserId <= 0) {
+            return false;
+        }
+
+        $collectorUser = User::query()->with('employee')->find($createdByUserId);
+        if (!$collectorUser) {
+            return false;
+        }
+
+        $wallet = $this->ensureCollectorWallet($collectorUser, (int) ($loanRequest->branch_id ?? 0));
+        if (!$wallet) {
+            return false;
+        }
+
+        $wallet->current_balance = round((float) ($wallet->current_balance ?? 0) + $chargeAmount, 2);
+        $wallet->save();
+
+        $loanRequest->charges_wallet_credited_at = now();
+        $loanRequest->save();
+
+        return true;
+    }
+
+    private function refundCollectorWalletForCharges(MicrofinanceLoanRequest $loanRequest, float $chargeAmount): bool
+    {
+        if ($chargeAmount <= 0) {
+            return false;
+        }
+
+        if (empty($loanRequest->charges_wallet_credited_at)) {
+            return false;
+        }
+
+        $createdByUserId = (int) ($loanRequest->created_by ?? 0);
+        if ($createdByUserId <= 0) {
+            return false;
+        }
+
+        $collectorUser = User::query()->with('employee')->find($createdByUserId);
+        if (!$collectorUser) {
+            return false;
+        }
+
+        $employeeId = (int) ($collectorUser->employee_id ?? 0);
+        if ($employeeId <= 0) {
+            return false;
+        }
+
+        $wallet = EmployeeWallet::query()
+            ->where('employee_id', $employeeId)
+            ->lockForUpdate()
+            ->first();
+
+        if (!$wallet) {
+            return false;
+        }
+
+        $wallet->current_balance = round((float) ($wallet->current_balance ?? 0) - $chargeAmount, 2);
+        $wallet->save();
+
+        // Mark as reversed to avoid duplicate refund attempts.
+        $loanRequest->charges_wallet_credited_at = null;
+        $loanRequest->save();
+
+        return true;
+    }
+
     private function extractTemplateTextFromDocx(string $docxPath): string
     {
         $zip = new \ZipArchive();
@@ -1215,6 +1349,7 @@ class LoanRequestController extends Controller
             'stamp_charges' => 'nullable|numeric|min:0',
             'insurance_charges' => 'nullable|numeric|min:0',
             'charge_payment_mode' => 'required|in:deduct_from_loan,hand_cash',
+            'charges_collection_status' => 'nullable|in:pending,done',
             'loan_request_date' => 'required|date',
             'guarantors' => 'nullable|array',
             'guarantors.*.name' => 'required|string|max:255',
@@ -1339,6 +1474,7 @@ class LoanRequestController extends Controller
                 'stamp_charges' => $validated['stamp_charges'] ?? 0,
                 'insurance_charges' => $validated['insurance_charges'] ?? 0,
                 'charge_payment_mode' => $validated['charge_payment_mode'],
+                'charges_collection_status' => $validated['charges_collection_status'] ?? 'pending',
                 'net_disbursed_amount' => $validated['charge_payment_mode'] === 'deduct_from_loan'
                     ? $loanAmount - $totalCharges
                     : $loanAmount,
@@ -1396,6 +1532,13 @@ class LoanRequestController extends Controller
                 ]);
             }
 
+            if (
+                ($validated['charge_payment_mode'] ?? '') === 'hand_cash'
+                && ($validated['charges_collection_status'] ?? 'pending') === 'done'
+            ) {
+                $this->creditCollectorWalletForCharges($loanRequest, $totalCharges);
+            }
+
             return $loanRequest;
         });
 
@@ -1444,6 +1587,7 @@ class LoanRequestController extends Controller
             'stamp_charges' => 'nullable|numeric|min:0',
             'insurance_charges' => 'nullable|numeric|min:0',
             'charge_payment_mode' => 'required|in:deduct_from_loan,hand_cash',
+            'charges_collection_status' => 'nullable|in:pending,done',
             'loan_request_date' => 'nullable|date',
             'loan_end_date' => 'nullable|date',
             'next_payment_date' => 'nullable|date',
@@ -1527,6 +1671,7 @@ class LoanRequestController extends Controller
             'stamp_charges' => $validated['stamp_charges'] ?? 0,
             'insurance_charges' => $validated['insurance_charges'] ?? 0,
             'charge_payment_mode' => $validated['charge_payment_mode'],
+            'charges_collection_status' => $validated['charges_collection_status'] ?? $loanRequest->charges_collection_status ?? 'pending',
             'net_disbursed_amount' => $validated['charge_payment_mode'] === 'deduct_from_loan'
                 ? max($loanAmount - $totalCharges, 0)
                 : $loanAmount,
@@ -1549,6 +1694,13 @@ class LoanRequestController extends Controller
         }
 
         $loanRequest->save();
+
+        if (
+            ($loanRequest->charge_payment_mode ?? '') === 'hand_cash'
+            && ($loanRequest->charges_collection_status ?? 'pending') === 'done'
+        ) {
+            $this->creditCollectorWalletForCharges($loanRequest, $totalCharges);
+        }
 
         if (array_key_exists('guarantors', $validated)) {
             $loanRequest->guarantors()->delete();
@@ -1848,14 +2000,61 @@ class LoanRequestController extends Controller
             ], 403);
         }
 
-        $loanRequest->status = 'rejected';
-        $loanRequest->rejection_reason = $validated['rejection_reason'] ?? null;
-        $loanRequest->rejected_at = now();
-        $loanRequest->save();
+        $result = DB::transaction(function () use ($loanRequest, $validated) {
+            $lockedLoanRequest = MicrofinanceLoanRequest::query()
+                ->where('id', (int) $loanRequest->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($lockedLoanRequest->status !== 'requested') {
+                return [
+                    'ok' => false,
+                    'message' => 'Only requested loans can be rejected.',
+                    'status' => 422,
+                ];
+            }
+
+            $lockedLoanRequest->status = 'rejected';
+            $lockedLoanRequest->rejection_reason = $validated['rejection_reason'] ?? null;
+            $lockedLoanRequest->rejected_at = now();
+            $lockedLoanRequest->save();
+
+            $totalCharges = (float) ($lockedLoanRequest->document_charges ?? 0)
+                + (float) ($lockedLoanRequest->stamp_charges ?? 0)
+                + (float) ($lockedLoanRequest->insurance_charges ?? 0);
+
+            $refunded = false;
+            if (
+                (string) ($lockedLoanRequest->charge_payment_mode ?? '') === 'hand_cash'
+                && (string) ($lockedLoanRequest->charges_collection_status ?? 'pending') === 'done'
+            ) {
+                $refunded = $this->refundCollectorWalletForCharges($lockedLoanRequest, $totalCharges);
+            }
+
+            return [
+                'ok' => true,
+                'message' => $refunded
+                    ? 'Loan rejected successfully. Charges refunded to collector wallet.'
+                    : 'Loan rejected successfully.',
+                'data' => $lockedLoanRequest,
+                'refund' => [
+                    'attempted' => $totalCharges > 0,
+                    'refunded' => $refunded,
+                    'amount' => round($totalCharges, 2),
+                ],
+            ];
+        });
+
+        if (empty($result['ok'])) {
+            return response()->json([
+                'message' => $result['message'] ?? 'Unable to reject loan.',
+            ], (int) ($result['status'] ?? 422));
+        }
 
         return response()->json([
-            'message' => 'Loan rejected successfully.',
-            'data' => $loanRequest,
+            'message' => $result['message'],
+            'data' => $result['data'],
+            'refund' => $result['refund'],
         ]);
     }
 

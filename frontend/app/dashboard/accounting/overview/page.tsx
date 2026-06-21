@@ -31,6 +31,7 @@ type OverviewPayload = {
   profit?: OverviewSection;
   breakdown?: {
     loan_receivable?: OverviewSection;
+    wallet_income_preview?: OverviewSection;
   };
 };
 
@@ -81,6 +82,10 @@ const SECTIONS: Array<{
       { key: 'processing_fees', label: 'Processing Fees' },
       { key: 'penalty_income', label: 'Penalty Income' },
       { key: 'other_income', label: 'Other Income' },
+      { key: 'collector_bank_deposits_preview', label: 'Collector Bank Deposits (Preview)' },
+      { key: 'cash_handovers_preview', label: 'Cash Handovers (Preview)' },
+      { key: 'branch_cash_transfers_preview', label: 'Branch Cash Transfers (Preview)' },
+      { key: 'wallet_income_preview_total', label: 'Wallet Income Preview Total', accent: 'text-cyan-700' },
       { key: 'total_income', label: 'Total Income', totalKey: 'total_income', accent: 'text-cyan-700' },
     ],
   },
@@ -256,6 +261,24 @@ export default function AccountingOverviewPage() {
       { key: 'processing_fees', label: 'Processing Fees', value: getValue('income', 'processing_fees'), color: '#0284c7' },
       { key: 'penalty_income', label: 'Penalty Income', value: getValue('income', 'penalty_income'), color: '#2563eb' },
       { key: 'other_income', label: 'Other Income', value: getValue('income', 'other_income'), color: '#4f46e5' },
+      {
+        key: 'collector_bank_deposits_preview',
+        label: 'Collector Deposits (Preview)',
+        value: getValue('income', 'collector_bank_deposits_preview'),
+        color: '#0ea5e9',
+      },
+      {
+        key: 'cash_handovers_preview',
+        label: 'Cash Handovers (Preview)',
+        value: getValue('income', 'cash_handovers_preview'),
+        color: '#06b6d4',
+      },
+      {
+        key: 'branch_cash_transfers_preview',
+        label: 'Branch Cash Transfers (Preview)',
+        value: getValue('income', 'branch_cash_transfers_preview'),
+        color: '#22d3ee',
+      },
     ];
 
     const expenses: ChartSlice[] = [
@@ -421,7 +444,7 @@ export default function AccountingOverviewPage() {
             <span className="font-semibold text-black">
               {formatDateLabel(fromDate)} – {formatDateLabel(toDate)}
             </span>
-            . Monthly and yearly profit use the calendar month and year.
+            . Wallet preview lines show approved collector deposits and handovers/transfers for super admin visibility; they do not replace core `total_income`. Monthly and yearly profit use the calendar month and year.
           </p>
         </div>
 

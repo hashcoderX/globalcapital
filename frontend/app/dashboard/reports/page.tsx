@@ -132,6 +132,11 @@ export default function ReportsHubPage() {
             path: '/dashboard/reports/cash-book',
           },
           {
+            title: 'Collector Wallet Deposits Report',
+            description: 'Admin report for field and collection officer wallet-to-bank deposits.',
+            path: '/dashboard/reports/collector-wallet-deposits',
+          },
+          {
             title: 'Financial Overview',
             description: 'Assets, liabilities, income, expenses, and profit in one structured summary.',
             path: '/dashboard/accounting/overview',

@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\AccountingExpense;
+use App\Models\AccountingRefund;
 use App\Models\Company;
 use App\Models\CompanyAccount;
 use App\Models\Customer;
@@ -16,6 +18,8 @@ use App\Models\MicrofinanceLoanCollection;
 use App\Models\MicrofinanceLoanRequest;
 use App\Models\Mortgage;
 use App\Models\MortgagePayment;
+use App\Models\EmployeeWalletBankDeposit;
+use App\Models\EmployeeWalletCashHandover;
 use App\Services\SpeedDraftCalculator;
 use Carbon\Carbon;
 use Illuminate\Support\Arr;
@@ -838,6 +842,105 @@ class FinanceController extends Controller
         $refundOpening = (float) ((clone $collectionsBase)->tap(fn ($q) => $applyDateWindow($q, 'finance_collections.payment_date', 'opening'))->sum('finance_collections.refund_amount') ?: 0);
         $refundPeriod = (float) ((clone $collectionsBase)->tap(fn ($q) => $applyDateWindow($q, 'finance_collections.payment_date', 'period'))->sum('finance_collections.refund_amount') ?: 0);
 
+        $manualExpensesBase = AccountingExpense::query();
+        $accountingRefundsBase = AccountingRefund::query();
+        $walletDepositsBase = EmployeeWalletBankDeposit::query()->where('status', 'approved');
+        $walletTransfersBase = EmployeeWalletCashHandover::query()
+            ->where('status', 'approved')
+            ->whereNotNull('branch_cash_transferred_at');
+
+        if ($branchId !== null) {
+            $manualExpensesBase->where('company_id', $branchId);
+            $accountingRefundsBase->where('company_id', $branchId);
+            $walletDepositsBase->where('branch_id', $branchId);
+            $walletTransfersBase->where('branch_id', $branchId);
+        }
+
+        $manualExpenseOpeningTotal = (float) ((clone $manualExpensesBase)->tap(fn ($q) => $applyDateWindow($q, 'expense_date', 'opening'))->sum('amount') ?: 0);
+        $manualExpensePeriodTotal = (float) ((clone $manualExpensesBase)->tap(fn ($q) => $applyDateWindow($q, 'expense_date', 'period'))->sum('amount') ?: 0);
+
+        $accountingRefundOpeningTotal = (float) ((clone $accountingRefundsBase)->tap(fn ($q) => $applyDateWindow($q, 'refund_date', 'opening'))->sum('amount') ?: 0);
+        $accountingRefundPeriodTotal = (float) ((clone $accountingRefundsBase)->tap(fn ($q) => $applyDateWindow($q, 'refund_date', 'period'))->sum('amount') ?: 0);
+
+        $manualExpenseOpeningByMethod = (clone $manualExpensesBase)
+            ->tap(fn ($q) => $applyDateWindow($q, 'expense_date', 'opening'))
+            ->selectRaw('payment_method, SUM(amount) as total_amount')
+            ->groupBy('payment_method')
+            ->pluck('total_amount', 'payment_method')
+            ->map(fn ($value) => round((float) $value, 2))
+            ->all();
+
+        $manualExpensePeriodByMethod = (clone $manualExpensesBase)
+            ->tap(fn ($q) => $applyDateWindow($q, 'expense_date', 'period'))
+            ->selectRaw('payment_method, SUM(amount) as total_amount')
+            ->groupBy('payment_method')
+            ->pluck('total_amount', 'payment_method')
+            ->map(fn ($value) => round((float) $value, 2))
+            ->all();
+
+        $accountingRefundOpeningByMethod = (clone $accountingRefundsBase)
+            ->tap(fn ($q) => $applyDateWindow($q, 'refund_date', 'opening'))
+            ->selectRaw('payment_method, SUM(amount) as total_amount')
+            ->groupBy('payment_method')
+            ->pluck('total_amount', 'payment_method')
+            ->map(fn ($value) => round((float) $value, 2))
+            ->all();
+
+        $accountingRefundPeriodByMethod = (clone $accountingRefundsBase)
+            ->tap(fn ($q) => $applyDateWindow($q, 'refund_date', 'period'))
+            ->selectRaw('payment_method, SUM(amount) as total_amount')
+            ->groupBy('payment_method')
+            ->pluck('total_amount', 'payment_method')
+            ->map(fn ($value) => round((float) $value, 2))
+            ->all();
+
+        $walletDepositOpeningByAccount = (clone $walletDepositsBase)
+            ->tap(fn ($q) => $applyDateWindow($q, 'approved_at', 'opening'))
+            ->selectRaw('bank_account_id, SUM(amount) as total_amount')
+            ->whereNotNull('bank_account_id')
+            ->groupBy('bank_account_id')
+            ->pluck('total_amount', 'bank_account_id')
+            ->map(fn ($value) => round((float) $value, 2))
+            ->all();
+
+        $walletDepositPeriodByAccount = (clone $walletDepositsBase)
+            ->tap(fn ($q) => $applyDateWindow($q, 'approved_at', 'period'))
+            ->selectRaw('bank_account_id, SUM(amount) as total_amount')
+            ->whereNotNull('bank_account_id')
+            ->groupBy('bank_account_id')
+            ->pluck('total_amount', 'bank_account_id')
+            ->map(fn ($value) => round((float) $value, 2))
+            ->all();
+
+        $walletTransferOpeningByAccount = (clone $walletTransfersBase)
+            ->tap(fn ($q) => $applyDateWindow($q, 'branch_cash_transferred_at', 'opening'))
+            ->selectRaw('cash_account_id, SUM(amount) as total_amount')
+            ->whereNotNull('cash_account_id')
+            ->groupBy('cash_account_id')
+            ->pluck('total_amount', 'cash_account_id')
+            ->map(fn ($value) => round((float) $value, 2))
+            ->all();
+
+        $walletTransferPeriodByAccount = (clone $walletTransfersBase)
+            ->tap(fn ($q) => $applyDateWindow($q, 'branch_cash_transferred_at', 'period'))
+            ->selectRaw('cash_account_id, SUM(amount) as total_amount')
+            ->whereNotNull('cash_account_id')
+            ->groupBy('cash_account_id')
+            ->pluck('total_amount', 'cash_account_id')
+            ->map(fn ($value) => round((float) $value, 2))
+            ->all();
+
+        $walletPostingOpeningTotal = round(
+            array_sum(array_map('floatval', $walletDepositOpeningByAccount))
+            + array_sum(array_map('floatval', $walletTransferOpeningByAccount)),
+            2
+        );
+        $walletPostingPeriodTotal = round(
+            array_sum(array_map('floatval', $walletDepositPeriodByAccount))
+            + array_sum(array_map('floatval', $walletTransferPeriodByAccount)),
+            2
+        );
+
         $recalculateLine = static function (array $line): array {
             $openingDebit = round((float) ($line['opening_debit'] ?? 0), 2);
             $openingCredit = round((float) ($line['opening_credit'] ?? 0), 2);
@@ -939,6 +1042,30 @@ class FinanceController extends Controller
             }
         }
 
+        $activeAccountsByType = [];
+        if ($branchId) {
+            $activeAccountsByType = CompanyAccount::query()
+                ->where('company_id', $branchId)
+                ->where('is_active', true)
+                ->orderBy('id')
+                ->get()
+                ->groupBy('account_type');
+        }
+
+        $resolveAccountByMethod = static function (string $method) use ($activeAccountsByType): ?CompanyAccount {
+            $normalized = strtolower(trim($method));
+            $targetType = match ($normalized) {
+                'cash' => CompanyAccount::TYPE_CASH,
+                'bank' => CompanyAccount::TYPE_BANK,
+                default => CompanyAccount::TYPE_MAIN,
+            };
+
+            $bucket = $activeAccountsByType[$targetType] ?? collect();
+            /** @var CompanyAccount|null $account */
+            $account = $bucket instanceof \Illuminate\Support\Collection ? $bucket->first() : null;
+            return $account;
+        };
+
         $financeLines = [
             [
                 'account_code' => '1100',
@@ -984,6 +1111,121 @@ class FinanceController extends Controller
 
         foreach ($financeLines as $financeLine) {
             $upsertLine($financeLine);
+        }
+
+        $upsertAccountCreditByMethod = function (
+            array $openingByMethod,
+            array $periodByMethod
+        ) use ($upsertLine, $resolveAccountByMethod): void {
+            foreach (['cash', 'bank', 'main'] as $method) {
+                $openingAmount = round((float) ($openingByMethod[$method] ?? 0), 2);
+                $periodAmount = round((float) ($periodByMethod[$method] ?? 0), 2);
+                if ($openingAmount <= 0 && $periodAmount <= 0) {
+                    continue;
+                }
+
+                $account = $resolveAccountByMethod($method);
+                $accountCode = $account
+                    ? trim((string) ($account->account_code ?: CompanyAccount::defaultAccountCode((string) $account->account_type)))
+                    : CompanyAccount::defaultAccountCode(match ($method) {
+                        'cash' => CompanyAccount::TYPE_CASH,
+                        'bank' => CompanyAccount::TYPE_BANK,
+                        default => CompanyAccount::TYPE_MAIN,
+                    });
+                $accountName = $account?->account_name ?: strtoupper($method) . ' Account';
+                $accountType = $account?->account_type ?: match ($method) {
+                    'cash' => CompanyAccount::TYPE_CASH,
+                    'bank' => CompanyAccount::TYPE_BANK,
+                    default => CompanyAccount::TYPE_MAIN,
+                };
+
+                $upsertLine([
+                    'account_code' => $accountCode,
+                    'account_name' => (string) $accountName,
+                    'account_type' => $accountType,
+                    'source' => 'accounting',
+                    'opening_debit' => 0.0,
+                    'opening_credit' => $openingAmount,
+                    'period_debit' => 0.0,
+                    'period_credit' => $periodAmount,
+                ]);
+            }
+        };
+
+        $upsertAccountCreditByMethod($manualExpenseOpeningByMethod, $manualExpensePeriodByMethod);
+        $upsertAccountCreditByMethod($accountingRefundOpeningByMethod, $accountingRefundPeriodByMethod);
+
+        if ($manualExpenseOpeningTotal > 0 || $manualExpensePeriodTotal > 0) {
+            $upsertLine([
+                'account_code' => '5200',
+                'account_name' => 'Operating Expense',
+                'account_type' => 'expense',
+                'source' => 'accounting',
+                'opening_debit' => $manualExpenseOpeningTotal,
+                'opening_credit' => 0.0,
+                'period_debit' => $manualExpensePeriodTotal,
+                'period_credit' => 0.0,
+            ]);
+        }
+
+        if ($accountingRefundOpeningTotal > 0 || $accountingRefundPeriodTotal > 0) {
+            $upsertLine([
+                'account_code' => '5100',
+                'account_name' => 'Refund Expense',
+                'account_type' => 'expense',
+                'source' => 'accounting',
+                'opening_debit' => $accountingRefundOpeningTotal,
+                'opening_credit' => 0.0,
+                'period_debit' => $accountingRefundPeriodTotal,
+                'period_credit' => 0.0,
+            ]);
+        }
+
+        $upsertWalletAccountDebits = function (array $openingByAccount, array $periodByAccount) use ($upsertLine): void {
+            foreach (array_unique(array_merge(array_keys($openingByAccount), array_keys($periodByAccount))) as $accountId) {
+                $id = (int) $accountId;
+                if ($id <= 0) {
+                    continue;
+                }
+                $openingAmount = round((float) ($openingByAccount[$accountId] ?? 0), 2);
+                $periodAmount = round((float) ($periodByAccount[$accountId] ?? 0), 2);
+                if ($openingAmount <= 0 && $periodAmount <= 0) {
+                    continue;
+                }
+
+                $account = CompanyAccount::query()->find($id);
+                if (!$account) {
+                    continue;
+                }
+
+                $code = trim((string) ($account->account_code ?: CompanyAccount::defaultAccountCode((string) $account->account_type)));
+                $upsertLine([
+                    'account_code' => $code,
+                    'account_name' => (string) $account->account_name,
+                    'account_type' => (string) $account->account_type,
+                    'source' => 'wallet',
+                    'opening_debit' => $openingAmount,
+                    'opening_credit' => 0.0,
+                    'period_debit' => $periodAmount,
+                    'period_credit' => 0.0,
+                ]);
+            }
+        };
+
+        $upsertWalletAccountDebits($walletDepositOpeningByAccount, $walletDepositPeriodByAccount);
+        $upsertWalletAccountDebits($walletTransferOpeningByAccount, $walletTransferPeriodByAccount);
+
+        if ($walletPostingOpeningTotal > 0 || $walletPostingPeriodTotal > 0) {
+            $upsertLine([
+                'account_code' => '2300',
+                'account_name' => 'Collector Wallet Clearing',
+                'account_type' => 'liability',
+                'source' => 'wallet',
+                'opening_debit' => 0.0,
+                'opening_credit' => $walletPostingOpeningTotal,
+                'period_debit' => 0.0,
+                'period_credit' => $walletPostingPeriodTotal,
+            ]);
         }
 
         $lines = array_values($lineMap);

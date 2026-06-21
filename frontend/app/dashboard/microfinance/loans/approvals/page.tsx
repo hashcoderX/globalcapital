@@ -26,6 +26,12 @@ type LoanRequest = {
   loan_amount: string | number;
   refundable_amount: string | number;
   installment_amount: string | number;
+  document_charges?: string | number;
+  stamp_charges?: string | number;
+  insurance_charges?: string | number;
+  charge_payment_mode?: string | null;
+  charges_collection_status?: string | null;
+  net_disbursed_amount?: string | number;
   interest_type: 'flat' | 'reducing';
   interest_rate: string | number;
   terms_count: number;
@@ -487,13 +493,17 @@ export default function LoanApprovalsPage() {
 
     setRejectingId(loanId);
     try {
-      await axios.post(
+      const response = await axios.post(
         `${API_BASE}/microfinance/loan-requests/${loanId}/reject`,
         {},
         { headers }
       );
       setRequests((prev) => prev.filter((loan) => loan.id !== loanId));
-      openModal('Loan rejected successfully.', 'Success');
+      const successMessage =
+        typeof response?.data?.message === 'string' && response.data.message.trim() !== ''
+          ? response.data.message
+          : 'Loan rejected successfully.';
+      openModal(successMessage, 'Success');
     } catch (error: any) {
       const message = error?.response?.data?.message || 'Failed to reject loan.';
       openModal(message, 'Error');
@@ -667,6 +677,12 @@ export default function LoanApprovalsPage() {
             {paginatedRequests.map((loan) => {
               const schedule = getLoanSchedule(loan);
               const customerPhotoUrl = resolveLoanCustomerPhotoUrl(loan);
+              const documentCharges = Number(loan.document_charges || 0);
+              const stampCharges = Number(loan.stamp_charges || 0);
+              const insuranceCharges = Number(loan.insurance_charges || 0);
+              const totalCollectedCharges = documentCharges + stampCharges + insuranceCharges;
+              const chargePaymentMode = String(loan.charge_payment_mode || '-').replaceAll('_', ' ');
+              const chargesCollectionStatus = String(loan.charges_collection_status || 'pending').replaceAll('_', ' ');
 
               return (
               <div key={loan.id} className="bg-white/90 rounded-2xl shadow-lg border border-orange-100 p-5">
@@ -739,6 +755,34 @@ export default function LoanApprovalsPage() {
                   <div className="rounded-lg bg-orange-50 border border-orange-100 p-3">
                     <p className="text-xs uppercase tracking-wide text-gray-500">Request Date</p>
                     <p className="text-sm font-bold text-gray-900">{loan.loan_request_date}</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3 mt-4">
+                  <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Charge Payment Mode</p>
+                    <p className="text-sm font-bold text-gray-900 capitalize">{chargePaymentMode}</p>
+                  </div>
+                  <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Collection Status</p>
+                    <p className="text-sm font-bold text-gray-900 capitalize">{chargesCollectionStatus}</p>
+                  </div>
+                  <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Document Charges</p>
+                    <p className="text-sm font-bold text-gray-900">{documentCharges.toFixed(2)}</p>
+                  </div>
+                  <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Stamp Charges</p>
+                    <p className="text-sm font-bold text-gray-900">{stampCharges.toFixed(2)}</p>
+                  </div>
+                  <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Insurance Charges</p>
+                    <p className="text-sm font-bold text-gray-900">{insuranceCharges.toFixed(2)}</p>
+                  </div>
+                  <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-3">
+                    <p className="text-xs uppercase tracking-wide text-gray-500">Collected Payment Total</p>
+                    <p className="text-sm font-bold text-gray-900">{totalCollectedCharges.toFixed(2)}</p>
+                    <p className="text-[11px] text-gray-600 mt-1">Net Disbursed: {Number(loan.net_disbursed_amount || 0).toFixed(2)}</p>
                   </div>
                 </div>
 

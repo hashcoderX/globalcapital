@@ -44,6 +44,13 @@ interface Employee {
   apit_tax_rate?: number;
   status: 'active' | 'inactive';
   user?: { role?: string };
+  wallet?: {
+    id?: number;
+    wallet_no?: string;
+    opening_balance?: number;
+    current_balance?: number;
+    status?: string;
+  } | null;
   department: { id: number; name: string };
   designation: { id: number; name: string };
   branch: { id: number; name: string };
@@ -80,10 +87,19 @@ interface EmployeeExperience {
   achievements?: string;
 }
 
+interface EmployeeWallet {
+  id: number;
+  wallet_no?: string;
+  opening_balance?: number;
+  current_balance?: number;
+  status?: string;
+}
+
 type EmployeeFull = Employee & {
   documents?: EmployeeDocument[];
   educations?: EmployeeEducation[];
   experiences?: EmployeeExperience[];
+  wallet?: EmployeeWallet | null;
 };
 
 interface Department {
@@ -142,6 +158,7 @@ const DEFAULT_LEAVE_TYPES: LeaveType[] = [
 export default function Employees() {
   const apiBase = getApiBaseUrl();
   const [token, setToken] = useState('');
+  const [isAdminUser, setIsAdminUser] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [designations, setDesignations] = useState<Designation[]>([]);
@@ -160,7 +177,12 @@ export default function Employees() {
   const [showEduModal, setShowEduModal] = useState(false);
   const [showExpModal, setShowExpModal] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [showWalletModal, setShowWalletModal] = useState(false);
   const [activeEmployee, setActiveEmployee] = useState<Employee | null>(null);
+  const [walletEmployee, setWalletEmployee] = useState<Employee | null>(null);
+  const [walletModalMode, setWalletModalMode] = useState<'create' | 'edit'>('create');
+  const [walletModalValue, setWalletModalValue] = useState('0');
+  const [walletModalSaving, setWalletModalSaving] = useState(false);
   const [profileEmployee, setProfileEmployee] = useState<EmployeeFull | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const router = useRouter();
@@ -400,6 +422,7 @@ export default function Employees() {
       router.push('/');
     } else {
       setToken(storedToken);
+      fetchAuthUser(storedToken);
       fetchEmployees(storedToken);
       fetchDepartments(storedToken);
       fetchDesignations(storedToken);
@@ -407,6 +430,37 @@ export default function Employees() {
       fetchLeaveTypes(storedToken);
     }
   }, [router]);
+
+  const fetchAuthUser = async (authToken?: string) => {
+    const tokenToUse = authToken || token;
+    if (!tokenToUse) return;
+
+    try {
+      const response = await axios.get(`${apiBase}/user`, {
+        headers: { Authorization: `Bearer ${tokenToUse}` },
+      });
+
+      const user = response.data || {};
+      const roleNames: string[] = [
+        typeof user?.role === 'string' ? user.role : '',
+        typeof user?.designation?.name === 'string' ? user.designation.name : '',
+        ...(Array.isArray(user?.roles)
+          ? user.roles.map((row: { name?: unknown }) => (typeof row?.name === 'string' ? row.name : ''))
+          : []),
+      ]
+        .map((row) => row.trim().toLowerCase())
+        .filter(Boolean);
+
+      const isAdmin = roleNames.some((roleName) =>
+        roleName.includes('admin') || roleName.includes('super admin') || roleName.includes('md')
+      );
+
+      setIsAdminUser(isAdmin);
+    } catch (error) {
+      console.error('Error fetching authenticated user:', error);
+      setIsAdminUser(false);
+    }
+  };
 
   const fetchEmployees = async (authToken?: string) => {
     const tokenToUse = authToken || token;
@@ -426,6 +480,7 @@ export default function Employees() {
         phone: employee.phone ?? employee.mobile ?? '',
         hire_date: toDateInputValue(employee.hire_date ?? employee.join_date ?? ''),
         date_of_birth: toDateInputValue(employee.date_of_birth ?? ''),
+        wallet: employee.wallet ?? null,
       }));
 
       setEmployees(normalizedEmployees);
@@ -774,6 +829,76 @@ export default function Employees() {
       setShowProfileModal(false);
     } finally {
       setProfileLoading(false);
+    }
+  };
+
+  const createEmployeeWallet = async (employee: Employee) => {
+    setWalletEmployee(employee);
+    setWalletModalMode('create');
+    setWalletModalValue('0');
+    setShowWalletModal(true);
+  };
+
+  const editEmployeeWallet = async (employee: Employee) => {
+    if (!employee.wallet) {
+      showNotice('Wallet not found', 'This employee does not have a wallet yet.', 'error');
+      return;
+    }
+
+    setWalletEmployee(employee);
+    setWalletModalMode('edit');
+    setWalletModalValue(String(employee.wallet.current_balance ?? 0));
+    setShowWalletModal(true);
+  };
+
+  const closeWalletModal = () => {
+    if (walletModalSaving) return;
+    setShowWalletModal(false);
+    setWalletEmployee(null);
+    setWalletModalMode('create');
+    setWalletModalValue('0');
+  };
+
+  const submitEmployeeWallet = async () => {
+    if (!token || !walletEmployee) return;
+
+    const parsed = walletModalValue.trim() === '' ? 0 : Number(walletModalValue);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      showNotice('Validation', 'Wallet value must be a valid number greater than or equal to 0.', 'error');
+      return;
+    }
+
+    try {
+      setWalletModalSaving(true);
+      if (walletModalMode === 'create') {
+        await axios.post(
+          `${apiBase}/hr/employees/${walletEmployee.id}/wallet`,
+          { opening_balance: parsed },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        showNotice('Success', `Wallet created for ${walletEmployee.first_name} ${walletEmployee.last_name}.`, 'success');
+      } else {
+        await axios.put(
+          `${apiBase}/hr/employees/${walletEmployee.id}/wallet`,
+          { current_balance: parsed },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        showNotice('Success', `Wallet value updated for ${walletEmployee.first_name} ${walletEmployee.last_name}.`, 'success');
+      }
+
+      fetchEmployees();
+      closeWalletModal();
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.message ||
+        (walletModalMode === 'create'
+          ? 'Failed to create wallet. Please try again.'
+          : 'Failed to update wallet value. Please try again.');
+      showNotice('Error', message, 'error');
+    } finally {
+      setWalletModalSaving(false);
     }
   };
 
@@ -1382,6 +1507,18 @@ export default function Employees() {
                               <span className="w-4 h-4">👁️</span>
                               <span>View</span>
                             </button>
+                            {!employee.wallet && (
+                              <button role="menuitem" onClick={() => { createEmployeeWallet(employee); setOpenMenuFor(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-gray-700 hover:bg-gray-50">
+                                <span className="w-4 h-4">👛</span>
+                                <span>Make Wallet</span>
+                              </button>
+                            )}
+                            {!!employee.wallet && isAdminUser && (
+                              <button role="menuitem" onClick={() => { editEmployeeWallet(employee); setOpenMenuFor(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-gray-700 hover:bg-gray-50">
+                                <span className="w-4 h-4">💰</span>
+                                <span>Edit Wallet Value</span>
+                              </button>
+                            )}
                             <button role="menuitem" onClick={() => { handleEdit(employee); setOpenMenuFor(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-gray-700 hover:bg-gray-50">
                               <span className="w-4 h-4">✏️</span>
                               <span>Edit</span>
@@ -2200,7 +2337,7 @@ export default function Employees() {
                     <div><strong>Email:</strong> {profileEmployee.email}</div>
                     <div><strong>Phone:</strong> {profileEmployee.phone || 'N/A'}</div>
                     <div><strong>Reporting Person:</strong> {(() => {
-                      const value = (profileEmployee as any)?.reporting_person as string | undefined;
+                      const value = profileEmployee.reporting_person;
                       if (!value) return 'N/A';
                       const match = employees.find((row) => row.email?.toLowerCase?.() === value.toLowerCase());
                       if (match) {
@@ -2229,6 +2366,26 @@ export default function Employees() {
                     <div><strong>Tax Relief Eligible:</strong> {profileEmployee.tax_relief_eligible ? 'Yes' : 'No'}</div>
                     <div><strong>PAYE/APIT Rate:</strong> {(profileEmployee.apit_tax_rate ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%</div>
                     <div><strong>PAYE/APIT Amount:</strong> LKR {(profileEmployee.apit_tax_amount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    <div><strong>Wallet No:</strong> {profileEmployee.wallet?.wallet_no || 'Not created'}</div>
+                    <div>
+                      <strong>Wallet Balance:</strong>{' '}
+                      {profileEmployee.wallet
+                        ? `LKR ${Number(profileEmployee.wallet.current_balance ?? 0).toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}`
+                        : 'N/A'}
+                    </div>
+                    <div>
+                      <strong>Wallet Opening Balance:</strong>{' '}
+                      {profileEmployee.wallet
+                        ? `LKR ${Number(profileEmployee.wallet.opening_balance ?? 0).toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}`
+                        : 'N/A'}
+                    </div>
+                    <div><strong>Wallet Status:</strong> {profileEmployee.wallet?.status || 'N/A'}</div>
                   </div>
                   {profileEmployee.address && <div className="mt-4"><strong>Address:</strong> {profileEmployee.address}</div>}
                 </div>
@@ -2953,6 +3110,61 @@ export default function Employees() {
                   Save Leave Balances
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Make Wallet Modal */}
+      {showWalletModal && walletEmployee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeWalletModal} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto text-black">
+            <div className="flex items-start justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900">
+                {walletModalMode === 'create' ? 'Make Wallet' : 'Edit Wallet Value'}
+              </h3>
+              <button onClick={closeWalletModal} className="text-gray-500 hover:text-gray-700">✕</button>
+            </div>
+            <p className="text-sm text-gray-700 mb-4">
+              {walletModalMode === 'create' ? 'Create wallet for' : 'Update wallet value for'}{' '}
+              <span className="font-semibold">{walletEmployee.first_name} {walletEmployee.last_name}</span> ({walletEmployee.employee_code})
+            </p>
+
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                {walletModalMode === 'create' ? 'Opening Balance' : 'Current Wallet Value'}
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={walletModalValue}
+                onChange={(e) => setWalletModalValue(e.target.value)}
+                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-gray-900 bg-white"
+                placeholder="0.00"
+              />
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeWalletModal}
+                disabled={walletModalSaving}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitEmployeeWallet}
+                disabled={walletModalSaving}
+                className="px-4 py-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-medium hover:from-emerald-600 hover:to-teal-600 disabled:opacity-60"
+              >
+                {walletModalSaving
+                  ? (walletModalMode === 'create' ? 'Creating...' : 'Updating...')
+                  : (walletModalMode === 'create' ? 'Create Wallet' : 'Update Wallet Value')}
+              </button>
             </div>
           </div>
         </div>

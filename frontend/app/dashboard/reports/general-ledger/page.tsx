@@ -39,6 +39,13 @@ type CompanyOption = {
   currency?: string | null;
 };
 
+type AuthUser = {
+  id?: number;
+  role?: string;
+  designation?: { id?: number; name?: string } | null;
+  roles?: Array<{ id?: number; name?: string }>;
+};
+
 const inputClass =
   'w-full rounded-xl border border-violet-200/80 bg-white px-3.5 py-2.5 text-sm text-black shadow-sm transition focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-200/80 placeholder:text-slate-400 [color-scheme:light]';
 
@@ -71,12 +78,16 @@ function todayIso(): string {
 function sourceLabel(source?: string | null): string {
   if (source === 'company_account') return 'Setup';
   if (source === 'finance') return 'Finance';
+  if (source === 'accounting') return 'Accounting';
+  if (source === 'wallet') return 'Wallet';
   return 'Mixed';
 }
 
 function sourceBadgeClass(source?: string | null): string {
   if (source === 'company_account') return 'border-violet-200 bg-violet-50 text-violet-800';
   if (source === 'finance') return 'border-indigo-200 bg-indigo-50 text-indigo-800';
+  if (source === 'accounting') return 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800';
+  if (source === 'wallet') return 'border-cyan-200 bg-cyan-50 text-cyan-800';
   return 'border-slate-200 bg-slate-50 text-slate-700';
 }
 
@@ -87,6 +98,7 @@ export default function GeneralLedgerSnapshotPage() {
   const initialCompanyId = Number(searchParams.get('branch_id') || searchParams.get('company_id') || 0) || null;
 
   const [token, setToken] = useState('');
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loadingCompanies, setLoadingCompanies] = useState(true);
   const [loading, setLoading] = useState(true);
   const [companies, setCompanies] = useState<CompanyOption[]>([]);
@@ -119,6 +131,33 @@ export default function GeneralLedgerSnapshotPage() {
     [companies, selectedCompanyId]
   );
 
+  const normalizeText = (value: string) =>
+    String(value || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const designationName = normalizeText(String(authUser?.designation?.name || ''));
+  const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
+  const directRoleName = normalizeText(String(authUser?.role || ''));
+  const roleSignals = [designationName, directRoleName, ...roleNames].filter(Boolean);
+
+  const canUseAccountantPreview = roleSignals.some((signal) =>
+    [
+      'super admin',
+      'system admin',
+      'admin',
+      'accountant',
+      'senior accountant',
+      'auditor',
+      'finance manager',
+      'branch manager',
+      'manager',
+    ].some((keyword) => signal.includes(keyword))
+  );
+
   const currency = companyMeta?.currency || selectedCompany?.currency || 'LKR';
 
   useEffect(() => {
@@ -128,7 +167,24 @@ export default function GeneralLedgerSnapshotPage() {
       return;
     }
     setToken(storedToken);
+
+    const storedUser = localStorage.getItem('auth_user');
+    if (storedUser) {
+      try {
+        setAuthUser(JSON.parse(storedUser));
+      } catch {
+        setAuthUser(null);
+      }
+    } else {
+      setAuthUser(null);
+    }
   }, [router]);
+
+  useEffect(() => {
+    if (!canUseAccountantPreview && previewMode === 'accountant') {
+      setPreviewMode('simple');
+    }
+  }, [canUseAccountantPreview, previewMode]);
 
   const fetchCompanies = async (authToken: string) => {
     setLoadingCompanies(true);
@@ -413,7 +469,13 @@ export default function GeneralLedgerSnapshotPage() {
           </div>
         ) : null}
 
-        <PreviewModeToggle mode={previewMode} onChange={setPreviewMode} />
+        {canUseAccountantPreview ? (
+          <PreviewModeToggle mode={previewMode} onChange={setPreviewMode} />
+        ) : (
+          <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-xs font-semibold text-cyan-900">
+            Role-based preview: your account can view the simple ledger preview only.
+          </div>
+        )}
 
         {previewMode === 'accountant' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">

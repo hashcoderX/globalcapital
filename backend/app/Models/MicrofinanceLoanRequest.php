@@ -40,7 +40,9 @@ class MicrofinanceLoanRequest extends Model
         'stamp_charges',
         'insurance_charges',
         'charge_payment_mode',
+        'charges_collection_status',
         'net_disbursed_amount',
+        'charges_wallet_credited_at',
         'next_payment_date',
         'due_date',
         'loan_end_date',
@@ -68,6 +70,7 @@ class MicrofinanceLoanRequest extends Model
         'installment_amount' => 'decimal:2',
         'loan_balance' => 'decimal:2',
         'due_date' => 'date',
+        'charges_wallet_credited_at' => 'datetime',
         'hold_at' => 'datetime',
         'closed_at' => 'datetime',
     ];

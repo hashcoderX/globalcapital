@@ -1,7 +1,7 @@
 'use client';
 
 import axios from 'axios';
-import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { getApiBaseUrl } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
@@ -218,6 +218,12 @@ export default function RecoveryReportPage() {
     );
   }, [filteredRows]);
 
+  const totalExposure = useMemo(() => summary.pending + summary.arrears, [summary.pending, summary.arrears]);
+  const urgentHighRatio = useMemo(() => {
+    if (summary.count <= 0) return 0;
+    return ((summary.urgent + summary.high) / summary.count) * 100;
+  }, [summary.count, summary.urgent, summary.high]);
+
   const formatMoney = (value: number) => Number(value || 0).toFixed(2);
 
   const formatDate = (value: string) => {
@@ -348,140 +354,176 @@ export default function RecoveryReportPage() {
 
   if (!token || loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
+      <div className="min-h-screen bg-gradient-to-br from-[#e6f7ff] via-[#eefcf7] to-[#f0f9ff] flex items-center justify-center">
+        <div className="h-14 w-14 animate-spin rounded-full border-4 border-cyan-100 border-t-cyan-600" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-[#e6f7ff] via-[#eefcf7] to-[#f0f9ff] p-6">
+      <div className="pointer-events-none absolute inset-0 opacity-60">
+        <div className="absolute -top-24 left-10 h-80 w-80 rounded-full bg-cyan-300/70 blur-3xl" />
+        <div className="absolute top-20 right-0 h-[26rem] w-[26rem] rounded-full bg-emerald-200/70 blur-3xl" />
+        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-sky-200/70 blur-3xl" />
+        <div
+          className="absolute inset-0 opacity-30"
+          style={{
+            backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(8,145,178,0.12) 1px, transparent 0)',
+            backgroundSize: '24px 24px',
+          }}
+        />
       </div>
 
-      <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
+      <div className="relative z-10 mx-auto max-w-7xl space-y-6">
+        <div className="rounded-[2rem] border border-cyan-100/80 bg-gradient-to-br from-[#064e63] via-[#0f766e] to-[#065f46] p-6 text-white shadow-[0_25px_70px_-28px_rgba(6,95,70,0.65)] md:p-7">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
-                Reports Desk
+              <span className="inline-flex rounded-full border border-white/25 bg-white/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-100">
+                Recovery Intelligence Desk
               </span>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Recovery Report</h1>
-              <p className="text-sm text-slate-600 mt-1">Monitor recovery portfolio, prioritize accounts, and track pending and arrears exposure.</p>
+              <h1 className="mt-3 text-3xl font-black tracking-tight text-white md:text-4xl">Recovery Report</h1>
+              <p className="mt-1 max-w-3xl text-sm text-cyan-100/95 md:text-base">Monitor recovery portfolio, spotlight at-risk accounts, and drive branch action with clear priority signals.</p>
+              <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                <span className="rounded-lg border border-white/20 bg-white/10 px-2.5 py-1">Exposure: {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 0 }).format(totalExposure)}</span>
+                <span className="rounded-lg border border-white/20 bg-white/10 px-2.5 py-1">Urgent + High: {urgentHighRatio.toFixed(1)}%</span>
+                <span className="rounded-lg border border-white/20 bg-white/10 px-2.5 py-1">Branch Scope: {branchId ? `#${branchId}` : 'All Branches'}</span>
+              </div>
             </div>
             <button
               onClick={() => router.back()}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
+              className="rounded-xl border border-white/25 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20"
             >
               Back
             </button>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Recovery Accounts</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.count}</p>
+          <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <div className="rounded-2xl border border-white/20 bg-white/10 p-4 backdrop-blur">
+              <p className="text-[10px] uppercase tracking-wide text-cyan-100">Recovery Accounts</p>
+              <p className="mt-1 text-lg font-black text-white">{summary.count}</p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Pending</p>
-              <p className="text-2xl font-extrabold text-rose-700 mt-1">
+            <div className="rounded-2xl border border-rose-200/70 bg-white p-4 shadow-sm">
+              <p className="text-[10px] uppercase tracking-wide text-rose-500">Pending</p>
+              <p className="mt-1 text-lg font-black text-rose-700">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Arrears</p>
-              <p className="text-2xl font-extrabold text-orange-700 mt-1">
+            <div className="rounded-2xl border border-orange-200/70 bg-white p-4 shadow-sm">
+              <p className="text-[10px] uppercase tracking-wide text-orange-500">Arrears</p>
+              <p className="mt-1 text-lg font-black text-orange-700">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.arrears)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Urgent / High</p>
-              <p className="text-2xl font-extrabold text-red-700 mt-1">{summary.urgent} / {summary.high}</p>
+            <div className="rounded-2xl border border-red-200/70 bg-white p-4 shadow-sm">
+              <p className="text-[10px] uppercase tracking-wide text-red-500">Urgent / High</p>
+              <p className="mt-1 text-lg font-black text-red-700">{summary.urgent} / {summary.high}</p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Medium / Low</p>
-              <p className="text-2xl font-extrabold text-cyan-700 mt-1">{summary.medium} / {summary.low}</p>
+            <div className="rounded-2xl border border-cyan-200/70 bg-white p-4 shadow-sm">
+              <p className="text-[10px] uppercase tracking-wide text-cyan-500">Medium / Low</p>
+              <p className="mt-1 text-lg font-black text-cyan-700">{summary.medium} / {summary.low}</p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Collected</p>
-              <p className="text-2xl font-extrabold text-emerald-700 mt-1">
+            <div className="rounded-2xl border border-emerald-200/70 bg-white p-4 shadow-sm">
+              <p className="text-[10px] uppercase tracking-wide text-emerald-500">Collected</p>
+              <p className="mt-1 text-lg font-black text-emerald-700">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected)}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <h2 className="text-lg font-bold text-slate-900">Recovery Portfolio</h2>
+        <div className="rounded-3xl border border-cyan-100 bg-white/90 p-4 shadow-[0_20px_45px_-24px_rgba(14,116,144,0.45)] backdrop-blur-xl md:p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap border-b border-cyan-100/80 pb-4">
+            <div>
+              <h2 className="text-xl font-black text-slate-900">Recovery Portfolio</h2>
+              <p className="text-xs text-slate-500">Filter and export account-level recovery priorities.</p>
+            </div>
             <div className="flex items-end gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={handleDownloadCsv}
-                className="px-3 py-2 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-sm font-semibold border border-emerald-200"
+                className="rounded-xl border border-emerald-200 bg-emerald-100 px-3 py-2 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-200"
               >
                 Download CSV
               </button>
               <button
                 type="button"
                 onClick={handleDownloadPdf}
-                className="px-3 py-2 rounded-xl bg-cyan-100 hover:bg-cyan-200 text-cyan-800 text-sm font-semibold border border-cyan-200"
+                className="rounded-xl border border-cyan-200 bg-cyan-100 px-3 py-2 text-sm font-semibold text-cyan-800 transition hover:bg-cyan-200"
               >
                 Download PDF
-              </button>
-              <div>
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Officer</label>
-                <select
-                  value={officerFilter}
-                  onChange={(e) => setOfficerFilter(e.target.value)}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
-                >
-                  <option value="all">All Officers</option>
-                  {officerOptions.map((officer) => (
-                    <option key={officer} value={officer.toLowerCase()}>
-                      {officer}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Priority</label>
-                <select
-                  value={priorityFilter}
-                  onChange={(e) => setPriorityFilter(e.target.value as 'all' | 'urgent' | 'high' | 'medium' | 'low')}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
-                >
-                  <option value="all">All</option>
-                  <option value="urgent">Urgent</option>
-                  <option value="high">High</option>
-                  <option value="medium">Medium</option>
-                  <option value="low">Low</option>
-                </select>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setOfficerFilter('all');
-                  setPriorityFilter('all');
-                }}
-                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold"
-              >
-                Reset
               </button>
             </div>
           </div>
 
+          <div className="mt-4 flex flex-wrap items-end gap-2">
+            <div>
+              <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Officer</label>
+              <select
+                value={officerFilter}
+                onChange={(e) => setOfficerFilter(e.target.value)}
+                className="mt-1 rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                <option value="all">All Officers</option>
+                {officerOptions.map((officer) => (
+                  <option key={officer} value={officer.toLowerCase()}>
+                    {officer}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Priority</label>
+              <select
+                value={priorityFilter}
+                onChange={(e) => setPriorityFilter(e.target.value as 'all' | 'urgent' | 'high' | 'medium' | 'low')}
+                className="mt-1 rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                <option value="all">All</option>
+                <option value="urgent">Urgent</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setOfficerFilter('all');
+                setPriorityFilter('all');
+              }}
+              className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-200"
+            >
+              Reset
+            </button>
+          </div>
+
+          <div className="mt-4 rounded-xl border border-cyan-100 bg-cyan-50/50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Priority Mix</p>
+            <div className="mt-2 h-3 overflow-hidden rounded-full bg-white">
+              <div className="flex h-full">
+                <div className="bg-red-500" style={{ width: `${summary.count ? (summary.urgent / summary.count) * 100 : 0}%` }} />
+                <div className="bg-orange-500" style={{ width: `${summary.count ? (summary.high / summary.count) * 100 : 0}%` }} />
+                <div className="bg-amber-400" style={{ width: `${summary.count ? (summary.medium / summary.count) * 100 : 0}%` }} />
+                <div className="bg-emerald-500" style={{ width: `${summary.count ? (summary.low / summary.count) * 100 : 0}%` }} />
+              </div>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold">
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-red-700">Urgent {summary.urgent}</span>
+              <span className="rounded-full bg-orange-100 px-2 py-0.5 text-orange-700">High {summary.high}</span>
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">Medium {summary.medium}</span>
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">Low {summary.low}</span>
+            </div>
+          </div>
+
           {filteredRows.length === 0 ? (
-            <div className="mt-4 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-100/60 to-teal-100/40 p-8 text-sm text-slate-700 text-center">
+            <div className="mt-4 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-100/60 to-teal-100/40 p-8 text-center text-sm text-slate-700">
               No recovery data found for selected filters.
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
-              <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70 text-slate-700">
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 bg-white">
+              <table className="min-w-full text-left text-sm text-slate-700">
+                <thead className="bg-cyan-50/80 text-slate-700">
                   <tr>
                     <th className="px-3 py-2 font-semibold">Loan ID</th>
                     <th className="px-3 py-2 font-semibold">Customer No</th>
@@ -498,14 +540,14 @@ export default function RecoveryReportPage() {
                 </thead>
                 <tbody>
                   {filteredRows.map((row) => (
-                    <tr key={row.loanId} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
+                    <tr key={row.loanId} className="border-b border-cyan-100 transition-colors hover:bg-cyan-50/40 last:border-b-0">
                       <td className="px-3 py-2">{row.loanId}</td>
                       <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
                       <td className="px-3 py-2">{row.customerName}</td>
                       <td className="px-3 py-2">{row.fieldOfficer}</td>
                       <td className="px-3 py-2 capitalize">{row.loanStatus}</td>
-                      <td className="px-3 py-2 text-rose-700 font-semibold">{formatMoney(row.pendingAmount)}</td>
-                      <td className="px-3 py-2 text-orange-700 font-semibold">{formatMoney(row.arrearsAmount)}</td>
+                      <td className="px-3 py-2 font-semibold text-rose-700">{formatMoney(row.pendingAmount)}</td>
+                      <td className="px-3 py-2 font-semibold text-orange-700">{formatMoney(row.arrearsAmount)}</td>
                       <td className="px-3 py-2">{formatDate(row.dueDate)}</td>
                       <td className="px-3 py-2">{formatDate(row.nextPaymentDate)}</td>
                       <td className="px-3 py-2">{row.overdueDays}</td>

@@ -114,6 +114,8 @@ class OfficeCollectionController extends Controller
             $totalPayable = (float) $loan->total_payable;
             $collected = (float) $loan->total_collected;
             $balance = max($totalPayable - $collected, 0);
+            $dueDate = $loan->due_date ? Carbon::parse((string) $loan->due_date)->toDateString() : null;
+            $nextPaymentDate = $loan->next_due_date ? Carbon::parse((string) $loan->next_due_date)->toDateString() : $dueDate;
 
             return [
                 'type' => 'loan',
@@ -125,7 +127,8 @@ class OfficeCollectionController extends Controller
                 'installment_amount' => (float) $loan->installment_amount,
                 'due_amount' => $balance,
                 'paid_amount' => $collected,
-                'due_date' => optional($loan->due_date ?? $loan->next_due_date)->format('Y-m-d'),
+                'due_date' => $dueDate,
+                'next_payment_date' => $nextPaymentDate,
                 'balance' => $balance,
                 'status' => $loan->status,
                 'label' => 'Instant Loan',
@@ -180,6 +183,7 @@ class OfficeCollectionController extends Controller
                 'due_amount' => (float) ($finance->due_amount ?? $finance->installment_amount ?? 0),
                 'paid_amount' => (float) ($finance->total_paid_amount ?? 0),
                 'due_date' => $finance->due_date ? Carbon::parse((string) $finance->due_date)->toDateString() : null,
+                'next_payment_date' => $finance->due_date ? Carbon::parse((string) $finance->due_date)->toDateString() : null,
                 'balance' => (float) ($finance->balance_amount ?? 0),
                 'status' => $finance->status,
                 'label' => 'Finance',
@@ -225,6 +229,7 @@ class OfficeCollectionController extends Controller
                 'due_amount' => (float) ($loan->installment_amount ?? 0),
                 'paid_amount' => $collected,
                 'due_date' => $loan->due_date ? Carbon::parse((string) $loan->due_date)->toDateString() : null,
+                'next_payment_date' => $loan->next_payment_date ? Carbon::parse((string) $loan->next_payment_date)->toDateString() : null,
                 'balance' => $balance,
                 'status' => $loan->status,
                 'label' => 'Micro Credit',
@@ -281,6 +286,7 @@ class OfficeCollectionController extends Controller
                 'due_amount' => $dueTotal,
                 'paid_amount' => (float) ($mortgage->total_paid_amount ?? 0),
                 'due_date' => $mortgage->due_date ? Carbon::parse((string) $mortgage->due_date)->toDateString() : null,
+                'next_payment_date' => $mortgage->due_date ? Carbon::parse((string) $mortgage->due_date)->toDateString() : null,
                 'balance' => $dueTotal,
                 'status' => $mortgage->status,
                 'label' => 'Mortgage',
@@ -514,7 +520,9 @@ class OfficeCollectionController extends Controller
             $interestPaid = (float) ($breakdown['interest_amount'] ?? data_get($collection, 'interest_amount') ?? 0);
             $penaltyPaid = (float) ($breakdown['penalty_amount'] ?? data_get($collection, 'penalty_amount') ?? 0);
             $arrearsBefore = (float) ($breakdown['arrears_outstanding_before'] ?? 0);
-            $arrearsAfter = (float) ($breakdown['arrears_outstanding_after'] ?? optional($loan)->arrears_balance ?? 0);
+            $arrearsOutstandingAfter = (float) ($breakdown['arrears_outstanding_after'] ?? optional($loan)->arrears_balance ?? 0);
+            $extraPaymentAfter = (float) ($breakdown['extra_payment_after'] ?? 0);
+            $arrearsAfter = max($arrearsOutstandingAfter - $extraPaymentAfter, 0);
             $refundable = (float) (optional($loan)->refundable_amount ?? 0);
             $totalPaidCumulative = (float) MicrofinanceLoanCollection::query()
                 ->where('mf_loan_request_id', $sourceId)

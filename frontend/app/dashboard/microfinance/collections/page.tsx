@@ -480,6 +480,46 @@ export default function CollectionManagementPage() {
     return Math.max(totalPayable - paidTotal, 0);
   };
 
+  const normalizeDateKey = (value?: string | null) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    return raw.includes('T') ? raw.split('T')[0] : raw.slice(0, 10);
+  };
+
+  const hasCollectionOnDate = (loanId: number, dateKey: string) => {
+    if (!dateKey) return false;
+
+    return collections.some((row) => {
+      const rowLoanId = Number(row.mf_loan_request_id || 0);
+      if (rowLoanId !== loanId) return false;
+
+      const collectedOn = normalizeDateKey(row.collection_date || '');
+      return collectedOn === dateKey;
+    });
+  };
+
+  const getLoanRecordRowState = (loan: LoanRow, targetDate: string): 'paid' | 'pending' | 'neutral' => {
+    const dueDate = normalizeDateKey(loan.due_date || '');
+    if (!targetDate || dueDate !== targetDate) return 'neutral';
+
+    if (hasCollectionOnDate(loan.id, targetDate)) return 'paid';
+    return 'pending';
+  };
+
+  const getLoanRecordRowClass = (loan: LoanRow, targetDate: string) => {
+    const state = getLoanRecordRowState(loan, targetDate);
+
+    if (state === 'paid') {
+      return 'border-b border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/70 transition-colors cursor-pointer';
+    }
+
+    if (state === 'pending') {
+      return 'border-b border-rose-200 bg-rose-50/60 hover:bg-rose-100/70 transition-colors cursor-pointer';
+    }
+
+    return 'border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer';
+  };
+
   const alignToMeetingDay = (date: Date, meetingDay?: string | null) => {
     const dayName = String(meetingDay || '')
       .trim()
@@ -967,14 +1007,14 @@ export default function CollectionManagementPage() {
     if (activeMode === 'today') {
       return filteredLoans.filter((loan) => {
         const dueDate = String(loan.due_date || '').slice(0, 10);
-        return dueDate === todayDate && getOutstandingBalance(loan) > 0;
+        return dueDate === todayDate;
       });
     }
 
     if (activeMode === 'next') {
       return filteredLoans.filter((loan) => {
         const dueDate = String(loan.due_date || '').slice(0, 10);
-        return dueDate === debtTargetDate && getOutstandingBalance(loan) > 0;
+        return dueDate === debtTargetDate;
       });
     }
 
@@ -983,10 +1023,37 @@ export default function CollectionManagementPage() {
 
     return filteredLoans.filter((loan) => {
       const dueDate = String(loan.due_date || '').slice(0, 10);
-      if (dueDate !== officeDebtDate) return false;
-      return getOutstandingBalance(loan) > 0;
+      return dueDate === officeDebtDate;
     });
   }, [activeMode, officeDebtDate, filteredLoans, todayDate, debtTargetDate]);
+
+  const loanRecordHighlightDate =
+    activeMode === 'today'
+      ? todayDate
+      : activeMode === 'next'
+        ? debtTargetDate
+        : activeMode === 'office' && officeDebtDate
+          ? officeDebtDate
+          : todayDate;
+
+  const currentLoanRecordRows =
+    activeMode === 'center'
+      ? selectedGroupId !== null
+        ? groupLoanRecords
+        : []
+      : activeMode === 'route'
+        ? selectedRouteId !== null
+          ? routeLoanRecords
+          : []
+        : officeDisplayLoans;
+
+  const highlightedPaidCount = currentLoanRecordRows.filter(
+    (loan) => getLoanRecordRowState(loan, loanRecordHighlightDate) === 'paid'
+  ).length;
+
+  const highlightedPendingCount = currentLoanRecordRows.filter(
+    (loan) => getLoanRecordRowState(loan, loanRecordHighlightDate) === 'pending'
+  ).length;
 
   const officeDebtAmount = useMemo(
     () =>
@@ -1630,28 +1697,41 @@ export default function CollectionManagementPage() {
 
         <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <span className={`inline-block h-2.5 w-2.5 rounded-full bg-gradient-to-r ${modeMeta.accent}`}></span>
-              {activeMode === 'center'
-                ? selectedGroupId !== null
-                  ? `Loan Records - ${selectedGroup?.groupName || 'Selected Group'}`
-                  : selectedCenterId
-                    ? `Group Collection List - ${selectedCenter?.centerName || 'Selected Center'}`
-                  : 'Center Collection List'
-                : activeMode === 'route'
-                  ? selectedRouteId
-                    ? `Loan Records - ${selectedRoute?.routeName || 'Selected Route'}`
-                    : 'Route Collection List'
-                  : activeMode === 'today'
-                    ? 'Debt To Be Collected Today'
-                    : activeMode === 'next'
-                      ? `Collection Loans - ${debtTargetDate}`
-                  : officeView === 'today_debt'
-                    ? 'Debt To Be Collected Today'
-                    : officeView === 'date_debt'
-                      ? `Debt To Be Collected - ${debtTargetDate || 'Selected Date'}`
-                    : 'Office Collection List'}
-            </h2>
+            <div>
+              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <span className={`inline-block h-2.5 w-2.5 rounded-full bg-gradient-to-r ${modeMeta.accent}`}></span>
+                {activeMode === 'center'
+                  ? selectedGroupId !== null
+                    ? `Loan Records - ${selectedGroup?.groupName || 'Selected Group'}`
+                    : selectedCenterId
+                      ? `Group Collection List - ${selectedCenter?.centerName || 'Selected Center'}`
+                    : 'Center Collection List'
+                  : activeMode === 'route'
+                    ? selectedRouteId
+                      ? `Loan Records - ${selectedRoute?.routeName || 'Selected Route'}`
+                      : 'Route Collection List'
+                    : activeMode === 'today'
+                      ? 'Debt To Be Collected Today'
+                      : activeMode === 'next'
+                        ? `Collection Loans - ${debtTargetDate}`
+                    : officeView === 'today_debt'
+                      ? 'Debt To Be Collected Today'
+                      : officeView === 'date_debt'
+                        ? `Debt To Be Collected - ${debtTargetDate || 'Selected Date'}`
+                      : 'Office Collection List'}
+              </h2>
+              {currentLoanRecordRows.length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+                  <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-emerald-800">
+                    Paid ({highlightedPaidCount})
+                  </span>
+                  <span className="inline-flex items-center rounded-full border border-rose-300 bg-rose-50 px-2.5 py-1 text-rose-800">
+                    Pending ({highlightedPendingCount})
+                  </span>
+                  <span className="text-slate-500">for {formatDateDisplay(loanRecordHighlightDate)}</span>
+                </div>
+              )}
+            </div>
             {activeMode === 'center' && selectedGroupId !== null && (
               <button
                 type="button"
@@ -1894,7 +1974,7 @@ export default function CollectionManagementPage() {
                             <tr
                               key={`loan-${loan.id}`}
                               onClick={() => openLoanDetailsModal(loan)}
-                              className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
+                              className={getLoanRecordRowClass(loan, loanRecordHighlightDate)}
                             >
                               <td className="px-3 py-2 font-semibold text-slate-900">
                                 <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
@@ -1996,7 +2076,7 @@ export default function CollectionManagementPage() {
                             <tr
                               key={`route-loan-${loan.id}`}
                               onClick={() => openLoanDetailsModal(loan)}
-                              className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
+                              className={getLoanRecordRowClass(loan, loanRecordHighlightDate)}
                             >
                               <td className="px-3 py-2 font-semibold text-slate-900">
                                 <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
@@ -2068,7 +2148,7 @@ export default function CollectionManagementPage() {
                         <tr
                           key={loan.id}
                           onClick={() => openLoanDetailsModal(loan)}
-                          className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
+                          className={getLoanRecordRowClass(loan, loanRecordHighlightDate)}
                         >
                           <td className="px-3 py-2 font-semibold text-slate-900">
                             <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>

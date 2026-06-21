@@ -30,6 +30,14 @@ type Guarantor = {
   relationship: string;
 };
 
+type GuarantorLookupOption = {
+  id: number;
+  name: string;
+  nic: string;
+  address: string;
+  contact_no: string;
+};
+
 type LoanDocumentUpload = {
   document_type: string;
   file: File | null;
@@ -283,11 +291,14 @@ export default function RequestLoanPage() {
     insurance_charges: '',
     charge_payment_mode: 'hand_cash',
     loan_request_date: new Date().toISOString().split('T')[0],
+    charges_collection_status: 'pending',
   });
 
   const [guarantors, setGuarantors] = useState<Guarantor[]>([
     { name: '', nic: '', address: '', contact_no: '', relationship: '' },
   ]);
+  const [guarantorFinderQueryByIndex, setGuarantorFinderQueryByIndex] = useState<Record<number, string>>({});
+  const [activeGuarantorFinderIndex, setActiveGuarantorFinderIndex] = useState<number | null>(null);
   const [documents, setDocuments] = useState<LoanDocumentUpload[]>([
     { document_type: 'NIC', file: null },
   ]);
@@ -702,6 +713,47 @@ export default function RequestLoanPage() {
       .slice(0, 8);
   }, [customers, form.nic]);
 
+  const guarantorLookupOptions = useMemo<GuarantorLookupOption[]>(() => {
+    const unique = new Map<string, GuarantorLookupOption>();
+
+    customers.forEach((customer) => {
+      const firstName = String(customer.first_name || '').trim();
+      const lastName = String(customer.last_name || '').trim();
+      const name = `${firstName} ${lastName}`.trim();
+      const nic = String(customer.nic_passport || '').trim();
+
+      if (!name || !nic) {
+        return;
+      }
+
+      const key = `${name.toLowerCase()}|${nic.toLowerCase()}`;
+      if (unique.has(key)) {
+        return;
+      }
+
+      unique.set(key, {
+        id: Number(customer.id || 0),
+        name,
+        nic,
+        address: String(customer.current_address || customer.permanent_address || '').trim(),
+        contact_no: String(customer.phone || '').trim(),
+      });
+    });
+
+    return Array.from(unique.values());
+  }, [customers]);
+
+  const findGuarantorMatches = (query: string) => {
+    const keyword = query.trim().toLowerCase();
+    if (!keyword) return [];
+
+    return guarantorLookupOptions
+      .filter((option) =>
+        option.name.toLowerCase().includes(keyword) || option.nic.toLowerCase().includes(keyword)
+      )
+      .slice(0, 8);
+  };
+
   const fillCustomerFromRecord = useCallback(
     (customer: ExistingCustomer) => {
       const first = (customer.first_name || '').trim();
@@ -826,10 +878,47 @@ export default function RequestLoanPage() {
 
   const removeGuarantor = (index: number) => {
     setGuarantors((prev) => prev.filter((_, i) => i !== index));
+    setGuarantorFinderQueryByIndex((prev) => {
+      const next: Record<number, string> = {};
+      Object.entries(prev).forEach(([key, value]) => {
+        const currentIndex = Number(key);
+        if (currentIndex < index) {
+          next[currentIndex] = value;
+        } else if (currentIndex > index) {
+          next[currentIndex - 1] = value;
+        }
+      });
+      return next;
+    });
+    if (activeGuarantorFinderIndex === index) {
+      setActiveGuarantorFinderIndex(null);
+    }
   };
 
   const updateGuarantor = (index: number, field: keyof Guarantor, value: string) => {
     setGuarantors((prev) => prev.map((g, i) => (i === index ? { ...g, [field]: value } : g)));
+  };
+
+  const applyGuarantorFromFinder = (index: number, option: GuarantorLookupOption) => {
+    setGuarantors((prev) =>
+      prev.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              name: option.name,
+              nic: option.nic,
+              contact_no: option.contact_no || row.contact_no,
+              address: option.address || row.address,
+            }
+          : row
+      )
+    );
+
+    setGuarantorFinderQueryByIndex((prev) => ({
+      ...prev,
+      [index]: `${option.name} (${option.nic})`,
+    }));
+    setActiveGuarantorFinderIndex(null);
   };
 
   const addDocument = () => {
@@ -1008,6 +1097,7 @@ export default function RequestLoanPage() {
           stamp_charges: Number(form.stamp_charges || 0),
           insurance_charges: Number(form.insurance_charges || 0),
           charge_payment_mode: form.charge_payment_mode,
+          charges_collection_status: form.charges_collection_status,
           interest_type: form.interest_type,
           guarantors: guarantors.filter((g) => g.name.trim() !== ''),
         },
@@ -1388,6 +1478,41 @@ export default function RequestLoanPage() {
                 <div className="space-y-4">
                   {guarantors.map((g, index) => (
                     <div key={index} className="grid grid-cols-1 md:grid-cols-5 gap-3 border border-cyan-100 rounded-xl p-3 bg-white/95">
+                      <div className="md:col-span-5 relative">
+                        <label className="fieldLabel">Find Existing Guarantor (Name or NIC)</label>
+                        <input
+                          className="input"
+                          placeholder="Type guarantor name or NIC"
+                          value={guarantorFinderQueryByIndex[index] || ''}
+                          onFocus={() => setActiveGuarantorFinderIndex(index)}
+                          onBlur={() => setTimeout(() => setActiveGuarantorFinderIndex((prev) => (prev === index ? null : prev)), 150)}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setGuarantorFinderQueryByIndex((prev) => ({ ...prev, [index]: value }));
+                            setActiveGuarantorFinderIndex(index);
+                          }}
+                        />
+
+                        {activeGuarantorFinderIndex === index && (guarantorFinderQueryByIndex[index] || '').trim() !== '' && (
+                          <div className="absolute z-20 mt-1 w-full rounded-xl border border-cyan-100 bg-white shadow-xl max-h-56 overflow-auto">
+                            {findGuarantorMatches(guarantorFinderQueryByIndex[index] || '').length === 0 ? (
+                              <p className="px-3 py-2 text-xs text-slate-500">No guarantor matches found.</p>
+                            ) : (
+                              findGuarantorMatches(guarantorFinderQueryByIndex[index] || '').map((option) => (
+                                <button
+                                  key={`${option.id}-${option.nic}`}
+                                  type="button"
+                                  onMouseDown={() => applyGuarantorFromFinder(index, option)}
+                                  className="w-full text-left px-3 py-2 hover:bg-cyan-50 border-b border-cyan-50 last:border-b-0"
+                                >
+                                  <p className="text-sm font-semibold text-slate-800">{option.name}</p>
+                                  <p className="text-xs text-slate-500">{option.nic}{option.contact_no ? ` • ${option.contact_no}` : ''}</p>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
                       <div>
                         <label className="fieldLabel">Guarantor Name</label>
                         <input className="input" placeholder="Enter name" value={g.name} onChange={(e) => updateGuarantor(index, 'name', e.target.value)} />
@@ -1613,6 +1738,25 @@ export default function RequestLoanPage() {
                           <label className="fieldLabel">Loan Request Date *</label>
                           <input className="input" type="date" value={form.loan_request_date} onChange={(e) => setForm((p) => ({ ...p, loan_request_date: e.target.value }))} required />
                         </div>
+                        <div className="md:col-span-2">
+                          <label className="fieldLabel">Charges Collection</label>
+                          <label className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-sm font-semibold text-emerald-900">
+                            <input
+                              type="checkbox"
+                              checked={form.charges_collection_status === 'done'}
+                              onChange={(e) =>
+                                setForm((p) => ({
+                                  ...p,
+                                  charges_collection_status: e.target.checked ? 'done' : 'pending',
+                                }))
+                              }
+                            />
+                            Charges collection done
+                          </label>
+                          <p className="mt-1 text-xs text-slate-600">
+                            Status: {form.charges_collection_status === 'done' ? 'Done' : 'Pending'}
+                          </p>
+                        </div>
                       </div>
                     </div>
                   ) : (
@@ -1742,6 +1886,25 @@ export default function RequestLoanPage() {
                         <div>
                           <label className="fieldLabel">Loan Request Date *</label>
                           <input className="input" type="date" value={form.loan_request_date} onChange={(e) => setForm((p) => ({ ...p, loan_request_date: e.target.value }))} required />
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="fieldLabel">Charges Collection</label>
+                          <label className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-sm font-semibold text-emerald-900">
+                            <input
+                              type="checkbox"
+                              checked={form.charges_collection_status === 'done'}
+                              onChange={(e) =>
+                                setForm((p) => ({
+                                  ...p,
+                                  charges_collection_status: e.target.checked ? 'done' : 'pending',
+                                }))
+                              }
+                            />
+                            Charges collection done
+                          </label>
+                          <p className="mt-1 text-xs text-slate-600">
+                            Status: {form.charges_collection_status === 'done' ? 'Done' : 'Pending'}
+                          </p>
                         </div>
                       </div>
                     </div>

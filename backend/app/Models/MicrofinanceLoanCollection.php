@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use App\Models\User;
 
 class MicrofinanceLoanCollection extends Model
 {
@@ -44,5 +45,10 @@ class MicrofinanceLoanCollection extends Model
     public function loanRequest()
     {
         return $this->belongsTo(MicrofinanceLoanRequest::class, 'mf_loan_request_id');
+    }
+
+    public function deletedByUser()
+    {
+        return $this->belongsTo(User::class, 'deleted_by');
     }
 }

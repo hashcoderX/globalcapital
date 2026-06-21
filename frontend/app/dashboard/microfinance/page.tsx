@@ -100,6 +100,23 @@ export default function MicrofinanceDashboard() {
     return `${year}-${month}-${day}`;
   };
 
+  const toFiniteNumber = (value: unknown): number => {
+    if (value === null || value === undefined) return Number.NaN;
+    if (typeof value === 'string') {
+      const normalized = value
+        .trim()
+        .replace(/,/g, '')
+        .replace(/[^0-9.-]/g, '');
+      if (normalized === '') return Number.NaN;
+
+      const parsedFromString = Number(normalized);
+      return Number.isFinite(parsedFromString) ? parsedFromString : Number.NaN;
+    }
+
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  };
+
   const designationName = normalizeText(String(authUser?.designation?.name || ''));
   const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
   const permissionTexts = (authUser?.roles || [])
@@ -609,13 +626,17 @@ export default function MicrofinanceDashboard() {
         const assetValueTotal = activeLoans.reduce((sum, loan) => {
           // Asset value should represent remaining principal. Prefer loan_balance
           // because it is persisted and already reconciled on backend updates.
-          const loanBalance = Number(loan.loan_balance);
+          const loanBalance = toFiniteNumber(loan.loan_balance);
           if (Number.isFinite(loanBalance) && loanBalance >= 0) {
             return sum + loanBalance;
           }
 
           // Fallback for legacy records where loan_balance is absent.
-          const principal = Number(loan.loan_amount || 0);
+          const principal = toFiniteNumber(loan.loan_amount);
+          if (!Number.isFinite(principal)) {
+            return sum;
+          }
+
           const principalPaid = principalPaidByLoan.get(Number(loan.id)) || 0;
           return sum + Math.max(principal - principalPaid, 0);
         }, 0);

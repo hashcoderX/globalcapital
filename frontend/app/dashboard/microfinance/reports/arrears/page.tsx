@@ -1,7 +1,7 @@
 'use client';
 
 import axios from 'axios';
-import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { getApiBaseUrl } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
@@ -130,7 +130,6 @@ export default function ArrearsReportPage() {
               : isOverdue
                 ? (installmentAmount > 0 ? installmentAmount : pendingAmount)
                 : 0;
-
             return {
               loanId,
               customerNo: String(loan.customer_no || '-'),
@@ -146,7 +145,7 @@ export default function ArrearsReportPage() {
               status,
             } as ArrearsRow;
           })
-          .filter((row) => row.pendingAmount > 0 || row.arrearsAmount > 0)
+          .filter((row) => row.rawArrearsAmount > 0 || row.status === 'Overdue')
           .sort((a, b) => {
             if (b.arrearsAmount !== a.arrearsAmount) return b.arrearsAmount - a.arrearsAmount;
             return b.overdueDays - a.overdueDays;

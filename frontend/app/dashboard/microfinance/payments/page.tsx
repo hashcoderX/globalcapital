@@ -1,7 +1,7 @@
 'use client';
 
 import axios from 'axios';
-import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { getApiBaseUrl } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -74,6 +74,12 @@ type PaymentRow = {
   loan_balance?: number | string | null;
   arrears_balance?: number | string | null;
   arrears_outstanding_after?: number | string | null;
+  deleted_at?: string | null;
+  deleted_by?: number | null;
+  deleted_by_name?: string | null;
+  deleted_by_email?: string | null;
+  deletion_reason?: string | null;
+  is_deleted?: boolean;
 };
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -169,6 +175,7 @@ export default function MicrofinancePaymentsPage() {
   const [customerNoFilter, setCustomerNoFilter] = useState('');
   const [customerNicFilter, setCustomerNicFilter] = useState('');
   const [customerNameFilter, setCustomerNameFilter] = useState('');
+  const [showDeleted, setShowDeleted] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [selectedLoanId, setSelectedLoanId] = useState<number | null>(null);
@@ -207,6 +214,8 @@ export default function MicrofinancePaymentsPage() {
   const isCollectionOfficer =
     designationName.includes('collection officer') ||
     roleNames.some((name) => name.includes('collection officer'));
+
+  const canDeletePayments = isManager || isAdmin;
 
   const headers = useMemo(
     () => ({
@@ -257,6 +266,9 @@ export default function MicrofinancePaymentsPage() {
           }),
           axios.get(`${API_BASE}/microfinance/collections`, {
             headers,
+            params: {
+              include_deleted: canDeletePayments && showDeleted ? 1 : 0,
+            },
           }),
         ]);
 
@@ -357,9 +369,13 @@ export default function MicrofinancePaymentsPage() {
     };
 
     loadPayments();
-  }, [token, headers, isAdmin, isManager, isCollectionOfficer, authUser?.branch_id, authUser?.employee?.id, officerNameCandidates, reloadCounter]);
+  }, [token, headers, isAdmin, isManager, isCollectionOfficer, authUser?.branch_id, authUser?.employee?.id, officerNameCandidates, reloadCounter, canDeletePayments, showDeleted]);
 
   const openDeleteConfirm = (invoiceId: number) => {
+    if (!canDeletePayments) {
+      openAlert('Access Denied', 'Only manager-level users can delete payments.');
+      return;
+    }
     setPendingDeleteInvoiceId(invoiceId);
     setDeleteReason('');
     setDeleteConfirmOpen(true);
@@ -382,6 +398,10 @@ export default function MicrofinancePaymentsPage() {
   const deleteInvoice = async () => {
     if (!token || deletingInvoiceId) return;
     if (!pendingDeleteInvoiceId) return;
+    if (!canDeletePayments) {
+      openAlert('Access Denied', 'Only manager-level users can delete payments.');
+      return;
+    }
 
     setDeletingInvoiceId(pendingDeleteInvoiceId);
     try {
@@ -395,9 +415,11 @@ export default function MicrofinancePaymentsPage() {
       setReloadCounter((prev) => prev + 1);
       closeDeleteConfirm();
       openAlert('Deleted', 'Invoice deleted. Loan balances were reversed successfully.');
-    } catch (error: any) {
+    } catch (error: unknown) {
       const apiMessage =
-        error?.response?.data?.message || 'Failed to delete invoice. Please try again.';
+        axios.isAxiosError(error) && typeof error.response?.data?.message === 'string'
+          ? error.response.data.message
+          : 'Failed to delete invoice. Please try again.';
       openAlert('Delete Failed', String(apiMessage));
     } finally {
       setDeletingInvoiceId(null);
@@ -566,6 +588,9 @@ export default function MicrofinancePaymentsPage() {
       penalty_amount: number;
       balance: number;
       note: string;
+      is_deleted?: boolean;
+      deleted_by_name?: string;
+      deletion_reason?: string;
     }> = [
       {
         id: `issue-${selectedLoan.id}`,
@@ -582,6 +607,9 @@ export default function MicrofinancePaymentsPage() {
         penalty_amount: 0,
         balance: runningBalance,
         note: 'Loan issued',
+        is_deleted: false,
+        deleted_by_name: '',
+        deletion_reason: '',
       },
     ];
 
@@ -605,6 +633,9 @@ export default function MicrofinancePaymentsPage() {
         penalty_amount: Number(row.penalty_amount || 0),
         balance: runningBalance,
         note: row.note || '-',
+        is_deleted: Boolean(row.is_deleted),
+        deleted_by_name: String(row.deleted_by_name || ''),
+        deletion_reason: String(row.deletion_reason || ''),
       });
     });
 
@@ -735,43 +766,50 @@ export default function MicrofinancePaymentsPage() {
 
   if (!token || loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
+      <div className="min-h-screen bg-gradient-to-br from-[#eef8ff] via-[#ecfcf7] to-[#f2f9ff] flex items-center justify-center">
+        <div className="h-14 w-14 animate-spin rounded-full border-4 border-cyan-100 border-t-cyan-600" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-100 via-cyan-50 to-emerald-100 p-6 relative overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-[#eef8ff] via-[#ecfcf7] to-[#f2f9ff] p-6 relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0 opacity-55">
-        <div className="absolute -top-24 left-10 h-80 w-80 rounded-full bg-sky-300/80 blur-3xl"></div>
-        <div className="absolute top-16 right-8 h-[26rem] w-[26rem] rounded-full bg-cyan-300/70 blur-3xl"></div>
-        <div className="absolute -bottom-8 left-1/3 h-80 w-80 rounded-full bg-emerald-300/65 blur-3xl"></div>
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.55),transparent_45%),radial-gradient(circle_at_bottom_right,rgba(20,184,166,0.12),transparent_40%)]"></div>
+        <div className="absolute -top-24 left-10 h-80 w-80 rounded-full bg-sky-300/75 blur-3xl"></div>
+        <div className="absolute top-16 right-8 h-[26rem] w-[26rem] rounded-full bg-cyan-300/65 blur-3xl"></div>
+        <div className="absolute -bottom-8 left-1/3 h-80 w-80 rounded-full bg-emerald-300/60 blur-3xl"></div>
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.65),transparent_45%),radial-gradient(circle_at_bottom_right,rgba(20,184,166,0.12),transparent_40%)]"></div>
+        <div
+          className="absolute inset-0 opacity-25"
+          style={{
+            backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(8,145,178,0.12) 1px, transparent 0)',
+            backgroundSize: '24px 24px',
+          }}
+        />
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/78 backdrop-blur-2xl rounded-3xl border border-cyan-100/80 shadow-[0_26px_70px_-34px_rgba(14,116,144,0.55)] p-6 md:p-7">
+        <div className="rounded-[2rem] border border-cyan-100/80 bg-gradient-to-br from-[#0b4f6c] via-[#0e7490] to-[#0f766e] p-6 text-white shadow-[0_26px_70px_-34px_rgba(8,47,73,0.65)] md:p-7">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <span className="inline-flex rounded-full bg-white/90 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100 shadow-sm">
+              <span className="inline-flex rounded-full border border-white/25 bg-white/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-100 shadow-sm">
                 Finance Collections Studio
               </span>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Microfinance Payments</h1>
-              <p className="text-sm text-slate-600 mt-1 max-w-2xl">Track received payments, methods, and transaction references with a richer real-time operations view.</p>
+              <h1 className="text-2xl md:text-3xl font-extrabold text-white mt-3">Microfinance Payments</h1>
+              <p className="text-sm text-cyan-100/95 mt-1 max-w-2xl">Track received payments, methods, and transaction references with a richer real-time operations view.</p>
             </div>
             <button
               onClick={() => router.push('/dashboard/microfinance')}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-white to-cyan-50 hover:from-white hover:to-sky-50 text-slate-700 text-sm font-semibold border border-cyan-200 shadow-sm"
+              className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-sm font-semibold border border-white/25 shadow-sm"
             >
               Back
             </button>
           </div>
 
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <div className="rounded-2xl bg-gradient-to-br from-white to-slate-50 border border-white shadow-[0_12px_28px_-20px_rgba(15,23,42,0.45)] p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Payments</p>
-              <p className="text-xl font-bold text-slate-900 mt-1">{totals.count}</p>
+            <div className="rounded-2xl bg-white/10 border border-white/20 p-4 backdrop-blur">
+              <p className="text-xs uppercase tracking-wide text-cyan-100">Payments</p>
+              <p className="text-xl font-bold text-white mt-1">{totals.count}</p>
             </div>
             <div className="rounded-2xl bg-gradient-to-br from-white to-cyan-50 border border-cyan-100 shadow-[0_12px_28px_-20px_rgba(6,182,212,0.35)] p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Total Collection</p>
@@ -804,9 +842,9 @@ export default function MicrofinancePaymentsPage() {
           </div>
         </div>
 
-        <div className="bg-white/88 backdrop-blur-2xl rounded-3xl border border-cyan-100 shadow-[0_20px_46px_-26px_rgba(14,116,144,0.5)] p-4 md:p-5">
+        <div className="bg-white/90 backdrop-blur-2xl rounded-3xl border border-cyan-100 shadow-[0_20px_46px_-26px_rgba(14,116,144,0.5)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <h2 className="text-lg font-bold text-slate-900">
+            <h2 className="text-xl font-black text-slate-900">
               {selectedLoan
                 ? `Payment History - ${selectedLoan.customer_no} | ${selectedLoan.customer_name}`
                 : 'Payment Transactions'}
@@ -822,7 +860,7 @@ export default function MicrofinancePaymentsPage() {
             </div>
           </div>
 
-          <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50/60 to-sky-50/50 p-3">
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50/70 to-sky-50/60 p-3">
             <div>
               <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">From Date</label>
               <input
@@ -870,6 +908,7 @@ export default function MicrofinancePaymentsPage() {
                   setSelectedLoanId(null);
                   setIsHistoryModalOpen(false);
                   setQuery('');
+                  setShowDeleted(false);
                 }}
                 className="w-full px-3 py-2 rounded-xl bg-gradient-to-r from-slate-100 to-cyan-50 hover:from-slate-200 hover:to-cyan-100 text-slate-700 text-sm font-semibold border border-slate-200"
               >
@@ -878,7 +917,21 @@ export default function MicrofinancePaymentsPage() {
             </div>
           </div>
 
-          <div className="mt-2 grid grid-cols-1 md:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-white/70 p-3">
+          {canDeletePayments && (
+            <div className="mt-2 flex items-center justify-end">
+              <label className="inline-flex items-center gap-2 rounded-xl border border-cyan-100 bg-cyan-50/60 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-cyan-800">
+                <input
+                  type="checkbox"
+                  checked={showDeleted}
+                  onChange={(e) => setShowDeleted(e.target.checked)}
+                  className="h-4 w-4 rounded border-cyan-300 text-cyan-600 focus:ring-cyan-500"
+                />
+                Show Deleted Records
+              </label>
+            </div>
+          )}
+
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-gradient-to-br from-white to-cyan-50/30 p-3">
             <div>
               <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Loan ID</label>
               <input
@@ -973,9 +1026,9 @@ export default function MicrofinancePaymentsPage() {
             </div>
           ) : (
             <>
-              <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 shadow-[0_16px_30px_-24px_rgba(8,47,73,0.45)]">
+              <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 shadow-[0_18px_34px_-24px_rgba(8,47,73,0.45)]">
                 <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                  <thead className="bg-gradient-to-r from-cyan-50 to-sky-50 text-slate-700">
+                  <thead className="bg-gradient-to-r from-cyan-50 via-sky-50 to-emerald-50/60 text-slate-700">
                     <tr>
                       <th className="px-3 py-2 font-semibold">Date & Time</th>
                       <th className="px-3 py-2 font-semibold">Loan Code</th>
@@ -990,7 +1043,9 @@ export default function MicrofinancePaymentsPage() {
                       <th className="px-3 py-2 font-semibold">Interest</th>
                       <th className="px-3 py-2 font-semibold">Penalty</th>
                       <th className="px-3 py-2 font-semibold">Note</th>
-                      <th className="px-3 py-2 font-semibold">Action</th>
+                      <th className="px-3 py-2 font-semibold">Record</th>
+                      <th className="px-3 py-2 font-semibold">Deleted By</th>
+                      {canDeletePayments && <th className="px-3 py-2 font-semibold">Action</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -1010,15 +1065,31 @@ export default function MicrofinancePaymentsPage() {
                         <td className="px-3 py-2">{Number(row.penalty_amount || 0).toFixed(2)}</td>
                         <td className="px-3 py-2">{row.note || '-'}</td>
                         <td className="px-3 py-2">
-                          <button
-                            type="button"
-                            onClick={() => openDeleteConfirm(row.id)}
-                            disabled={deletingInvoiceId === row.id}
-                            className="rounded-lg bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {deletingInvoiceId === row.id ? 'Deleting...' : 'Delete'}
-                          </button>
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${row.is_deleted ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+                            {row.is_deleted ? 'Deleted' : 'Active'}
+                          </span>
                         </td>
+                        <td className="px-3 py-2 text-xs text-slate-600">
+                          {row.is_deleted
+                            ? `${row.deleted_by_name || '-'}${row.deletion_reason ? ` (${row.deletion_reason})` : ''}`
+                            : '-'}
+                        </td>
+                        {canDeletePayments && (
+                          <td className="px-3 py-2">
+                            {row.is_deleted ? (
+                              <span className="text-xs text-slate-400">-</span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => openDeleteConfirm(row.id)}
+                                disabled={deletingInvoiceId === row.id}
+                                className="rounded-lg bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {deletingInvoiceId === row.id ? 'Deleting...' : 'Delete'}
+                              </button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -1154,7 +1225,9 @@ export default function MicrofinancePaymentsPage() {
                         <th className="px-3 py-2 font-semibold">Penalty</th>
                         <th className="px-3 py-2 font-semibold">Balance</th>
                         <th className="px-3 py-2 font-semibold">Note</th>
-                        <th className="px-3 py-2 font-semibold">Action</th>
+                        <th className="px-3 py-2 font-semibold">Record</th>
+                        <th className="px-3 py-2 font-semibold">Deleted By</th>
+                        {canDeletePayments && <th className="px-3 py-2 font-semibold">Action</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -1183,19 +1256,31 @@ export default function MicrofinancePaymentsPage() {
                           <td className="px-3 py-2 font-semibold text-rose-700">{Number(row.balance || 0).toFixed(2)}</td>
                           <td className="px-3 py-2">{row.note}</td>
                           <td className="px-3 py-2">
-                            {row.kind === 'payment' ? (
-                              <button
-                                type="button"
-                                onClick={() => openDeleteConfirm(Number(row.id))}
-                                disabled={deletingInvoiceId === Number(row.id)}
-                                className="rounded-lg bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {deletingInvoiceId === Number(row.id) ? 'Deleting...' : 'Delete'}
-                              </button>
-                            ) : (
-                              <span className="text-xs text-slate-400">-</span>
-                            )}
+                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${row.is_deleted ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+                              {row.is_deleted ? 'Deleted' : 'Active'}
+                            </span>
                           </td>
+                          <td className="px-3 py-2 text-xs text-slate-600">
+                            {row.is_deleted
+                              ? `${row.deleted_by_name || '-'}${row.deletion_reason ? ` (${row.deletion_reason})` : ''}`
+                              : '-'}
+                          </td>
+                          {canDeletePayments && (
+                            <td className="px-3 py-2">
+                              {row.kind === 'payment' && !row.is_deleted ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openDeleteConfirm(Number(row.id))}
+                                  disabled={deletingInvoiceId === Number(row.id)}
+                                  className="rounded-lg bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {deletingInvoiceId === Number(row.id) ? 'Deleting...' : 'Delete'}
+                                </button>
+                              ) : (
+                                <span className="text-xs text-slate-400">-</span>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -1207,7 +1292,7 @@ export default function MicrofinancePaymentsPage() {
         </div>
       )}
 
-      {deleteConfirmOpen && (
+      {canDeletePayments && deleteConfirmOpen && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
           <button
             type="button"

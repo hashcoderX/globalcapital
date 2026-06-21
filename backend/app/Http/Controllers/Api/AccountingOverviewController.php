@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\AccountingExpense;
 use App\Models\Company;
 use App\Models\CompanyAccount;
+use App\Models\EmployeeWalletBankDeposit;
+use App\Models\EmployeeWalletCashHandover;
 use App\Models\Finance;
 use App\Models\FinanceCollection;
 use App\Models\LoanRequest;
@@ -208,6 +210,62 @@ class AccountingOverviewController extends Controller
         ];
     }
 
+    private function sumWalletIncomePreviewForRange(int $branchId, ?string $fromDate, ?string $toDate): array
+    {
+        $deposits = EmployeeWalletBankDeposit::query()
+            ->where('branch_id', $branchId)
+            ->where('status', 'approved');
+
+        if ($fromDate) {
+            $deposits->whereDate('deposit_date', '>=', $fromDate);
+        }
+        if ($toDate) {
+            $deposits->whereDate('deposit_date', '<=', $toDate);
+        }
+
+        $handovers = EmployeeWalletCashHandover::query()
+            ->where('branch_id', $branchId)
+            ->where('status', 'approved');
+
+        if ($fromDate) {
+            $handovers->whereDate('handover_date', '>=', $fromDate);
+        }
+        if ($toDate) {
+            $handovers->whereDate('handover_date', '<=', $toDate);
+        }
+
+        $transfersToBranchCash = EmployeeWalletCashHandover::query()
+            ->where('branch_id', $branchId)
+            ->where('status', 'approved')
+            ->whereNotNull('branch_cash_transferred_at');
+
+        if ($fromDate) {
+            $transfersToBranchCash->whereDate('branch_cash_transferred_at', '>=', $fromDate);
+        }
+        if ($toDate) {
+            $transfersToBranchCash->whereDate('branch_cash_transferred_at', '<=', $toDate);
+        }
+
+        $depositsAmount = (float) (clone $deposits)->sum('amount');
+        $depositsCount = (int) (clone $deposits)->count();
+
+        $handoversAmount = (float) (clone $handovers)->sum('amount');
+        $handoversCount = (int) (clone $handovers)->count();
+
+        $transfersAmount = (float) (clone $transfersToBranchCash)->sum('amount');
+        $transfersCount = (int) (clone $transfersToBranchCash)->count();
+
+        return [
+            'collector_bank_deposits_preview' => $this->roundMoney($depositsAmount),
+            'cash_handovers_preview' => $this->roundMoney($handoversAmount),
+            'branch_cash_transfers_preview' => $this->roundMoney($transfersAmount),
+            'wallet_income_preview_total' => $this->roundMoney($depositsAmount + $handoversAmount + $transfersAmount),
+            'collector_bank_deposits_count' => $depositsCount,
+            'cash_handovers_count' => $handoversCount,
+            'branch_cash_transfers_count' => $transfersCount,
+        ];
+    }
+
     public function show(Request $request, Company $company): JsonResponse
     {
         if ($denied = $this->ensureCompanyAccess($request, $company)) {
@@ -290,6 +348,14 @@ class AccountingOverviewController extends Controller
 
         $periodIncome = $this->sumIncomeForRange($branchId, $fromDate, $toDate);
         $periodManualExpenses = $this->sumManualExpensesForRange($branchId, $fromDate, $toDate);
+        $walletIncomePreview = $this->sumWalletIncomePreviewForRange($branchId, $fromDate, $toDate);
+
+        $periodIncome = array_merge($periodIncome, [
+            'collector_bank_deposits_preview' => $walletIncomePreview['collector_bank_deposits_preview'],
+            'cash_handovers_preview' => $walletIncomePreview['cash_handovers_preview'],
+            'branch_cash_transfers_preview' => $walletIncomePreview['branch_cash_transfers_preview'],
+            'wallet_income_preview_total' => $walletIncomePreview['wallet_income_preview_total'],
+        ]);
 
         $refundExpenses = $periodIncome['refund_expenses'];
         unset($periodIncome['refund_expenses']);
@@ -355,6 +421,15 @@ class AccountingOverviewController extends Controller
                     'microfinance' => $this->roundMoney($mfReceivable),
                     'instant_loans' => $this->roundMoney($instantReceivable),
                     'mortgages' => $this->roundMoney($mortgageReceivable),
+                ],
+                'wallet_income_preview' => [
+                    'collector_bank_deposits' => $walletIncomePreview['collector_bank_deposits_preview'],
+                    'cash_handovers' => $walletIncomePreview['cash_handovers_preview'],
+                    'branch_cash_transfers' => $walletIncomePreview['branch_cash_transfers_preview'],
+                    'total' => $walletIncomePreview['wallet_income_preview_total'],
+                    'collector_bank_deposits_count' => $walletIncomePreview['collector_bank_deposits_count'],
+                    'cash_handovers_count' => $walletIncomePreview['cash_handovers_count'],
+                    'branch_cash_transfers_count' => $walletIncomePreview['branch_cash_transfers_count'],
                 ],
             ],
         ]);

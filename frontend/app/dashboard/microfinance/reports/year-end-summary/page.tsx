@@ -1,7 +1,7 @@
 'use client';
 
 import axios from 'axios';
-import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { getApiBaseUrl } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -137,6 +137,32 @@ export default function YearEndSummaryReportPage() {
     );
   }, [monthSummary]);
 
+  const chartScale = useMemo(() => {
+    const maxMonthlyValue = monthSummary.reduce((maxValue, row) => {
+      return Math.max(maxValue, row.totalCollection, row.totalCapital, row.totalProfit);
+    }, 0);
+
+    return maxMonthlyValue > 0 ? maxMonthlyValue : 1;
+  }, [monthSummary]);
+
+  const profitTrendPoints = useMemo(() => {
+    const chartWidth = 720;
+    const chartHeight = 220;
+    const leftPad = 32;
+    const rightPad = 24;
+    const topPad = 20;
+    const bottomPad = 24;
+    const usableWidth = chartWidth - leftPad - rightPad;
+    const usableHeight = chartHeight - topPad - bottomPad;
+
+    return monthSummary
+      .map((row, index) => {
+        const x = leftPad + (index / Math.max(monthSummary.length - 1, 1)) * usableWidth;
+        const y = topPad + (1 - row.totalProfit / chartScale) * usableHeight;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(' ');
+  }, [monthSummary, chartScale]);
   const formatMoney = (value: number) => Number(value || 0).toFixed(2);
 
   return (
@@ -194,6 +220,92 @@ export default function YearEndSummaryReportPage() {
           </div>
 
           <div className="mt-5 overflow-x-auto rounded-2xl border border-indigo-100 bg-white">
+            <div className="border-b border-indigo-100 bg-gradient-to-r from-indigo-50/70 via-sky-50/70 to-emerald-50/70 px-4 py-4">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Graphical Preview</h2>
+              <p className="mt-1 text-xs text-slate-500">Bar chart compares monthly collection and capital; line shows monthly profit trend.</p>
+            </div>
+
+            <div className="overflow-x-auto px-4 py-4">
+              <div className="min-w-[900px]">
+                <div className="grid grid-cols-12 gap-2 items-end h-64">
+                  {monthSummary.map((row) => {
+                    const collectionHeight = Math.max((row.totalCollection / chartScale) * 100, row.totalCollection > 0 ? 2.5 : 0);
+                    const capitalHeight = Math.max((row.totalCapital / chartScale) * 100, row.totalCapital > 0 ? 2.5 : 0);
+
+                    return (
+                      <div key={`bar-${row.monthIndex}`} className="flex flex-col items-center gap-2">
+                        <div className="w-full rounded-md border border-indigo-100 bg-indigo-50/35 p-1.5">
+                          <div className="flex items-end justify-center gap-1 h-44">
+                            <div
+                              className="w-3 rounded-sm bg-gradient-to-t from-indigo-600 to-indigo-400"
+                              style={{ height: `${collectionHeight}%` }}
+                              title={`${row.monthName} Collection: ${formatMoney(row.totalCollection)}`}
+                            />
+                            <div
+                              className="w-3 rounded-sm bg-gradient-to-t from-cyan-600 to-cyan-400"
+                              style={{ height: `${capitalHeight}%` }}
+                              title={`${row.monthName} Capital: ${formatMoney(row.totalCapital)}`}
+                            />
+                          </div>
+                        </div>
+                        <p className="text-[11px] font-semibold text-slate-600">{row.monthName}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Profit Trend</p>
+                    <p className="text-xs text-slate-500">Monthly profit progression</p>
+                  </div>
+                  <svg viewBox="0 0 720 220" className="h-44 w-full">
+                    <rect x="0" y="0" width="720" height="220" fill="transparent" />
+                    {[0, 1, 2, 3, 4].map((step) => {
+                      const y = 20 + (step / 4) * (220 - 44);
+                      return <line key={`grid-${step}`} x1="32" y1={y} x2="696" y2={y} stroke="#bbf7d0" strokeWidth="1" />;
+                    })}
+                    <polyline
+                      points={profitTrendPoints}
+                      fill="none"
+                      stroke="#059669"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    {monthSummary.map((row, index) => {
+                      const x = 32 + (index / Math.max(monthSummary.length - 1, 1)) * (720 - 32 - 24);
+                      const y = 20 + (1 - row.totalProfit / chartScale) * (220 - 20 - 24);
+
+                      return (
+                        <g key={`point-${row.monthIndex}`}>
+                          <circle cx={x} cy={y} r="4" fill="#10b981" />
+                          <text x={x} y={212} textAnchor="middle" fontSize="10" fill="#475569">
+                            {row.monthName}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-3 text-xs font-medium">
+                  <span className="inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-indigo-700">
+                    <span className="h-2.5 w-2.5 rounded-full bg-indigo-500" />
+                    Collection
+                  </span>
+                  <span className="inline-flex items-center gap-2 rounded-full border border-cyan-100 bg-cyan-50 px-3 py-1 text-cyan-700">
+                    <span className="h-2.5 w-2.5 rounded-full bg-cyan-500" />
+                    Capital Collection
+                  </span>
+                  <span className="inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-emerald-700">
+                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                    Profit Trend
+                  </span>
+                </div>
+              </div>
+            </div>
+
             <table className="min-w-full text-sm text-left text-slate-700">
               <thead className="bg-indigo-50 text-slate-700">
                 <tr>
