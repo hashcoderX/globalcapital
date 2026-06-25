@@ -13,6 +13,7 @@ import {
   loadMfCollectionCache,
 } from '@/lib/offline/mfOfflineSync';
 import { useMfOffline } from '@/lib/offline/useMfOffline';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -110,6 +111,9 @@ const API_BASE = getApiBaseUrl();
 
 export default function CollectionManagementPage() {
   const router = useRouter();
+  const backendOrigin = useMemo(() => getBackendOrigin(), []);
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
   const [token, setToken] = useState('');
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -188,7 +192,72 @@ export default function CollectionManagementPage() {
     contactNo: '',
     logoUrl: '/media/company/logo',
   });
-  const backendOrigin = useMemo(() => getBackendOrigin(), []);
+
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith('mf_collections_widget_')) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  }, []);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+      try {
+        await axios.patch(
+          `${API_BASE}/dashboard/widgets`,
+          { widget_key: widgetKey, is_visible: isVisible },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const previous = new Set(hiddenWidgetKeys);
+      const next = new Set(hiddenWidgetKeys);
+      next.add(widgetKey);
+      setHiddenWidgetKeys(next);
+
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) {
+        setHiddenWidgetKeys(previous);
+        setNoticeModal({
+          open: true,
+          title: 'Widget Update Failed',
+          message: 'Failed to hide this card. Please try again.',
+        });
+      }
+    },
+    [hiddenWidgetKeys, saveWidgetPreference]
+  );
 
   const normalizeText = (value: string) =>
     String(value || '')
@@ -361,6 +430,7 @@ export default function CollectionManagementPage() {
       return;
     }
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
 
     const storedUser = localStorage.getItem('auth_user');
     if (storedUser) {
@@ -370,7 +440,7 @@ export default function CollectionManagementPage() {
         setAuthUser(null);
       }
     }
-  }, [router]);
+  }, [fetchWidgetPreferences, router]);
 
   useEffect(() => {
     if (!token) return;
@@ -1475,6 +1545,7 @@ export default function CollectionManagementPage() {
       ? [
           {
             id: 'center' as const,
+            widgetKey: 'mf_collections_widget_mode_center',
             title: 'Center Collection',
             subtitle: 'Collect installments center-wise',
             color: 'from-emerald-500 to-teal-500',
@@ -1482,6 +1553,7 @@ export default function CollectionManagementPage() {
           },
           {
             id: 'route' as const,
+            widgetKey: 'mf_collections_widget_mode_route',
             title: 'Route Collection',
             subtitle: 'Collect installments route-wise',
             color: 'from-blue-500 to-cyan-500',
@@ -1493,6 +1565,7 @@ export default function CollectionManagementPage() {
       ? [
           {
             id: 'today' as const,
+            widgetKey: 'mf_collections_widget_mode_today',
             title: 'Debt Today',
             subtitle: 'Loans due for collection today',
             color: 'from-rose-500 to-orange-500',
@@ -1500,6 +1573,7 @@ export default function CollectionManagementPage() {
           },
           {
             id: 'next' as const,
+            widgetKey: 'mf_collections_widget_mode_next',
             title: 'Next Collection',
             subtitle: 'Loans scheduled for next day collection',
             color: 'from-indigo-500 to-sky-500',
@@ -1511,6 +1585,7 @@ export default function CollectionManagementPage() {
             ? [
                 {
                   id: 'office' as const,
+                  widgetKey: 'mf_collections_widget_mode_office',
                   title: 'Office Collection',
                   subtitle: 'Collect direct/office installments',
                   color: 'from-amber-500 to-orange-500',
@@ -1521,18 +1596,60 @@ export default function CollectionManagementPage() {
         ]),
   ];
 
+  const visibleCards = cards.filter((card) => !hiddenWidgetKeys.has(card.widgetKey));
+
+  const summaryCards = [
+    {
+      key: 'mf_collections_widget_summary_records',
+      label: 'Collection Records',
+      value: String(displayRecordCount),
+    },
+    {
+      key: 'mf_collections_widget_summary_installment_total',
+      label: 'Total Installment',
+      value: displayInstallmentTotal.toFixed(2),
+    },
+    {
+      key: 'mf_collections_widget_summary_due_date',
+      label: 'With Due Date',
+      value: String(displayDueDateCount),
+    },
+  ];
+
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+  const isColumnVisible = (columnKey: string) =>
+    !hiddenWidgetKeys.has(`mf_collections_widget_col_${columnKey}`);
+  const renderColumnHeader = (columnKey: string, label: string) => (
+    <th key={columnKey} className="relative px-3 py-2 pr-8 font-semibold">
+      {label}
+      <WidgetCloseGate>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            void hideWidget(`mf_collections_widget_col_${columnKey}`);
+          }}
+          className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+          aria-label={`Hide ${label} column`}
+        >
+          ×
+        </button>
+      </WidgetCloseGate>
+    </th>
+  );
+
   useEffect(() => {
     const isOfficeModeBlocked = activeMode === 'office' && (!canViewOfficeCollection || isCollectionOfficer);
     const isCenterRouteModeBlocked =
       (activeMode === 'center' || activeMode === 'route') && !canViewCenterRouteCollections;
 
     if (isOfficeModeBlocked || isCenterRouteModeBlocked) {
-      const fallbackMode = cards[0]?.id || 'today';
+      const fallbackMode = visibleCards[0]?.id || cards[0]?.id || 'today';
       setActiveMode(fallbackMode);
     }
-  }, [activeMode, canViewOfficeCollection, canViewCenterRouteCollections, isCollectionOfficer, cards]);
+  }, [activeMode, canViewOfficeCollection, canViewCenterRouteCollections, isCollectionOfficer, cards, visibleCards]);
 
-  if (!token || loading) {
+  if (!token || loading || loadingWidgets) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-cyan-50 to-blue-100 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600"></div>
@@ -1582,23 +1699,34 @@ export default function CollectionManagementPage() {
           </div>
 
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="rounded-xl bg-white/85 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Collection Records</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{displayRecordCount}</p>
-            </div>
-            <div className="rounded-xl bg-white/85 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Total Installment</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{displayInstallmentTotal.toFixed(2)}</p>
-            </div>
-            <div className="rounded-xl bg-white/85 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">With Due Date</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{displayDueDateCount}</p>
-            </div>
+            {visibleSummaryCards.map((card) => (
+              <div key={card.key} className="relative rounded-xl bg-white/85 border border-white shadow-sm p-4">
+                <WidgetCloseGate>
+<button
+                  type="button"
+                  onClick={() => {
+                    void hideWidget(card.key);
+                  }}
+                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                  aria-label={`Hide ${card.label} card`}
+                >
+                  ×
+                </button>
+</WidgetCloseGate>
+                <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
+                <p className="text-2xl font-extrabold text-slate-900 mt-1">{card.value}</p>
+              </div>
+            ))}
           </div>
+          {visibleSummaryCards.length === 0 && (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              All summary cards are hidden. Restore from dashboard with admin approval.
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {cards.map((card) => (
+          {visibleCards.map((card) => (
             <button
               key={card.id}
               type="button"
@@ -1612,6 +1740,27 @@ export default function CollectionManagementPage() {
                   : 'border-white/70 hover:shadow-md hover:-translate-y-0.5'
               }`}
             >
+              <WidgetCloseGate>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void hideWidget(card.widgetKey);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void hideWidget(card.widgetKey);
+                  }
+                }}
+                className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label={`Hide ${card.title} card`}
+              >
+                ×
+              </span>
+              </WidgetCloseGate>
               <div className={`absolute -right-6 -top-6 h-20 w-20 rounded-full bg-gradient-to-r ${card.color} opacity-20 blur-xl`}></div>
               <div className={`inline-flex h-10 w-10 items-center justify-center rounded-xl text-white bg-gradient-to-r ${card.color}`}>
                 {card.id === 'center' ? 'C' : card.id === 'route' ? 'R' : card.id === 'today' ? 'T' : card.id === 'next' ? 'N' : 'O'}
@@ -1621,6 +1770,11 @@ export default function CollectionManagementPage() {
             </button>
           ))}
         </div>
+        {visibleCards.length === 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            All collection mode cards are hidden. Restore from dashboard with admin approval.
+          </div>
+        )}
 
         <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1645,31 +1799,36 @@ export default function CollectionManagementPage() {
               <table className="min-w-full text-sm text-left text-slate-700 bg-white">
                 <thead className="bg-cyan-50/70 text-slate-700">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Loan Code</th>
-                    <th className="px-3 py-2 font-semibold">Customer No</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Scope</th>
-                    <th className="px-3 py-2 font-semibold">Installment</th>
-                    <th className="px-3 py-2 font-semibold">Outstanding</th>
-                    <th className="px-3 py-2 font-semibold">Due Date</th>
-                    <th className="px-3 py-2 font-semibold">Loan End Date</th>
-                    <th className="px-3 py-2 font-semibold">Action</th>
+                    {isColumnVisible('finder_loan_code') && renderColumnHeader('finder_loan_code', 'Loan Code')}
+                    {isColumnVisible('finder_customer_no') && renderColumnHeader('finder_customer_no', 'Customer No')}
+                    {isColumnVisible('finder_customer') && renderColumnHeader('finder_customer', 'Customer')}
+                    {isColumnVisible('finder_scope') && renderColumnHeader('finder_scope', 'Scope')}
+                    {isColumnVisible('finder_installment') && renderColumnHeader('finder_installment', 'Installment')}
+                    {isColumnVisible('finder_outstanding') && renderColumnHeader('finder_outstanding', 'Outstanding')}
+                    {isColumnVisible('finder_due_date') && renderColumnHeader('finder_due_date', 'Due Date')}
+                    {isColumnVisible('finder_loan_end_date') && renderColumnHeader('finder_loan_end_date', 'Loan End Date')}
+                    {isColumnVisible('finder_action') && renderColumnHeader('finder_action', 'Action')}
                   </tr>
                 </thead>
                 <tbody>
                   {commonFinderResults.map((loan) => (
                     <tr key={`finder-${loan.id}`} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                      <td className="px-3 py-2 font-semibold text-slate-900">
-                        <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{getFinderLoanCode(loan)}</span>
-                      </td>
-                      <td className="px-3 py-2">{getFinderCustomerNo(loan)}</td>
-                      <td className="px-3 py-2">{loan.customer_name}</td>
-                      <td className="px-3 py-2 capitalize">{String(loan.loan_scope || '-').replace('_', ' ')}</td>
-                      <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
-                      <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
-                      <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>
-                      <td className="px-3 py-2">{formatDateDisplay(loan.loan_end_date)}</td>
-                      <td className="px-3 py-2">
+                      {isColumnVisible('finder_loan_code') && (
+                        <td className="px-3 py-2 font-semibold text-slate-900">
+                          <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{getFinderLoanCode(loan)}</span>
+                        </td>
+                      )}
+                      {isColumnVisible('finder_customer_no') && <td className="px-3 py-2">{getFinderCustomerNo(loan)}</td>}
+                      {isColumnVisible('finder_customer') && <td className="px-3 py-2">{loan.customer_name}</td>}
+                      {isColumnVisible('finder_scope') && <td className="px-3 py-2 capitalize">{String(loan.loan_scope || '-').replace('_', ' ')}</td>}
+                      {isColumnVisible('finder_installment') && <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>}
+                      {isColumnVisible('finder_outstanding') && (
+                        <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
+                      )}
+                      {isColumnVisible('finder_due_date') && <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>}
+                      {isColumnVisible('finder_loan_end_date') && <td className="px-3 py-2">{formatDateDisplay(loan.loan_end_date)}</td>}
+                      {isColumnVisible('finder_action') && (
+                        <td className="px-3 py-2">
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
@@ -1686,7 +1845,8 @@ export default function CollectionManagementPage() {
                             Collect
                           </button>
                         </div>
-                      </td>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -1936,35 +2096,35 @@ export default function CollectionManagementPage() {
                     <thead className="bg-gradient-to-r from-slate-100 to-cyan-50 text-slate-800">
                       {selectedGroupId !== null ? (
                         <tr>
-                          <th className="px-3 py-2 font-semibold">Loan Code</th>
-                          <th className="px-3 py-2 font-semibold">Customer No</th>
-                          <th className="px-3 py-2 font-semibold">Customer</th>
-                          <th className="px-3 py-2 font-semibold">Loan Amount</th>
-                          <th className="px-3 py-2 font-semibold">Installment</th>
-                          <th className="px-3 py-2 font-semibold">Paid Total</th>
-                          <th className="px-3 py-2 font-semibold">Outstanding</th>
-                          <th className="px-3 py-2 font-semibold">Arrears</th>
-                          <th className="px-3 py-2 font-semibold">Extra Payment</th>
-                          <th className="px-3 py-2 font-semibold">Due Date</th>
-                          <th className="px-3 py-2 font-semibold">Next Payment</th>
-                          <th className="px-3 py-2 font-semibold">Action</th>
+                          {isColumnVisible('main_loan_code') && renderColumnHeader('main_loan_code', 'Loan Code')}
+                          {isColumnVisible('main_customer_no') && renderColumnHeader('main_customer_no', 'Customer No')}
+                          {isColumnVisible('main_customer') && renderColumnHeader('main_customer', 'Customer')}
+                          {isColumnVisible('main_loan_amount') && renderColumnHeader('main_loan_amount', 'Loan Amount')}
+                          {isColumnVisible('main_installment') && renderColumnHeader('main_installment', 'Installment')}
+                          {isColumnVisible('main_paid_total') && renderColumnHeader('main_paid_total', 'Paid Total')}
+                          {isColumnVisible('main_outstanding') && renderColumnHeader('main_outstanding', 'Outstanding')}
+                          {isColumnVisible('main_arrears') && renderColumnHeader('main_arrears', 'Arrears')}
+                          {isColumnVisible('main_extra_payment') && renderColumnHeader('main_extra_payment', 'Extra Payment')}
+                          {isColumnVisible('main_due_date') && renderColumnHeader('main_due_date', 'Due Date')}
+                          {isColumnVisible('main_next_payment') && renderColumnHeader('main_next_payment', 'Next Payment')}
+                          {isColumnVisible('main_action') && renderColumnHeader('main_action', 'Action')}
                         </tr>
                       ) : selectedCenterId ? (
                         <tr>
-                          <th className="px-3 py-2 font-semibold">Group Code</th>
-                          <th className="px-3 py-2 font-semibold">Group Name</th>
-                          <th className="px-3 py-2 font-semibold">Loan Count</th>
-                          <th className="px-3 py-2 font-semibold">Total Installment</th>
-                          <th className="px-3 py-2 font-semibold">Next Due Date</th>
+                          {isColumnVisible('center_group_code') && renderColumnHeader('center_group_code', 'Group Code')}
+                          {isColumnVisible('center_group_name') && renderColumnHeader('center_group_name', 'Group Name')}
+                          {isColumnVisible('center_loan_count') && renderColumnHeader('center_loan_count', 'Loan Count')}
+                          {isColumnVisible('center_total_installment') && renderColumnHeader('center_total_installment', 'Total Installment')}
+                          {isColumnVisible('center_next_due_date') && renderColumnHeader('center_next_due_date', 'Next Due Date')}
                         </tr>
                       ) : (
                         <tr>
-                          <th className="px-3 py-2 font-semibold">Center Code</th>
-                          <th className="px-3 py-2 font-semibold">Center Name</th>
-                          <th className="px-3 py-2 font-semibold">Route</th>
-                          <th className="px-3 py-2 font-semibold">Loan Count</th>
-                          <th className="px-3 py-2 font-semibold">Total Installment</th>
-                          <th className="px-3 py-2 font-semibold">Next Due Date</th>
+                          {isColumnVisible('center_center_code') && renderColumnHeader('center_center_code', 'Center Code')}
+                          {isColumnVisible('center_center_name') && renderColumnHeader('center_center_name', 'Center Name')}
+                          {isColumnVisible('center_route') && renderColumnHeader('center_route', 'Route')}
+                          {isColumnVisible('center_loan_count') && renderColumnHeader('center_loan_count', 'Loan Count')}
+                          {isColumnVisible('center_total_installment') && renderColumnHeader('center_total_installment', 'Total Installment')}
+                          {isColumnVisible('center_next_due_date') && renderColumnHeader('center_next_due_date', 'Next Due Date')}
                         </tr>
                       )}
                     </thead>
@@ -1976,20 +2136,31 @@ export default function CollectionManagementPage() {
                               onClick={() => openLoanDetailsModal(loan)}
                               className={getLoanRecordRowClass(loan, loanRecordHighlightDate)}
                             >
-                              <td className="px-3 py-2 font-semibold text-slate-900">
-                                <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
-                              </td>
-                              <td className="px-3 py-2">{loan.customer_no || '-'}</td>
-                              <td className="px-3 py-2">{loan.customer_name}</td>
-                              <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
-                              <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
-                              <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
-                              <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
-                              <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
-                              <td className="px-3 py-2 text-violet-700 font-semibold">{getExtraPayment(loan).toFixed(2)}</td>
-                              <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>
-                              <td className="px-3 py-2">{formatDateDisplay(loan.next_payment_date)}</td>
-                              <td className="px-3 py-2">
+                              {isColumnVisible('main_loan_code') && (
+                                <td className="px-3 py-2 font-semibold text-slate-900">
+                                  <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
+                                </td>
+                              )}
+                              {isColumnVisible('main_customer_no') && <td className="px-3 py-2">{loan.customer_no || '-'}</td>}
+                              {isColumnVisible('main_customer') && <td className="px-3 py-2">{loan.customer_name}</td>}
+                              {isColumnVisible('main_loan_amount') && <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>}
+                              {isColumnVisible('main_installment') && <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>}
+                              {isColumnVisible('main_paid_total') && (
+                                <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
+                              )}
+                              {isColumnVisible('main_outstanding') && (
+                                <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
+                              )}
+                              {isColumnVisible('main_arrears') && (
+                                <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
+                              )}
+                              {isColumnVisible('main_extra_payment') && (
+                                <td className="px-3 py-2 text-violet-700 font-semibold">{getExtraPayment(loan).toFixed(2)}</td>
+                              )}
+                              {isColumnVisible('main_due_date') && <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>}
+                              {isColumnVisible('main_next_payment') && <td className="px-3 py-2">{formatDateDisplay(loan.next_payment_date)}</td>}
+                              {isColumnVisible('main_action') && (
+                                <td className="px-3 py-2">
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -2000,27 +2171,32 @@ export default function CollectionManagementPage() {
                                 >
                                   Collect
                                 </button>
-                              </td>
+                                </td>
+                              )}
                             </tr>
                           ))
                         : selectedCenterId
                           ? groupCollections.map((row) => (
                             <tr key={`group-${row.groupId}`} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                              <td className="px-3 py-2 font-semibold text-slate-900">
-                                <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{row.groupCode}</span>
-                              </td>
-                              <td className="px-3 py-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedGroupId(row.groupId)}
-                                  className="text-cyan-700 hover:text-cyan-900 font-semibold"
-                                >
-                                  {row.groupName}
-                                </button>
-                              </td>
-                              <td className="px-3 py-2">{row.loanCount}</td>
-                              <td className="px-3 py-2">{row.totalInstallment.toFixed(2)}</td>
-                              <td className="px-3 py-2">{formatDateDisplay(row.nextDueDate)}</td>
+                              {isColumnVisible('center_group_code') && (
+                                <td className="px-3 py-2 font-semibold text-slate-900">
+                                  <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{row.groupCode}</span>
+                                </td>
+                              )}
+                              {isColumnVisible('center_group_name') && (
+                                <td className="px-3 py-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedGroupId(row.groupId)}
+                                    className="text-cyan-700 hover:text-cyan-900 font-semibold"
+                                  >
+                                    {row.groupName}
+                                  </button>
+                                </td>
+                              )}
+                              {isColumnVisible('center_loan_count') && <td className="px-3 py-2">{row.loanCount}</td>}
+                              {isColumnVisible('center_total_installment') && <td className="px-3 py-2">{row.totalInstallment.toFixed(2)}</td>}
+                              {isColumnVisible('center_next_due_date') && <td className="px-3 py-2">{formatDateDisplay(row.nextDueDate)}</td>}
                             </tr>
                           ))
                         : centerCollections.map((row) => (
@@ -2029,14 +2205,16 @@ export default function CollectionManagementPage() {
                               onClick={() => setSelectedCenterId(row.centerId)}
                               className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
                             >
-                              <td className="px-3 py-2 font-semibold text-slate-900">
-                                <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{row.centerCode}</span>
-                              </td>
-                              <td className="px-3 py-2">{row.centerName}</td>
-                              <td className="px-3 py-2">{row.routeName}</td>
-                              <td className="px-3 py-2">{row.loanCount}</td>
-                              <td className="px-3 py-2">{row.totalInstallment.toFixed(2)}</td>
-                              <td className="px-3 py-2">{formatDateDisplay(row.nextDueDate)}</td>
+                              {isColumnVisible('center_center_code') && (
+                                <td className="px-3 py-2 font-semibold text-slate-900">
+                                  <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{row.centerCode}</span>
+                                </td>
+                              )}
+                              {isColumnVisible('center_center_name') && <td className="px-3 py-2">{row.centerName}</td>}
+                              {isColumnVisible('center_route') && <td className="px-3 py-2">{row.routeName}</td>}
+                              {isColumnVisible('center_loan_count') && <td className="px-3 py-2">{row.loanCount}</td>}
+                              {isColumnVisible('center_total_installment') && <td className="px-3 py-2">{row.totalInstallment.toFixed(2)}</td>}
+                              {isColumnVisible('center_next_due_date') && <td className="px-3 py-2">{formatDateDisplay(row.nextDueDate)}</td>}
                             </tr>
                           ))}
                     </tbody>
@@ -2046,27 +2224,27 @@ export default function CollectionManagementPage() {
                     <thead className="bg-gradient-to-r from-slate-100 to-cyan-50 text-slate-800">
                       {selectedRouteId !== null ? (
                         <tr>
-                          <th className="px-3 py-2 font-semibold">Loan Code</th>
-                          <th className="px-3 py-2 font-semibold">Customer No</th>
-                          <th className="px-3 py-2 font-semibold">Customer</th>
-                          <th className="px-3 py-2 font-semibold">Center</th>
-                          <th className="px-3 py-2 font-semibold">Loan Amount</th>
-                          <th className="px-3 py-2 font-semibold">Installment</th>
-                          <th className="px-3 py-2 font-semibold">Paid Total</th>
-                          <th className="px-3 py-2 font-semibold">Outstanding</th>
-                          <th className="px-3 py-2 font-semibold">Arrears</th>
-                          <th className="px-3 py-2 font-semibold">Extra Payment</th>
-                          <th className="px-3 py-2 font-semibold">Due Date</th>
-                          <th className="px-3 py-2 font-semibold">Next Payment</th>
-                          <th className="px-3 py-2 font-semibold">Action</th>
+                          {isColumnVisible('route_loan_code') && renderColumnHeader('route_loan_code', 'Loan Code')}
+                          {isColumnVisible('route_customer_no') && renderColumnHeader('route_customer_no', 'Customer No')}
+                          {isColumnVisible('route_customer') && renderColumnHeader('route_customer', 'Customer')}
+                          {isColumnVisible('route_center') && renderColumnHeader('route_center', 'Center')}
+                          {isColumnVisible('route_loan_amount') && renderColumnHeader('route_loan_amount', 'Loan Amount')}
+                          {isColumnVisible('route_installment') && renderColumnHeader('route_installment', 'Installment')}
+                          {isColumnVisible('route_paid_total') && renderColumnHeader('route_paid_total', 'Paid Total')}
+                          {isColumnVisible('route_outstanding') && renderColumnHeader('route_outstanding', 'Outstanding')}
+                          {isColumnVisible('route_arrears') && renderColumnHeader('route_arrears', 'Arrears')}
+                          {isColumnVisible('route_extra_payment') && renderColumnHeader('route_extra_payment', 'Extra Payment')}
+                          {isColumnVisible('route_due_date') && renderColumnHeader('route_due_date', 'Due Date')}
+                          {isColumnVisible('route_next_payment') && renderColumnHeader('route_next_payment', 'Next Payment')}
+                          {isColumnVisible('route_action') && renderColumnHeader('route_action', 'Action')}
                         </tr>
                       ) : (
                         <tr>
-                          <th className="px-3 py-2 font-semibold">Route Code</th>
-                          <th className="px-3 py-2 font-semibold">Route Name</th>
-                          <th className="px-3 py-2 font-semibold">Loan Count</th>
-                          <th className="px-3 py-2 font-semibold">Total Installment</th>
-                          <th className="px-3 py-2 font-semibold">Next Due Date</th>
+                          {isColumnVisible('route_route_code') && renderColumnHeader('route_route_code', 'Route Code')}
+                          {isColumnVisible('route_route_name') && renderColumnHeader('route_route_name', 'Route Name')}
+                          {isColumnVisible('route_loan_count') && renderColumnHeader('route_loan_count', 'Loan Count')}
+                          {isColumnVisible('route_total_installment') && renderColumnHeader('route_total_installment', 'Total Installment')}
+                          {isColumnVisible('route_next_due_date') && renderColumnHeader('route_next_due_date', 'Next Due Date')}
                         </tr>
                       )}
                     </thead>
@@ -2078,21 +2256,32 @@ export default function CollectionManagementPage() {
                               onClick={() => openLoanDetailsModal(loan)}
                               className={getLoanRecordRowClass(loan, loanRecordHighlightDate)}
                             >
-                              <td className="px-3 py-2 font-semibold text-slate-900">
-                                <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
-                              </td>
-                              <td className="px-3 py-2">{loan.customer_no || '-'}</td>
-                              <td className="px-3 py-2">{loan.customer_name}</td>
-                              <td className="px-3 py-2">{loan.center?.name || '-'}</td>
-                              <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
-                              <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
-                              <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
-                              <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
-                              <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
-                              <td className="px-3 py-2 text-violet-700 font-semibold">{getExtraPayment(loan).toFixed(2)}</td>
-                              <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>
-                              <td className="px-3 py-2">{formatDateDisplay(loan.next_payment_date)}</td>
-                              <td className="px-3 py-2">
+                              {isColumnVisible('route_loan_code') && (
+                                <td className="px-3 py-2 font-semibold text-slate-900">
+                                  <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
+                                </td>
+                              )}
+                              {isColumnVisible('route_customer_no') && <td className="px-3 py-2">{loan.customer_no || '-'}</td>}
+                              {isColumnVisible('route_customer') && <td className="px-3 py-2">{loan.customer_name}</td>}
+                              {isColumnVisible('route_center') && <td className="px-3 py-2">{loan.center?.name || '-'}</td>}
+                              {isColumnVisible('route_loan_amount') && <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>}
+                              {isColumnVisible('route_installment') && <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>}
+                              {isColumnVisible('route_paid_total') && (
+                                <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
+                              )}
+                              {isColumnVisible('route_outstanding') && (
+                                <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
+                              )}
+                              {isColumnVisible('route_arrears') && (
+                                <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
+                              )}
+                              {isColumnVisible('route_extra_payment') && (
+                                <td className="px-3 py-2 text-violet-700 font-semibold">{getExtraPayment(loan).toFixed(2)}</td>
+                              )}
+                              {isColumnVisible('route_due_date') && <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>}
+                              {isColumnVisible('route_next_payment') && <td className="px-3 py-2">{formatDateDisplay(loan.next_payment_date)}</td>}
+                              {isColumnVisible('route_action') && (
+                                <td className="px-3 py-2">
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -2103,7 +2292,8 @@ export default function CollectionManagementPage() {
                                 >
                                   Collect
                                 </button>
-                              </td>
+                                </td>
+                              )}
                             </tr>
                           ))
                         : routeCollections.map((row) => (
@@ -2112,13 +2302,15 @@ export default function CollectionManagementPage() {
                               onClick={() => setSelectedRouteId(row.routeId)}
                               className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
                             >
-                              <td className="px-3 py-2 font-semibold text-slate-900">
-                                <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{row.routeCode}</span>
-                              </td>
-                              <td className="px-3 py-2">{row.routeName}</td>
-                              <td className="px-3 py-2">{row.loanCount}</td>
-                              <td className="px-3 py-2">{row.totalInstallment.toFixed(2)}</td>
-                              <td className="px-3 py-2">{formatDateDisplay(row.nextDueDate)}</td>
+                              {isColumnVisible('route_route_code') && (
+                                <td className="px-3 py-2 font-semibold text-slate-900">
+                                  <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{row.routeCode}</span>
+                                </td>
+                              )}
+                              {isColumnVisible('route_route_name') && <td className="px-3 py-2">{row.routeName}</td>}
+                              {isColumnVisible('route_loan_count') && <td className="px-3 py-2">{row.loanCount}</td>}
+                              {isColumnVisible('route_total_installment') && <td className="px-3 py-2">{row.totalInstallment.toFixed(2)}</td>}
+                              {isColumnVisible('route_next_due_date') && <td className="px-3 py-2">{formatDateDisplay(row.nextDueDate)}</td>}
                             </tr>
                           ))}
                     </tbody>
@@ -2127,20 +2319,20 @@ export default function CollectionManagementPage() {
                   <>
                     <thead className="bg-gradient-to-r from-slate-100 to-cyan-50 text-slate-800">
                       <tr>
-                        <th className="px-3 py-2 font-semibold">Loan Code</th>
-                        <th className="px-3 py-2 font-semibold">Customer No</th>
-                        <th className="px-3 py-2 font-semibold">Customer</th>
-                        <th className="px-3 py-2 font-semibold">Route</th>
-                        <th className="px-3 py-2 font-semibold">Center</th>
-                        <th className="px-3 py-2 font-semibold">Loan Amount</th>
-                        <th className="px-3 py-2 font-semibold">Installment</th>
-                        <th className="px-3 py-2 font-semibold">Paid Total</th>
-                        <th className="px-3 py-2 font-semibold">Outstanding</th>
-                        <th className="px-3 py-2 font-semibold">Arrears</th>
-                        <th className="px-3 py-2 font-semibold">Extra Payment</th>
-                        <th className="px-3 py-2 font-semibold">Due Date</th>
-                        <th className="px-3 py-2 font-semibold">Next Payment</th>
-                        <th className="px-3 py-2 font-semibold">Status</th>
+                        {isColumnVisible('office_loan_code') && renderColumnHeader('office_loan_code', 'Loan Code')}
+                        {isColumnVisible('office_customer_no') && renderColumnHeader('office_customer_no', 'Customer No')}
+                        {isColumnVisible('office_customer') && renderColumnHeader('office_customer', 'Customer')}
+                        {isColumnVisible('office_route') && renderColumnHeader('office_route', 'Route')}
+                        {isColumnVisible('office_center') && renderColumnHeader('office_center', 'Center')}
+                        {isColumnVisible('office_loan_amount') && renderColumnHeader('office_loan_amount', 'Loan Amount')}
+                        {isColumnVisible('office_installment') && renderColumnHeader('office_installment', 'Installment')}
+                        {isColumnVisible('office_paid_total') && renderColumnHeader('office_paid_total', 'Paid Total')}
+                        {isColumnVisible('office_outstanding') && renderColumnHeader('office_outstanding', 'Outstanding')}
+                        {isColumnVisible('office_arrears') && renderColumnHeader('office_arrears', 'Arrears')}
+                        {isColumnVisible('office_extra_payment') && renderColumnHeader('office_extra_payment', 'Extra Payment')}
+                        {isColumnVisible('office_due_date') && renderColumnHeader('office_due_date', 'Due Date')}
+                        {isColumnVisible('office_next_payment') && renderColumnHeader('office_next_payment', 'Next Payment')}
+                        {isColumnVisible('office_status') && renderColumnHeader('office_status', 'Status')}
                       </tr>
                     </thead>
                     <tbody>
@@ -2150,26 +2342,38 @@ export default function CollectionManagementPage() {
                           onClick={() => openLoanDetailsModal(loan)}
                           className={getLoanRecordRowClass(loan, loanRecordHighlightDate)}
                         >
-                          <td className="px-3 py-2 font-semibold text-slate-900">
-                            <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
-                          </td>
-                          <td className="px-3 py-2">{loan.customer_no || '-'}</td>
-                          <td className="px-3 py-2">{loan.customer_name}</td>
-                          <td className="px-3 py-2">{loan.route?.name || loan.route_name || '-'}</td>
-                          <td className="px-3 py-2">{loan.center?.name || '-'}</td>
-                          <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
-                          <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
-                          <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
-                          <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
-                          <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
-                          <td className="px-3 py-2 text-violet-700 font-semibold">{getExtraPayment(loan).toFixed(2)}</td>
-                          <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>
-                          <td className="px-3 py-2">{formatDateDisplay(loan.next_payment_date)}</td>
-                          <td className="px-3 py-2 capitalize">
-                            <span className="inline-flex rounded-full px-2 py-1 text-[11px] font-semibold bg-emerald-100 text-emerald-700">
-                              {loan.status}
-                            </span>
-                          </td>
+                          {isColumnVisible('office_loan_code') && (
+                            <td className="px-3 py-2 font-semibold text-slate-900">
+                              <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
+                            </td>
+                          )}
+                          {isColumnVisible('office_customer_no') && <td className="px-3 py-2">{loan.customer_no || '-'}</td>}
+                          {isColumnVisible('office_customer') && <td className="px-3 py-2">{loan.customer_name}</td>}
+                          {isColumnVisible('office_route') && <td className="px-3 py-2">{loan.route?.name || loan.route_name || '-'}</td>}
+                          {isColumnVisible('office_center') && <td className="px-3 py-2">{loan.center?.name || '-'}</td>}
+                          {isColumnVisible('office_loan_amount') && <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>}
+                          {isColumnVisible('office_installment') && <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>}
+                          {isColumnVisible('office_paid_total') && (
+                            <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
+                          )}
+                          {isColumnVisible('office_outstanding') && (
+                            <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
+                          )}
+                          {isColumnVisible('office_arrears') && (
+                            <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
+                          )}
+                          {isColumnVisible('office_extra_payment') && (
+                            <td className="px-3 py-2 text-violet-700 font-semibold">{getExtraPayment(loan).toFixed(2)}</td>
+                          )}
+                          {isColumnVisible('office_due_date') && <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>}
+                          {isColumnVisible('office_next_payment') && <td className="px-3 py-2">{formatDateDisplay(loan.next_payment_date)}</td>}
+                          {isColumnVisible('office_status') && (
+                            <td className="px-3 py-2 capitalize">
+                              <span className="inline-flex rounded-full px-2 py-1 text-[11px] font-semibold bg-emerald-100 text-emerald-700">
+                                {loan.status}
+                              </span>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>

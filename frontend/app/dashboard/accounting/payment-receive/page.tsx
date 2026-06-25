@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { ArrowLeft, CheckCircle2, RefreshCcw } from 'lucide-react';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type PendingDeposit = {
   id: number;
@@ -89,6 +90,7 @@ const formatDate = (value?: string) => {
 export default function PaymentReceivePage() {
   const router = useRouter();
   const apiBaseUrl = getApiBaseUrl();
+  const widgetPrefix = 'accounting_payment_receive_widget_';
 
   const [token] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('token') || '' : ''));
   const [loading, setLoading] = useState(true);
@@ -99,6 +101,8 @@ export default function PaymentReceivePage() {
   const [transferredHandovers, setTransferredHandovers] = useState<PendingHandover[]>([]);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState('');
 
   useEffect(() => {
     if (!token) {
@@ -143,6 +147,73 @@ export default function PaymentReceivePage() {
     if (!token) return;
     void loadPending(token);
   }, [token, loadPending]);
+
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${apiBaseUrl}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const widgets = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data?.widgets)
+          ? response.data.widgets
+          : [];
+      const hidden = widgets
+        .filter(
+          (item: { widget_key?: unknown; is_visible?: unknown }) =>
+            typeof item.widget_key === 'string' &&
+            item.widget_key.startsWith(widgetPrefix) &&
+            (item.is_visible === false || Number(item.is_visible) === 0)
+        )
+        .map((item: { widget_key: string }) => item.widget_key);
+      setHiddenWidgetKeys(hidden);
+    } catch {
+      setWidgetNotice('Failed to load widget preferences.');
+    }
+  }, [apiBaseUrl]);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return;
+      const normalizedKey = String(widgetKey || '').trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Failed to save widget preference.');
+        return;
+      }
+      try {
+        await axios.patch(
+          `${apiBaseUrl}/dashboard/widgets`,
+          { widget_key: normalizedKey, is_visible: Boolean(isVisible) },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice('');
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+      }
+    },
+    [apiBaseUrl, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+      await saveWidgetPreference(widgetKey, false);
+    },
+    [saveWidgetPreference]
+  );
+
+  useEffect(() => {
+    if (!token) return;
+    void fetchWidgetPreferences(token);
+  }, [token, fetchWidgetPreferences]);
 
   const approveTransaction = async (type: 'deposit' | 'handover', id: number) => {
     if (!token) return;
@@ -208,6 +279,29 @@ export default function PaymentReceivePage() {
     transferredHandovers: transferredHandovers.length,
     total: deposits.length + handovers.length,
   }), [deposits.length, handovers.length, acceptedHandovers.length, transferredHandovers.length]);
+  const statCards = [
+    { key: 'pending_deposits', label: 'Pending Deposits', value: stats.deposits, border: 'border-amber-100', tone: 'text-amber-700' },
+    { key: 'pending_handovers', label: 'Pending Handovers', value: stats.handovers, border: 'border-orange-100', tone: 'text-orange-700' },
+    { key: 'total_pending', label: 'Total Pending', value: stats.total, border: 'border-yellow-100', tone: 'text-yellow-700' },
+    { key: 'accepted_handovers', label: 'Accepted Handovers', value: stats.acceptedHandovers, border: 'border-sky-100', tone: 'text-sky-700' },
+    { key: 'transferred_history', label: 'Transferred History', value: stats.transferredHandovers, border: 'border-indigo-100', tone: 'text-indigo-700' },
+  ];
+  const showHeaderWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}header`);
+  const showStatsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}stats`);
+  const showNoticeWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}notice`);
+  const showPendingDepositsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}pending_deposits`);
+  const showPendingHandoversWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}pending_handovers`);
+  const showAcceptedWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}accepted_handovers`);
+  const showTransferredWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}transferred_history`);
+  const visibleStatCards = statCards.filter((card) => !hiddenWidgetKeys.includes(`${widgetPrefix}stat_${card.key}`));
+  const showAnyWidget =
+    showHeaderWidget ||
+    showStatsWidget ||
+    showNoticeWidget ||
+    showPendingDepositsWidget ||
+    showPendingHandoversWidget ||
+    showAcceptedWidget ||
+    showTransferredWidget;
 
   if (!token || loading) {
     return (
@@ -220,7 +314,30 @@ export default function PaymentReceivePage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-100">
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 space-y-6">
-        <section className="rounded-3xl border border-amber-100 bg-white/90 p-6 shadow-sm">
+        {widgetNotice ? (
+          <section className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            {widgetNotice}
+          </section>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <section className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-5 text-sm font-semibold text-amber-900">
+            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
+          </section>
+        ) : null}
+
+        {showHeaderWidget ? (
+        <section className="relative rounded-3xl border border-amber-100 bg-white/90 p-6 shadow-sm">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-amber-200 bg-white text-amber-700 hover:bg-amber-50"
+              aria-label="Hide payment receive header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-700">Accounting Approval Desk</p>
@@ -250,37 +367,75 @@ export default function PaymentReceivePage() {
             </div>
           </div>
         </section>
+        ) : null}
 
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-          <div className="rounded-2xl border border-amber-100 bg-white p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Pending Deposits</p>
-            <p className="mt-2 text-2xl font-black text-slate-900">{stats.deposits}</p>
-          </div>
-          <div className="rounded-2xl border border-orange-100 bg-white p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-orange-700">Pending Handovers</p>
-            <p className="mt-2 text-2xl font-black text-slate-900">{stats.handovers}</p>
-          </div>
-          <div className="rounded-2xl border border-yellow-100 bg-white p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-yellow-700">Total Pending</p>
-            <p className="mt-2 text-2xl font-black text-slate-900">{stats.total}</p>
-          </div>
-          <div className="rounded-2xl border border-sky-100 bg-white p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">Accepted Handovers</p>
-            <p className="mt-2 text-2xl font-black text-slate-900">{stats.acceptedHandovers}</p>
-          </div>
-          <div className="rounded-2xl border border-indigo-100 bg-white p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Transferred History</p>
-            <p className="mt-2 text-2xl font-black text-slate-900">{stats.transferredHandovers}</p>
-          </div>
-        </section>
+        {showStatsWidget ? (
+          <section className="relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}stats`)}
+                className="absolute right-2 -top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-amber-200 bg-white text-amber-700 hover:bg-amber-50"
+                aria-label="Hide payment receive stats widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            {visibleStatCards.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                {visibleStatCards.map((card) => (
+                  <div key={card.key} className={`relative rounded-2xl border ${card.border} bg-white p-4`}>
+                    <WidgetCloseGate>
+                      <button
+                        type="button"
+                        onClick={() => void hideWidget(`${widgetPrefix}stat_${card.key}`)}
+                        className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-amber-200 bg-white text-amber-700 hover:bg-amber-50"
+                        aria-label={`Hide ${card.label} stat widget`}
+                      >
+                        ×
+                      </button>
+                    </WidgetCloseGate>
+                    <p className={`text-xs font-semibold uppercase tracking-wide ${card.tone}`}>{card.label}</p>
+                    <p className="mt-2 text-2xl font-black text-slate-900">{card.value}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm font-medium text-amber-900">
+                All payment stats are hidden.
+              </div>
+            )}
+          </section>
+        ) : null}
 
-        {notice && (
-          <section className={`rounded-2xl border p-4 ${notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`}>
+        {notice && showNoticeWidget ? (
+          <section className={`relative rounded-2xl border p-4 ${notice.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`}>
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}notice`)}
+                className="absolute right-3 top-3 inline-flex h-6 w-6 items-center justify-center rounded-full border border-current/20 bg-white/70 text-current hover:bg-white"
+                aria-label="Hide notice widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <p className="text-sm font-semibold">{notice.message}</p>
           </section>
-        )}
+        ) : null}
 
-        <section className="rounded-3xl border border-emerald-100 bg-white/90 p-5 shadow-sm">
+        {showPendingDepositsWidget ? (
+        <section className="relative rounded-3xl border border-emerald-100 bg-white/90 p-5 shadow-sm">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}pending_deposits`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50"
+              aria-label="Hide pending deposits widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <h2 className="text-lg font-bold text-slate-900">Pending Wallet Deposits</h2>
           {deposits.length === 0 ? (
             <p className="mt-3 text-sm text-slate-500">No pending deposit requests.</p>
@@ -341,8 +496,20 @@ export default function PaymentReceivePage() {
             </div>
           )}
         </section>
+        ) : null}
 
-        <section className="rounded-3xl border border-orange-100 bg-white/90 p-5 shadow-sm">
+        {showPendingHandoversWidget ? (
+        <section className="relative rounded-3xl border border-orange-100 bg-white/90 p-5 shadow-sm">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}pending_handovers`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-orange-200 bg-white text-orange-700 hover:bg-orange-50"
+              aria-label="Hide pending handovers widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <h2 className="text-lg font-bold text-slate-900">Pending Cash Handovers</h2>
           {handovers.length === 0 ? (
             <p className="mt-3 text-sm text-slate-500">No pending cash handover requests.</p>
@@ -413,8 +580,20 @@ export default function PaymentReceivePage() {
             </div>
           )}
         </section>
+        ) : null}
 
-        <section className="rounded-3xl border border-sky-100 bg-white/90 p-5 shadow-sm">
+        {showAcceptedWidget ? (
+        <section className="relative rounded-3xl border border-sky-100 bg-white/90 p-5 shadow-sm">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}accepted_handovers`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-sky-200 bg-white text-sky-700 hover:bg-sky-50"
+              aria-label="Hide accepted handovers widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <h2 className="text-lg font-bold text-slate-900">Accepted Payments (After Pending Cash Handovers)</h2>
           {acceptedHandovers.length === 0 ? (
             <p className="mt-3 text-sm text-slate-500">No accepted handovers waiting for transfer.</p>
@@ -469,8 +648,20 @@ export default function PaymentReceivePage() {
             </div>
           )}
         </section>
+        ) : null}
 
-        <section className="rounded-3xl border border-indigo-100 bg-white/90 p-5 shadow-sm">
+        {showTransferredWidget ? (
+        <section className="relative rounded-3xl border border-indigo-100 bg-white/90 p-5 shadow-sm">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}transferred_history`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-50"
+              aria-label="Hide transferred history widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <h2 className="text-lg font-bold text-slate-900">Transferred History</h2>
           {transferredHandovers.length === 0 ? (
             <p className="mt-3 text-sm text-slate-500">No transferred handovers yet.</p>
@@ -510,6 +701,7 @@ export default function PaymentReceivePage() {
             </div>
           )}
         </section>
+        ) : null}
       </div>
     </div>
   );

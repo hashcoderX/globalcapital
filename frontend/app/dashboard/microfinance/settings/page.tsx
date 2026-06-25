@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type MFRoute = {
   id: number;
@@ -100,6 +101,7 @@ export default function MicrofinanceSettingsPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
   const [activeTab, setActiveTab] = useState<TabType>('routes');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
 
   const [routes, setRoutes] = useState<MFRoute[]>([]);
   const [groups, setGroups] = useState<MFGroup[]>([]);
@@ -157,6 +159,61 @@ export default function MicrofinanceSettingsPage() {
     setModal({ open: false, title: '', message: '' });
   };
 
+  const widgetPrefix = 'mf_settings_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    try {
+      const response = await axios.get('/api/dashboard/widgets', {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        '/api/dashboard/widgets',
+        { widget_key: widgetKey, is_visible: isVisible },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+        }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      openModal('Failed to hide this widget. Please try again.', 'Widget Update Failed');
+    }
+  };
+
   const headers = useMemo(
     () => ({
       Authorization: `Bearer ${token}`,
@@ -173,6 +230,7 @@ export default function MicrofinanceSettingsPage() {
     }
 
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -499,6 +557,10 @@ export default function MicrofinanceSettingsPage() {
     ],
     [routes.length, centers.length, groups.length, loanProducts.length, penaltySetting?.penalty_rate]
   );
+  const visibleDashboardStats = dashboardStats.filter(
+    (stat) => !hiddenWidgetKeys.has(`${widgetPrefix}stat_${String(stat.label).toLowerCase().replace(/[^a-z0-9]+/g, '_')}`)
+  );
+  const visibleTabs = tabs.filter((tab) => !hiddenWidgetKeys.has(`${widgetPrefix}tab_${tab.key}`));
 
   const getStatusBadgeClass = (status: string) => {
     const normalized = status.toLowerCase();
@@ -522,6 +584,17 @@ export default function MicrofinanceSettingsPage() {
     });
   };
 
+  const isColumnVisible = (columnKey: string) => !hiddenWidgetKeys.has(`${widgetPrefix}lifecycle_col_${columnKey}`);
+
+  useEffect(() => {
+    if (hiddenWidgetKeys.has(`${widgetPrefix}tab_${activeTab}`)) {
+      const fallback = visibleTabs[0]?.key;
+      if (fallback) {
+        setActiveTab(fallback);
+      }
+    }
+  }, [activeTab, hiddenWidgetKeys, visibleTabs]);
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
@@ -539,7 +612,18 @@ export default function MicrofinanceSettingsPage() {
       </div>
 
       <div className="max-w-7xl mx-auto space-y-6 relative z-10">
-        <div className={`${shellCardClass} overflow-hidden p-6 md:p-8`}>
+        {!hiddenWidgetKeys.has(`${widgetPrefix}header`) && (
+        <div className={`${shellCardClass} relative overflow-hidden p-6 md:p-8`}>
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
               <span className="inline-flex rounded-full bg-cyan-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-700">
@@ -557,35 +641,82 @@ export default function MicrofinanceSettingsPage() {
           </div>
 
           <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
-            {dashboardStats.map((stat) => (
-              <div key={stat.label} className={`rounded-2xl border border-white/80 bg-gradient-to-r ${stat.bg} p-4`}>
+            {visibleDashboardStats.map((stat) => (
+              <div key={stat.label} className={`relative rounded-2xl border border-white/80 bg-gradient-to-r ${stat.bg} p-4`}>
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}stat_${String(stat.label).toLowerCase().replace(/[^a-z0-9]+/g, '_')}`)}
+                    className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${stat.label} widget`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{stat.label}</p>
                 <p className={`mt-1 text-2xl font-black ${stat.accent}`}>{stat.value}</p>
               </div>
             ))}
           </div>
         </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
-          {tabs.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key as TabType)}
-              className={`rounded-2xl border px-4 py-3 text-left transition-all ${
+              className={`relative rounded-2xl border px-4 py-3 text-left transition-all ${
                 activeTab === tab.key
                   ? 'border-cyan-300 bg-gradient-to-r from-cyan-600 to-sky-600 text-white shadow-xl shadow-cyan-700/30'
                   : 'border-white/80 bg-white/80 text-slate-700 hover:bg-white hover:-translate-y-0.5'
               }`}
             >
+              <WidgetCloseGate>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void hideWidget(`${widgetPrefix}tab_${tab.key}`);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void hideWidget(`${widgetPrefix}tab_${tab.key}`);
+                    }
+                  }}
+                  className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                  aria-label={`Hide ${tab.label} tab widget`}
+                >
+                  ×
+                </span>
+              </WidgetCloseGate>
               <p className="text-base">{tab.icon}</p>
               <p className="mt-1 text-sm font-bold">{tab.label}</p>
               <p className={`text-xs mt-0.5 ${activeTab === tab.key ? 'text-white/85' : 'text-slate-500'}`}>{tab.desc}</p>
             </button>
           ))}
         </div>
+        {visibleTabs.length === 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            All tab widgets are hidden. Use "Restore Hidden Widgets" on dashboard to show them again.
+          </div>
+        )}
 
-        {activeTab === 'routes' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {activeTab === 'routes' && !hiddenWidgetKeys.has(`${widgetPrefix}tab_routes`) && (
+          <div className="relative grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}tab_routes`)}
+                className="absolute right-2 -top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide routes widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <form onSubmit={submitRoute} className={`${shellCardClass} p-6 md:p-7 space-y-4`}>
               <h2 className="text-lg font-bold text-slate-900">{routeForm.id ? 'Edit Route' : 'Create Route'}</h2>
               <p className="text-xs text-slate-500">Define operational routes used for center and group mapping.</p>
@@ -646,8 +777,18 @@ export default function MicrofinanceSettingsPage() {
           </div>
         )}
 
-        {activeTab === 'groups' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {activeTab === 'groups' && !hiddenWidgetKeys.has(`${widgetPrefix}tab_groups`) && (
+          <div className="relative grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}tab_groups`)}
+                className="absolute right-2 -top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide groups widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <form onSubmit={submitGroup} className={`${shellCardClass} p-6 md:p-7 space-y-4`}>
               <h2 className="text-lg font-bold text-slate-900">{groupForm.id ? 'Edit Group' : 'Create Group'}</h2>
               <p className="text-xs text-slate-500">Attach groups under a route and center for field operations.</p>
@@ -736,8 +877,18 @@ export default function MicrofinanceSettingsPage() {
           </div>
         )}
 
-        {activeTab === 'centers' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {activeTab === 'centers' && !hiddenWidgetKeys.has(`${widgetPrefix}tab_centers`) && (
+          <div className="relative grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}tab_centers`)}
+                className="absolute right-2 -top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide centers widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <form onSubmit={submitCenter} className={`${shellCardClass} p-6 md:p-7 space-y-4`}>
               <h2 className="text-lg font-bold text-slate-900">{centerForm.id ? 'Edit Center' : 'Create Center'}</h2>
               <p className="text-xs text-slate-500">Set center details and meeting cycle under a selected route.</p>
@@ -820,8 +971,18 @@ export default function MicrofinanceSettingsPage() {
           </div>
         )}
 
-        {activeTab === 'loan_products' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {activeTab === 'loan_products' && !hiddenWidgetKeys.has(`${widgetPrefix}tab_loan_products`) && (
+          <div className="relative grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}tab_loan_products`)}
+                className="absolute right-2 -top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide loan products widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <form onSubmit={submitLoanProduct} className={`${shellCardClass} p-6 md:p-7 space-y-4`}>
               <h2 className="text-lg font-bold text-slate-900">{loanProductForm.id ? 'Edit Loan Product' : 'Create Loan Product'}</h2>
               <p className="text-xs text-slate-500">Define product terms used during microfinance loan request setup.</p>
@@ -937,8 +1098,18 @@ export default function MicrofinanceSettingsPage() {
           </div>
         )}
 
-        {activeTab === 'penalty' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {activeTab === 'penalty' && !hiddenWidgetKeys.has(`${widgetPrefix}tab_penalty`) && (
+          <div className="relative grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}tab_penalty`)}
+                className="absolute right-2 -top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide penalty widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <form onSubmit={submitPenalty} className={`${shellCardClass} p-6 md:p-7 space-y-4`}>
               <h2 className="text-lg font-bold text-slate-900">{penaltyForm.id ? 'Update Penalty Rate' : 'Add Initial Penalty Rate'}</h2>
               <p className="text-sm text-slate-600">
@@ -989,8 +1160,18 @@ export default function MicrofinanceSettingsPage() {
           </div>
         )}
 
-        {activeTab === 'loan_lifecycle' && (
-          <div className={`${shellCardClass} p-6 md:p-7 space-y-4`}>
+        {activeTab === 'loan_lifecycle' && !hiddenWidgetKeys.has(`${widgetPrefix}tab_loan_lifecycle`) && (
+          <div className={`${shellCardClass} relative p-6 md:p-7 space-y-4`}>
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}tab_loan_lifecycle`)}
+                className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide loan lifecycle widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Loan Hold / Close Control</h2>
@@ -1065,15 +1246,78 @@ export default function MicrofinanceSettingsPage() {
               <table className="min-w-full text-sm text-left text-slate-700">
                 <thead className="bg-cyan-50 text-slate-700">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Loan Code</th>
-                    <th className="px-3 py-2 font-semibold">Customer No</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Field Officer</th>
-                    <th className="px-3 py-2 font-semibold">Status</th>
-                    <th className="px-3 py-2 font-semibold">Due Date</th>
-                    <th className="px-3 py-2 font-semibold">Next Payment</th>
-                    <th className="px-3 py-2 font-semibold">Arrears</th>
-                    <th className="px-3 py-2 font-semibold">Action</th>
+                    {isColumnVisible('loan_code') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Loan Code
+                        <WidgetCloseGate>
+                          <button type="button" onClick={() => void hideWidget(`${widgetPrefix}lifecycle_col_loan_code`)} className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700">×</button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('customer_no') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Customer No
+                        <WidgetCloseGate>
+                          <button type="button" onClick={() => void hideWidget(`${widgetPrefix}lifecycle_col_customer_no`)} className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700">×</button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('customer') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Customer
+                        <WidgetCloseGate>
+                          <button type="button" onClick={() => void hideWidget(`${widgetPrefix}lifecycle_col_customer`)} className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700">×</button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('field_officer') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Field Officer
+                        <WidgetCloseGate>
+                          <button type="button" onClick={() => void hideWidget(`${widgetPrefix}lifecycle_col_field_officer`)} className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700">×</button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('status') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Status
+                        <WidgetCloseGate>
+                          <button type="button" onClick={() => void hideWidget(`${widgetPrefix}lifecycle_col_status`)} className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700">×</button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('due_date') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Due Date
+                        <WidgetCloseGate>
+                          <button type="button" onClick={() => void hideWidget(`${widgetPrefix}lifecycle_col_due_date`)} className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700">×</button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('next_payment') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Next Payment
+                        <WidgetCloseGate>
+                          <button type="button" onClick={() => void hideWidget(`${widgetPrefix}lifecycle_col_next_payment`)} className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700">×</button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('arrears') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Arrears
+                        <WidgetCloseGate>
+                          <button type="button" onClick={() => void hideWidget(`${widgetPrefix}lifecycle_col_arrears`)} className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700">×</button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('action') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Action
+                        <WidgetCloseGate>
+                          <button type="button" onClick={() => void hideWidget(`${widgetPrefix}lifecycle_col_action`)} className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700">×</button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -1082,19 +1326,22 @@ export default function MicrofinanceSettingsPage() {
 
                     return (
                       <tr key={loan.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40">
-                        <td className="px-3 py-2 font-semibold text-slate-900">{loan.loan_code || `LR-${loan.id}`}</td>
-                        <td className="px-3 py-2">{loan.customer_no || '-'}</td>
-                        <td className="px-3 py-2">{loan.customer_name || '-'}</td>
-                        <td className="px-3 py-2">{loan.field_officer || '-'}</td>
-                        <td className="px-3 py-2">
-                          <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize ${getStatusBadgeClass(status)}`}>
-                            {status || '-'}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">{formatDate(loan.due_date)}</td>
-                        <td className="px-3 py-2">{formatDate(loan.next_payment_date)}</td>
-                        <td className="px-3 py-2">{getProjectedArrears(loan).toFixed(2)}</td>
-                        <td className="px-3 py-2">
+                        {isColumnVisible('loan_code') && <td className="px-3 py-2 font-semibold text-slate-900">{loan.loan_code || `LR-${loan.id}`}</td>}
+                        {isColumnVisible('customer_no') && <td className="px-3 py-2">{loan.customer_no || '-'}</td>}
+                        {isColumnVisible('customer') && <td className="px-3 py-2">{loan.customer_name || '-'}</td>}
+                        {isColumnVisible('field_officer') && <td className="px-3 py-2">{loan.field_officer || '-'}</td>}
+                        {isColumnVisible('status') && (
+                          <td className="px-3 py-2">
+                            <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize ${getStatusBadgeClass(status)}`}>
+                              {status || '-'}
+                            </span>
+                          </td>
+                        )}
+                        {isColumnVisible('due_date') && <td className="px-3 py-2">{formatDate(loan.due_date)}</td>}
+                        {isColumnVisible('next_payment') && <td className="px-3 py-2">{formatDate(loan.next_payment_date)}</td>}
+                        {isColumnVisible('arrears') && <td className="px-3 py-2">{getProjectedArrears(loan).toFixed(2)}</td>}
+                        {isColumnVisible('action') && (
+                          <td className="px-3 py-2">
                           <div className="flex gap-2">
                             {(status === 'approved' || status === 'released') && (
                               <button
@@ -1115,7 +1362,8 @@ export default function MicrofinanceSettingsPage() {
                               </button>
                             )}
                           </div>
-                        </td>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}

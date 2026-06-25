@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 interface Employee {
   id: number;
@@ -32,6 +33,7 @@ interface AttendanceRecord {
 
 export default function AttendancePage() {
   const apiBase = getApiBaseUrl();
+  const widgetPrefix = 'hrm_attendance_widget_';
   type NoticeTone = 'success' | 'error' | 'info';
 
   const [token, setToken] = useState('');
@@ -56,11 +58,79 @@ export default function AttendancePage() {
   const [markOutTimeInput, setMarkOutTimeInput] = useState('');
   const [markOutNotes, setMarkOutNotes] = useState('');
   const [noticeModal, setNoticeModal] = useState<{ title: string; message: string; tone: NoticeTone } | null>(null);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
   const router = useRouter();
 
   const openNoticeModal = (tone: NoticeTone, title: string, message: string) => {
     setNoticeModal({ tone, title, message });
   };
+
+  const fetchWidgetPreferences = useCallback(
+    async (authToken?: string) => {
+      const tokenToUse = authToken || token;
+      if (!tokenToUse) return;
+      try {
+        const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+          headers: {
+            Authorization: `Bearer ${tokenToUse}`,
+            Accept: 'application/json',
+          },
+        });
+        const widgets = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+        const hiddenKeys = widgets
+          .filter((item: { widget_key?: string; is_visible?: boolean | number | null }) => !item?.is_visible)
+          .map((item: { widget_key?: string }) => item.widget_key)
+          .filter((key: unknown): key is string => typeof key === 'string' && key.startsWith(widgetPrefix));
+        setHiddenWidgetKeys(hiddenKeys);
+        setWidgetNotice(null);
+      } catch {
+        setWidgetNotice('Failed to load widget preferences.');
+      }
+    },
+    [apiBase, token, widgetPrefix]
+  );
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+      const normalizedKey = widgetKey.trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Invalid widget key. Please refresh and try again.');
+        return false;
+      }
+      try {
+        await axios.patch(
+          `${apiBase}/dashboard/widgets`,
+          {
+            widget_key: normalizedKey,
+            is_visible: Boolean(isVisible),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice(null);
+        return true;
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+        return false;
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) return;
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+    },
+    [saveWidgetPreference]
+  );
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -70,8 +140,9 @@ export default function AttendancePage() {
       setToken(storedToken);
       fetchEmployees(storedToken);
       fetchTodayAttendance(storedToken);
+      fetchWidgetPreferences(storedToken);
     }
-  }, [router]);
+  }, [router, fetchWidgetPreferences]);
 
   const fetchEmployees = async (authToken?: string) => {
     const tokenToUse = authToken || token;
@@ -296,6 +367,37 @@ export default function AttendancePage() {
       e.employee_code.toLowerCase().includes(term)
     );
   });
+  const showQuickCodeCol = !hiddenWidgetKeys.includes(`${widgetPrefix}quick_col_code`);
+  const showQuickNameCol = !hiddenWidgetKeys.includes(`${widgetPrefix}quick_col_name`);
+  const showQuickEmailCol = !hiddenWidgetKeys.includes(`${widgetPrefix}quick_col_email`);
+  const showQuickPhoneCol = !hiddenWidgetKeys.includes(`${widgetPrefix}quick_col_phone`);
+  const showQuickInCol = !hiddenWidgetKeys.includes(`${widgetPrefix}quick_col_in`);
+  const showQuickOutCol = !hiddenWidgetKeys.includes(`${widgetPrefix}quick_col_out`);
+  const showQuickStatusCol = !hiddenWidgetKeys.includes(`${widgetPrefix}quick_col_status`);
+  const showQuickActionsCol = !hiddenWidgetKeys.includes(`${widgetPrefix}quick_col_actions`);
+  const showAnyQuickColumn =
+    showQuickCodeCol ||
+    showQuickNameCol ||
+    showQuickEmailCol ||
+    showQuickPhoneCol ||
+    showQuickInCol ||
+    showQuickOutCol ||
+    showQuickStatusCol ||
+    showQuickActionsCol;
+
+  const showHistoryDateCol = !hiddenWidgetKeys.includes(`${widgetPrefix}history_col_date`);
+  const showHistoryInCol = !hiddenWidgetKeys.includes(`${widgetPrefix}history_col_in`);
+  const showHistoryOutCol = !hiddenWidgetKeys.includes(`${widgetPrefix}history_col_out`);
+  const showHistoryStatusCol = !hiddenWidgetKeys.includes(`${widgetPrefix}history_col_status`);
+  const showHistoryHoursCol = !hiddenWidgetKeys.includes(`${widgetPrefix}history_col_hours`);
+  const showHistoryNotesCol = !hiddenWidgetKeys.includes(`${widgetPrefix}history_col_notes`);
+  const showAnyHistoryColumn =
+    showHistoryDateCol ||
+    showHistoryInCol ||
+    showHistoryOutCol ||
+    showHistoryStatusCol ||
+    showHistoryHoursCol ||
+    showHistoryNotesCol;
 
   if (!token) {
     return (
@@ -314,8 +416,26 @@ export default function AttendancePage() {
         <div className="absolute -bottom-8 left-40 w-72 h-72 bg-rose-200 rounded-full mix-blend-multiply filter blur-xl animate-pulse animation-delay-4000"></div>
       </div>
 
+      {widgetNotice && (
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{widgetNotice}</div>
+        </div>
+      )}
+
       {/* Navigation */}
+      {!hiddenWidgetKeys.includes(`${widgetPrefix}top_nav`) && (
       <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
+        <WidgetCloseGate>
+          <button
+            type="button"
+            onClick={() => hideWidget(`${widgetPrefix}top_nav`)}
+            className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-20"
+            aria-label="Hide attendance top navigation widget"
+            title="Hide widget"
+          >
+            ×
+          </button>
+        </WidgetCloseGate>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row justify-between sm:items-center h-auto sm:h-16 py-3 sm:py-0 gap-3 sm:gap-0">
             <div className="flex items-center justify-between sm:justify-start">
@@ -335,10 +455,23 @@ export default function AttendancePage() {
           </div>
         </div>
       </nav>
+      )}
 
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         {/* Header */}
-        <div className="text-center mb-8">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}header`) && (
+        <div className="text-center mb-8 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}header`)}
+              className="absolute -top-2 right-0 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide attendance header widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="inline-block p-1 bg-gradient-to-r from-orange-500 to-red-500 rounded-full mb-6">
             <div className="bg-white rounded-full p-4">
               <span className="text-4xl">📅</span>
@@ -351,9 +484,22 @@ export default function AttendancePage() {
             Manage employee attendance with quick marking, CSV uploads, and history tracking.
           </p>
         </div>
+        )}
 
         {/* Tabs */}
-        <div className="mb-6 flex justify-center">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}tabs`) && (
+        <div className="mb-6 flex justify-center relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}tabs`)}
+              className="absolute -top-2 right-0 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide attendance tabs widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="bg-white/70 backdrop-blur-sm rounded-full p-1 shadow-lg inline-flex max-w-full overflow-x-auto">
             <button
               onClick={() => setActiveTab('mark')}
@@ -387,12 +533,25 @@ export default function AttendancePage() {
             </button>
           </div>
         </div>
+        )}
 
         {/* Tab Content */}
         {activeTab === 'mark' && (
           <>
             {/* Controls */}
-            <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}mark_controls`) && (
+            <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => hideWidget(`${widgetPrefix}mark_controls`)}
+                  className="absolute -top-2 right-0 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                  aria-label="Hide quick mark controls widget"
+                  title="Hide widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="flex items-center gap-3">
                 <input
                   type="text"
@@ -406,21 +565,35 @@ export default function AttendancePage() {
                 {loading ? 'Updating attendance...' : `${filteredEmployees.length} employees listed`}
               </div>
             </div>
+            )}
 
             {/* Employees Table */}
-            <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 overflow-hidden">
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}quick_mark_table`) && (
+            <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 overflow-hidden relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => hideWidget(`${widgetPrefix}quick_mark_table`)}
+                  className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                  aria-label="Hide quick mark table widget"
+                  title="Hide widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
+              {showAnyQuickColumn ? (
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-white/30">
                   <thead className="bg-gradient-to-r from-orange-500 to-red-500 text-white">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Code</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Name</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Email</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Phone</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">In Time</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Out Time</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Today's Status</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Actions</th>
+                      {showQuickCodeCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Code</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_code`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showQuickNameCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Name</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_name`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showQuickEmailCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Email</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_email`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showQuickPhoneCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Phone</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_phone`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showQuickInCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>In Time</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_in`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showQuickOutCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Out Time</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_out`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showQuickStatusCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Today's Status</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_status`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showQuickActionsCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Actions</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_actions`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
                     </tr>
                   </thead>
                   <tbody className="bg-white/60 divide-y divide-white/30">
@@ -437,17 +610,21 @@ export default function AttendancePage() {
                               'bg-blue-50/50'
                             : ''
                         }`}>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{emp.employee_code}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{emp.first_name} {emp.last_name}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{emp.email}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{emp.phone || emp.mobile || '-'}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                            {isMarked && attendance.in_time ? attendance.in_time : '-'}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                            {isMarked && attendance.out_time ? attendance.out_time : '-'}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {showQuickCodeCol && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{emp.employee_code}</td>}
+                          {showQuickNameCol && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{emp.first_name} {emp.last_name}</td>}
+                          {showQuickEmailCol && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{emp.email}</td>}
+                          {showQuickPhoneCol && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{emp.phone || emp.mobile || '-'}</td>}
+                          {showQuickInCol && (
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                              {isMarked && attendance.in_time ? attendance.in_time : '-'}
+                            </td>
+                          )}
+                          {showQuickOutCol && (
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                              {isMarked && attendance.out_time ? attendance.out_time : '-'}
+                            </td>
+                          )}
+                          {showQuickStatusCol && <td className="px-6 py-4 whitespace-nowrap text-sm">
                             {isMarked ? (
                               <div className="flex items-center space-x-2">
                                 <span className={`px-2 py-1 rounded-full text-xs font-medium ${
@@ -465,8 +642,8 @@ export default function AttendancePage() {
                             ) : (
                               <span className="text-gray-400 text-xs">Not marked</span>
                             )}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          </td>}
+                          {showQuickActionsCol && <td className="px-6 py-4 whitespace-nowrap text-sm">
                             <div className="flex flex-wrap gap-2">
                               <button
                                 onClick={() => openMarkModal(emp, 'present')}
@@ -522,19 +699,34 @@ export default function AttendancePage() {
                                 </button>
                               )}
                             </div>
-                          </td>
+                          </td>}
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
+              ) : (
+                <div className="py-12 text-center text-sm text-gray-500">All quick mark table columns are hidden.</div>
+              )}
             </div>
+            )}
           </>
         )}
 
-        {activeTab === 'upload' && (
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-8">
+        {activeTab === 'upload' && !hiddenWidgetKeys.includes(`${widgetPrefix}upload_section`) && (
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-8 relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}upload_section`)}
+                className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                aria-label="Hide CSV upload widget"
+                title="Hide widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <h3 className="text-2xl font-bold text-gray-900 mb-4">Upload Attendance CSV</h3>
             <p className="text-gray-600 mb-6">
               Upload a CSV from your fingerprint machine. Supported headers include both legacy format and fingerprint format.
@@ -581,8 +773,19 @@ export default function AttendancePage() {
           </div>
         )}
 
-        {activeTab === 'history' && (
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-8">
+        {activeTab === 'history' && !hiddenWidgetKeys.includes(`${widgetPrefix}history_section`) && (
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-8 relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}history_section`)}
+                className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                aria-label="Hide attendance history widget"
+                title="Hide widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <h3 className="text-2xl font-bold text-gray-900 mb-4">Attendance History</h3>
             <div className="mb-6 flex flex-col md:flex-row gap-4">
               <select
@@ -624,24 +827,25 @@ export default function AttendancePage() {
             </div>
             {attendanceHistory.length > 0 && (
               <div className="overflow-x-auto">
+                {showAnyHistoryColumn ? (
                 <table className="min-w-full divide-y divide-white/30">
                   <thead className="bg-gradient-to-r from-orange-500 to-red-500 text-white">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Date</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">In Time</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Out Time</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Status</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Work Hours</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">Notes</th>
+                      {showHistoryDateCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Date</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}history_col_date`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showHistoryInCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>In Time</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}history_col_in`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showHistoryOutCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Out Time</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}history_col_out`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showHistoryStatusCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Status</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}history_col_status`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showHistoryHoursCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Work Hours</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}history_col_hours`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showHistoryNotesCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Notes</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}history_col_notes`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
                     </tr>
                   </thead>
                   <tbody className="bg-white/60 divide-y divide-white/30">
                     {attendanceHistory.map((record) => (
                       <tr key={record.id} className="hover:bg-white/80">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.date}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{record.in_time || '-'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{record.out_time || '-'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        {showHistoryDateCol && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.date}</td>}
+                        {showHistoryInCol && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{record.in_time || '-'}</td>}
+                        {showHistoryOutCol && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{record.out_time || '-'}</td>}
+                        {showHistoryStatusCol && <td className="px-6 py-4 whitespace-nowrap text-sm">
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                             record.status === 'present' ? 'bg-green-100 text-green-800' :
                             record.status === 'absent' ? 'bg-red-100 text-red-800' :
@@ -650,13 +854,16 @@ export default function AttendancePage() {
                           }`}>
                             {record.status.replace('_', ' ').toUpperCase()}
                           </span>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{record.work_hours || '-'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{record.notes || '-'}</td>
+                        </td>}
+                        {showHistoryHoursCol && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{record.work_hours || '-'}</td>}
+                        {showHistoryNotesCol && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{record.notes || '-'}</td>}
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                ) : (
+                  <div className="py-12 text-center text-sm text-gray-500">All history table columns are hidden.</div>
+                )}
               </div>
             )}
           </div>

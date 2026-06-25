@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   ArrowLeft,
   Check,
@@ -198,6 +199,7 @@ const ensureMicrofinanceSummaryTemplates = (
 export default function RolesAddPage() {
   const router = useRouter();
   const apiBase = getApiBaseUrl();
+  const widgetPrefix = 'hrm_roles_widget_';
 
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(false);
@@ -227,6 +229,80 @@ export default function RolesAddPage() {
   const [editingPermissionKeys, setEditingPermissionKeys] = useState<string[]>([]);
   const [permissionsModalSearch, setPermissionsModalSearch] = useState('');
   const [savingPermissions, setSavingPermissions] = useState(false);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
+
+  const fetchWidgetPreferences = useCallback(
+    async (authToken?: string) => {
+      const auth = authToken || token;
+      if (!auth) return;
+
+      try {
+        const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+          headers: {
+            Authorization: `Bearer ${auth}`,
+            Accept: 'application/json',
+          },
+        });
+
+        const widgets = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+        const hiddenKeys = widgets
+          .filter((item: { widget_key?: string; is_visible?: boolean | number | null }) => !item?.is_visible)
+          .map((item: { widget_key?: string }) => item.widget_key)
+          .filter((key: unknown): key is string => typeof key === 'string' && key.startsWith(widgetPrefix));
+
+        setHiddenWidgetKeys(hiddenKeys);
+        setWidgetNotice(null);
+      } catch {
+        setWidgetNotice('Failed to load widget preferences.');
+      }
+    },
+    [apiBase, token, widgetPrefix]
+  );
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+
+      const normalizedKey = widgetKey.trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Invalid widget key. Please refresh the page and try again.');
+        return false;
+      }
+
+      try {
+        await axios.patch(
+          `${apiBase}/dashboard/widgets`,
+          {
+            widget_key: normalizedKey,
+            is_visible: Boolean(isVisible),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice(null);
+        return true;
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+        return false;
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) return;
+
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+    },
+    [saveWidgetPreference]
+  );
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -244,6 +320,7 @@ export default function RolesAddPage() {
       fetchPermissionTemplates(authToken),
       fetchExistingPermissions(authToken),
       fetchRoles(authToken),
+      fetchWidgetPreferences(authToken),
     ]);
   };
 
@@ -420,6 +497,13 @@ export default function RolesAddPage() {
     () => roles.filter((role) => role.is_active).length,
     [roles]
   );
+  const showRoleColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_role`);
+  const showDescriptionColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_description`);
+  const showPermissionsColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_permissions`);
+  const showStatusColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_status`);
+  const showActionsColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_actions`);
+  const showAnyRoleTableColumn =
+    showRoleColumn || showDescriptionColumn || showPermissionsColumn || showStatusColumn || showActionsColumn;
 
   useEffect(() => {
     if (rolesPage > rolesTotalPages) {
@@ -735,25 +819,84 @@ export default function RolesAddPage() {
         <div className="absolute top-40 right-20 w-72 h-72 bg-cyan-200 rounded-full mix-blend-multiply filter blur-xl" />
       </div>
 
-      <nav className="relative z-10 bg-white/85 backdrop-blur-lg shadow-lg border-b border-white/20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <button
-            type="button"
-            onClick={() => router.push('/dashboard/hrm')}
-            className="inline-flex items-center gap-2 text-gray-700 hover:text-blue-600 transition-colors text-sm font-medium"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to HRM
-          </button>
-          <div className="inline-flex items-center gap-2 text-gray-900 font-semibold">
-            <Shield className="h-5 w-5 text-blue-600" />
-            Role Management
+      {!hiddenWidgetKeys.includes(`${widgetPrefix}top_nav`) && (
+        <nav className="relative z-10 bg-white/85 backdrop-blur-lg shadow-lg border-b border-white/20">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}top_nav`)}
+              className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-20"
+              aria-label="Hide top navigation widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}back_button`) && (
+              <div className="relative w-fit">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}back_button`)}
+                    className="absolute -right-9 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                    aria-label="Hide back to HRM button widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => router.push('/dashboard/hrm')}
+                  className="inline-flex items-center gap-2 text-gray-700 hover:text-blue-600 transition-colors text-sm font-medium"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back to HRM
+                </button>
+              </div>
+            )}
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}title`) && (
+              <div className="inline-flex items-center gap-2 text-gray-900 font-semibold relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}title`)}
+                    className="absolute -right-9 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                    aria-label="Hide role management title widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <Shield className="h-5 w-5 text-blue-600" />
+                Role Management
+              </div>
+            )}
           </div>
-        </div>
-      </nav>
+        </nav>
+      )}
 
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8 space-y-6">
-        <div className="rounded-3xl border border-white/80 bg-white/90 shadow-xl overflow-hidden">
+        {widgetNotice && (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {widgetNotice}
+          </div>
+        )}
+
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}hero`) && (
+        <div className="rounded-3xl border border-white/80 bg-white/90 shadow-xl overflow-hidden relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}hero`)}
+              className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide roles hero widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="bg-gradient-to-r from-blue-600 via-cyan-600 to-teal-600 px-6 py-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
               <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-blue-100">Human resources</p>
@@ -763,34 +906,91 @@ export default function RolesAddPage() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <div className="rounded-2xl bg-white/15 px-4 py-3 text-center min-w-[88px]">
-                <p className="text-2xl font-extrabold text-white">{roles.length}</p>
-                <p className="text-[10px] uppercase tracking-wide text-blue-100">Roles</p>
-              </div>
-              <div className="rounded-2xl bg-white/15 px-4 py-3 text-center min-w-[88px]">
-                <p className="text-2xl font-extrabold text-white">{activeRolesCount}</p>
-                <p className="text-[10px] uppercase tracking-wide text-blue-100">Active</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => fetchPermissionTemplates()}
-                disabled={syncingFile}
-                className="inline-flex items-center gap-2 rounded-xl border border-white/30 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-60"
-              >
-                <RefreshCw className={`h-4 w-4 ${syncingFile ? 'animate-spin' : ''}`} />
-                Reload permissions
-              </button>
-              <button
-                type="button"
-                onClick={openCreateForm}
-                className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-50 transition"
-              >
-                <Plus className="h-4 w-4" />
-                Add role
-              </button>
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}hero_stat_roles`) && (
+                <div className="rounded-2xl bg-white/15 px-4 py-3 text-center min-w-[88px] relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}hero_stat_roles`)}
+                      className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-white/60 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                      aria-label="Hide roles count widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <p className="text-2xl font-extrabold text-white">{roles.length}</p>
+                  <p className="text-[10px] uppercase tracking-wide text-blue-100">Roles</p>
+                </div>
+              )}
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}hero_stat_active`) && (
+                <div className="rounded-2xl bg-white/15 px-4 py-3 text-center min-w-[88px] relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}hero_stat_active`)}
+                      className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-white/60 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                      aria-label="Hide active roles widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <p className="text-2xl font-extrabold text-white">{activeRolesCount}</p>
+                  <p className="text-[10px] uppercase tracking-wide text-blue-100">Active</p>
+                </div>
+              )}
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}hero_reload_permissions`) && (
+                <div className="relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}hero_reload_permissions`)}
+                      className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-white/60 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                      aria-label="Hide reload permissions button widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => fetchPermissionTemplates()}
+                    disabled={syncingFile}
+                    className="inline-flex items-center gap-2 rounded-xl border border-white/30 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-60"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${syncingFile ? 'animate-spin' : ''}`} />
+                    Reload permissions
+                  </button>
+                </div>
+              )}
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}hero_add_role`) && (
+                <div className="relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}hero_add_role`)}
+                      className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-white/60 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                      aria-label="Hide add role button widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={openCreateForm}
+                    className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-blue-700 hover:bg-blue-50 transition"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add role
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
+        )}
 
         {formError && (
           <div className="flex items-start justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
@@ -975,28 +1175,68 @@ export default function RolesAddPage() {
           </div>
         )}
 
-        <div className="bg-white/90 backdrop-blur-lg rounded-2xl shadow-xl border border-white/20 overflow-hidden">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}roles_table_section`) && (
+        <div className="bg-white/90 backdrop-blur-lg rounded-2xl shadow-xl border border-white/20 overflow-hidden relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}roles_table_section`)}
+              className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide role list widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-cyan-50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h2 className="text-lg font-semibold text-gray-900">Role list</h2>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="relative w-full sm:w-72">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  type="text"
-                  value={roleSearchTerm}
-                  onChange={(e) => setRoleSearchTerm(e.target.value)}
-                  placeholder="Search roles…"
-                  className={`${inputClass} pl-10 py-2.5`}
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => fetchRoles()}
-                className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Refresh
-              </button>
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}roles_search`) && (
+                <div className="relative w-full sm:w-72">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={roleSearchTerm}
+                    onChange={(e) => setRoleSearchTerm(e.target.value)}
+                    placeholder="Search roles…"
+                    className={`${inputClass} pl-10 py-2.5`}
+                  />
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}roles_search`)}
+                      className="absolute -right-9 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                      aria-label="Hide role search widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                </div>
+              )}
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}roles_refresh`) && (
+                <div className="relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}roles_refresh`)}
+                      className="absolute -right-8 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                      aria-label="Hide role refresh button widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => fetchRoles()}
+                    className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Refresh
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1008,71 +1248,181 @@ export default function RolesAddPage() {
             </div>
           ) : (
             <>
+              {showAnyRoleTableColumn ? (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Role</th>
-                      <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Description</th>
-                      <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Permissions</th>
-                      <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Status</th>
-                      <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Actions</th>
+                      {showRoleColumn && (
+                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
+                          <div className="flex items-center gap-2">
+                            <span>Role</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_role`)}
+                                className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide role column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      )}
+                      {showDescriptionColumn && (
+                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
+                          <div className="flex items-center gap-2">
+                            <span>Description</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_description`)}
+                                className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide description column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      )}
+                      {showPermissionsColumn && (
+                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
+                          <div className="flex items-center gap-2">
+                            <span>Permissions</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_permissions`)}
+                                className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide permissions column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      )}
+                      {showStatusColumn && (
+                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
+                          <div className="flex items-center gap-2">
+                            <span>Status</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_status`)}
+                                className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide status column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      )}
+                      {showActionsColumn && (
+                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
+                          <div className="flex items-center gap-2">
+                            <span>Actions</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_actions`)}
+                                className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide actions column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {paginatedRoles.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-6 py-12 text-center text-sm text-gray-500">
+                        <td
+                          colSpan={
+                            (showRoleColumn ? 1 : 0) +
+                            (showDescriptionColumn ? 1 : 0) +
+                            (showPermissionsColumn ? 1 : 0) +
+                            (showStatusColumn ? 1 : 0) +
+                            (showActionsColumn ? 1 : 0) || 1
+                          }
+                          className="px-6 py-12 text-center text-sm text-gray-500"
+                        >
                           {roleSearchTerm ? 'No roles match your search.' : 'No roles yet. Click Add role to create one.'}
                         </td>
                       </tr>
                     ) : (
                       paginatedRoles.map((role) => (
                         <tr key={role.id} className="hover:bg-blue-50/40 transition-colors">
-                          <td className="px-6 py-4 font-semibold text-gray-900 whitespace-nowrap">{role.name}</td>
-                          <td className="px-6 py-4 text-gray-800">{role.description || '—'}</td>
-                          <td className="px-6 py-4">
-                            <span className="inline-flex rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200 px-2.5 py-0.5 text-xs font-bold">
-                              {role.permissions?.length || 0}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4">
-                            <span
-                              className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                                role.is_active
-                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                  : 'bg-rose-100 text-rose-800 border border-rose-200'
-                              }`}
-                            >
-                              {role.is_active ? 'Active' : 'Inactive'}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openPermissionsModal(role)}
-                              className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 transition hover:border-blue-300 hover:bg-blue-100"
-                            >
-                              <Shield className="h-3.5 w-3.5" />
-                              Permissions
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteRole(role)}
-                              className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 transition hover:border-rose-300 hover:bg-rose-100"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              Delete
-                            </button>
-                            </div>
-                          </td>
+                          {showRoleColumn && (
+                            <td className="px-6 py-4 font-semibold text-gray-900 whitespace-nowrap">{role.name}</td>
+                          )}
+                          {showDescriptionColumn && (
+                            <td className="px-6 py-4 text-gray-800">{role.description || '—'}</td>
+                          )}
+                          {showPermissionsColumn && (
+                            <td className="px-6 py-4">
+                              <span className="inline-flex rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200 px-2.5 py-0.5 text-xs font-bold">
+                                {role.permissions?.length || 0}
+                              </span>
+                            </td>
+                          )}
+                          {showStatusColumn && (
+                            <td className="px-6 py-4">
+                              <span
+                                className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                                  role.is_active
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                    : 'bg-rose-100 text-rose-800 border border-rose-200'
+                                }`}
+                              >
+                                {role.is_active ? 'Active' : 'Inactive'}
+                              </span>
+                            </td>
+                          )}
+                          {showActionsColumn && (
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => openPermissionsModal(role)}
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 transition hover:border-blue-300 hover:bg-blue-100"
+                              >
+                                <Shield className="h-3.5 w-3.5" />
+                                Permissions
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteRole(role)}
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 transition hover:border-rose-300 hover:bg-rose-100"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Delete
+                              </button>
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       ))
                     )}
                   </tbody>
                 </table>
               </div>
+              ) : (
+                <div className="px-6 py-12 text-center text-sm text-gray-500">
+                  All role table columns are hidden. Use `Restore Hidden Widgets` in the main dashboard.
+                </div>
+              )}
 
               <div className="px-6 py-4 border-t border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <p className="text-sm text-gray-600">
@@ -1104,6 +1454,7 @@ export default function RolesAddPage() {
             </>
           )}
         </div>
+        )}
       </main>
 
       {confirmOpen && pendingDeleteRole && (

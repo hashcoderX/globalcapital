@@ -40,16 +40,9 @@ type ReportCategory = {
   reports: ReportItem[];
 };
 
-type AuthUser = {
-  id?: number;
-  designation?: { id?: number; name?: string } | null;
-  roles?: Array<{ id?: number; name?: string }>;
-};
-
 export default function ReportsHubPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
 
@@ -61,12 +54,6 @@ export default function ReportsHubPage() {
       .replace(/\s+/g, ' ')
       .trim();
 
-  const designationName = normalizeText(String(authUser?.designation?.name || ''));
-  const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
-  const isCollectionOfficer =
-    designationName.includes('collection officer') ||
-    roleNames.some((role) => role.includes('collection officer'));
-
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
@@ -75,17 +62,6 @@ export default function ReportsHubPage() {
     }
 
     setToken(storedToken);
-
-    const storedUser = localStorage.getItem('auth_user');
-    if (storedUser) {
-      try {
-        setAuthUser(JSON.parse(storedUser));
-      } catch {
-        setAuthUser(null);
-      }
-    } else {
-      setAuthUser(null);
-    }
   }, [router]);
 
   const categories = useMemo<ReportCategory[]>(
@@ -382,57 +358,10 @@ export default function ReportsHubPage() {
     []
   );
 
-  const collectionOfficerBlockedCategoryKeys = new Set(['accounting', 'management', 'mortgage', 'savings', 'finance', 'branch']);
-  const collectionOfficerBlockedMicrofinanceReportTitles = new Set([
-    'Active Member Report',
-    'Blacklisted Customer Report',
-    'Re-Payment Report',
-    'Recovery Report',
-  ]);
-
-  const collectionOfficerBlockedLoanPortfolioReportTitles = new Set([
-    'Interest Income Report',
-    'Loan Disbursement Report',
-  ]);
-
-  const roleFilteredCategories = useMemo(() => {
-    if (!isCollectionOfficer) {
-      return categories;
-    }
-
-    return categories
-      .filter((category) => !collectionOfficerBlockedCategoryKeys.has(category.key))
-      .map((category) => {
-        if (category.key !== 'microfinance') {
-          return category;
-        }
-
-        return {
-          ...category,
-          reports: category.reports.filter(
-            (report) => !collectionOfficerBlockedMicrofinanceReportTitles.has(report.title)
-          ),
-        };
-      })
-      .map((category) => {
-        if (category.key !== 'loan-portfolio') {
-          return category;
-        }
-
-        return {
-          ...category,
-          reports: category.reports.filter(
-            (report) => !collectionOfficerBlockedLoanPortfolioReportTitles.has(report.title)
-          ),
-        };
-      })
-      .filter((category) => category.reports.length > 0);
-  }, [categories, isCollectionOfficer]);
-
   const normalizedSearch = normalizeText(searchQuery);
 
   const filteredCategories = useMemo(() => {
-    return roleFilteredCategories
+    return categories
       .filter((category) => activeCategory === 'all' || category.key === activeCategory)
       .map((category) => {
         if (!normalizedSearch) {
@@ -447,24 +376,24 @@ export default function ReportsHubPage() {
         return { ...category, reports };
       })
       .filter((category) => category.reports.length > 0);
-  }, [roleFilteredCategories, activeCategory, normalizedSearch]);
+  }, [categories, activeCategory, normalizedSearch]);
 
   const hubStats = useMemo(() => {
-    const allReports = roleFilteredCategories.flatMap((category) => category.reports);
+    const allReports = categories.flatMap((category) => category.reports);
     const available = allReports.filter((report) => Boolean(report.path)).length;
     const comingSoon = allReports.length - available;
 
     return {
-      categories: roleFilteredCategories.length,
+      categories: categories.length,
       totalReports: allReports.length,
       available,
       comingSoon,
     };
-  }, [roleFilteredCategories]);
+  }, [categories]);
 
   const categoryFilters = useMemo(
-    () => [{ key: 'all', label: 'All Domains' }, ...roleFilteredCategories.map((c) => ({ key: c.key, label: c.shortTitle }))],
-    [roleFilteredCategories]
+    () => [{ key: 'all', label: 'All Domains' }, ...categories.map((c) => ({ key: c.key, label: c.shortTitle }))],
+    [categories]
   );
 
   const openReport = (path: string) => {

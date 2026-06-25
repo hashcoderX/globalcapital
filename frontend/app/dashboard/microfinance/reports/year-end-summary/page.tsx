@@ -4,6 +4,7 @@ import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type CollectionRow = {
   id: number;
@@ -33,6 +34,62 @@ export default function YearEndSummaryReportPage() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<CollectionRow[]>([]);
   const [selectedYear, setSelectedYear] = useState(String(new Date().getFullYear()));
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
+  const widgetPrefix = 'mf_year_end_summary_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this widget. Please try again.',
+      });
+    }
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -42,6 +99,7 @@ export default function YearEndSummaryReportPage() {
     }
 
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -164,6 +222,38 @@ export default function YearEndSummaryReportPage() {
       .join(' ');
   }, [monthSummary, chartScale]);
   const formatMoney = (value: number) => Number(value || 0).toFixed(2);
+  const summaryCards = [
+    {
+      key: `${widgetPrefix}summary_collection`,
+      label: 'Year Collection',
+      value: formatMoney(totals.collection),
+      boxClass: 'border-indigo-100 bg-indigo-50/70',
+      labelClass: 'text-indigo-700',
+      valueClass: 'text-indigo-700',
+    },
+    {
+      key: `${widgetPrefix}summary_capital`,
+      label: 'Year Capital',
+      value: formatMoney(totals.capital),
+      boxClass: 'border-cyan-100 bg-cyan-50/70',
+      labelClass: 'text-cyan-700',
+      valueClass: 'text-cyan-700',
+    },
+    {
+      key: `${widgetPrefix}summary_profit`,
+      label: 'Year Profit',
+      value: formatMoney(totals.profit),
+      boxClass: 'border-emerald-100 bg-emerald-50/70',
+      labelClass: 'text-emerald-700',
+      valueClass: 'text-emerald-700',
+    },
+  ];
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+  const showControlSection = !hiddenWidgetKeys.has(`${widgetPrefix}controls_section`);
+  const showGraphSection = !hiddenWidgetKeys.has(`${widgetPrefix}graph_section`);
+  const showTableSection = !hiddenWidgetKeys.has(`${widgetPrefix}table_section`);
+  const isColumnVisible = (columnKey: string) =>
+    !hiddenWidgetKeys.has(`${widgetPrefix}table_col_${columnKey}`);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-violet-50 to-sky-100 p-5 md:p-7">
@@ -187,7 +277,18 @@ export default function YearEndSummaryReportPage() {
           </div>
         </div>
 
-        <div className="rounded-3xl border border-indigo-100 bg-white/90 p-5 backdrop-blur-xl shadow-[0_18px_45px_-28px_rgba(79,70,229,0.4)]">
+        {showControlSection && (
+        <div className="relative rounded-3xl border border-indigo-100 bg-white/90 p-5 backdrop-blur-xl shadow-[0_18px_45px_-28px_rgba(79,70,229,0.4)]">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}controls_section`)}
+              className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide controls widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Year</label>
@@ -204,23 +305,43 @@ export default function YearEndSummaryReportPage() {
               </select>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 min-w-[320px]">
-              <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-3">
-                <p className="text-xs uppercase tracking-wide text-indigo-700">Year Collection</p>
-                <p className="text-lg font-extrabold text-indigo-700">{formatMoney(totals.collection)}</p>
-              </div>
-              <div className="rounded-xl border border-cyan-100 bg-cyan-50/70 p-3">
-                <p className="text-xs uppercase tracking-wide text-cyan-700">Year Capital</p>
-                <p className="text-lg font-extrabold text-cyan-700">{formatMoney(totals.capital)}</p>
-              </div>
-              <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3">
-                <p className="text-xs uppercase tracking-wide text-emerald-700">Year Profit</p>
-                <p className="text-lg font-extrabold text-emerald-700">{formatMoney(totals.profit)}</p>
-              </div>
+              {visibleSummaryCards.map((card) => (
+                <div key={card.key} className={`relative rounded-xl border p-3 ${card.boxClass}`}>
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => void hideWidget(card.key)}
+                      className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                      aria-label={`Hide ${card.label} summary card`}
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <p className={`text-xs uppercase tracking-wide ${card.labelClass}`}>{card.label}</p>
+                  <p className={`text-lg font-extrabold ${card.valueClass}`}>{card.value}</p>
+                </div>
+              ))}
             </div>
           </div>
+          {visibleSummaryCards.length === 0 && (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              All summary widgets are hidden. Restore from dashboard with admin approval.
+            </div>
+          )}
 
+          {showGraphSection && (
           <div className="mt-5 overflow-x-auto rounded-2xl border border-indigo-100 bg-white">
-            <div className="border-b border-indigo-100 bg-gradient-to-r from-indigo-50/70 via-sky-50/70 to-emerald-50/70 px-4 py-4">
+            <div className="relative border-b border-indigo-100 bg-gradient-to-r from-indigo-50/70 via-sky-50/70 to-emerald-50/70 px-4 py-4">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}graph_section`)}
+                  className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide graphical preview widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Graphical Preview</h2>
               <p className="mt-1 text-xs text-slate-500">Bar chart compares monthly collection and capital; line shows monthly profit trend.</p>
             </div>
@@ -305,36 +426,133 @@ export default function YearEndSummaryReportPage() {
                 </div>
               </div>
             </div>
+          </div>
+          )}
 
-            <table className="min-w-full text-sm text-left text-slate-700">
-              <thead className="bg-indigo-50 text-slate-700">
-                <tr>
-                  <th className="px-3 py-2 font-semibold">Month</th>
-                  <th className="px-3 py-2 font-semibold">Total Collection</th>
-                  <th className="px-3 py-2 font-semibold">Capital Collection</th>
-                  <th className="px-3 py-2 font-semibold">Profit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
+          {showTableSection && (
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-indigo-100 bg-white">
+              <div className="relative px-3 py-2 bg-indigo-50/60 border-b border-indigo-100">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}table_section`)}
+                    className="absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide summary table widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+              </div>
+              <table className="min-w-full text-sm text-left text-slate-700">
+                <thead className="bg-indigo-50 text-slate-700">
                   <tr>
-                    <td className="px-3 py-5 text-center text-slate-500" colSpan={4}>Loading summary...</td>
+                    {isColumnVisible('month') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Month
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => void hideWidget(`${widgetPrefix}table_col_month`)}
+                            className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                            aria-label="Hide Month column"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('collection') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Total Collection
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => void hideWidget(`${widgetPrefix}table_col_collection`)}
+                            className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                            aria-label="Hide Total Collection column"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('capital') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Capital Collection
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => void hideWidget(`${widgetPrefix}table_col_capital`)}
+                            className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                            aria-label="Hide Capital Collection column"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
+                    {isColumnVisible('profit') && (
+                      <th className="relative px-3 py-2 pr-8 font-semibold">
+                        Profit
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => void hideWidget(`${widgetPrefix}table_col_profit`)}
+                            className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                            aria-label="Hide Profit column"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                      </th>
+                    )}
                   </tr>
-                ) : (
-                  monthSummary.map((row) => (
-                    <tr key={row.monthIndex} className="border-b border-indigo-100 last:border-b-0 hover:bg-indigo-50/40">
-                      <td className="px-3 py-2 font-semibold text-slate-900">{row.monthName}</td>
-                      <td className="px-3 py-2">{formatMoney(row.totalCollection)}</td>
-                      <td className="px-3 py-2">{formatMoney(row.totalCapital)}</td>
-                      <td className="px-3 py-2 text-emerald-700 font-semibold">{formatMoney(row.totalProfit)}</td>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td className="px-3 py-5 text-center text-slate-500" colSpan={4}>Loading summary...</td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    monthSummary.map((row) => (
+                      <tr key={row.monthIndex} className="border-b border-indigo-100 last:border-b-0 hover:bg-indigo-50/40">
+                        {isColumnVisible('month') && <td className="px-3 py-2 font-semibold text-slate-900">{row.monthName}</td>}
+                        {isColumnVisible('collection') && <td className="px-3 py-2">{formatMoney(row.totalCollection)}</td>}
+                        {isColumnVisible('capital') && <td className="px-3 py-2">{formatMoney(row.totalCapital)}</td>}
+                        {isColumnVisible('profit') && <td className="px-3 py-2 text-emerald-700 font-semibold">{formatMoney(row.totalProfit)}</td>}
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {!showGraphSection && !showTableSection && (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              All report widgets are hidden. Restore from dashboard with admin approval.
+            </div>
+          )}
+        </div>
+        )}
+      </div>
+      {widgetNotice.open && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={() => setWidgetNotice({ open: false, title: '', message: '' })} />
+          <div className="relative w-full max-w-sm rounded-2xl border border-indigo-100 bg-white p-5 shadow-xl">
+            <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
+            <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+              >
+                OK
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

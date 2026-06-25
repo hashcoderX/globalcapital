@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 interface Payroll {
   id: number;
@@ -81,6 +82,7 @@ interface Branch {
 
 export default function Payroll() {
   const apiBase = getApiBaseUrl();
+  const widgetPrefix = 'hrm_payroll_widget_';
   const [token, setToken] = useState('');
   const [payrolls, setPayrolls] = useState<Payroll[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -113,6 +115,73 @@ export default function Payroll() {
   const [noticeTitle, setNoticeTitle] = useState('');
   const [noticeMessage, setNoticeMessage] = useState('');
   const [noticeType, setNoticeType] = useState<'success' | 'error' | 'warning' | 'info'>('info');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
+
+  const fetchWidgetPreferences = useCallback(
+    async (authToken: string) => {
+      if (!authToken) return;
+      try {
+        const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            Accept: 'application/json',
+          },
+        });
+        const widgets = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+        const hiddenKeys = widgets
+          .filter((item: { widget_key?: string; is_visible?: boolean | number | null }) => !item?.is_visible)
+          .map((item: { widget_key?: string }) => item.widget_key)
+          .filter((key: unknown): key is string => typeof key === 'string' && key.startsWith(widgetPrefix));
+        setHiddenWidgetKeys(hiddenKeys);
+        setWidgetNotice(null);
+      } catch {
+        setWidgetNotice('Failed to load widget preferences.');
+      }
+    },
+    [apiBase, widgetPrefix]
+  );
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+      const normalizedKey = widgetKey.trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Invalid widget key. Please refresh the page and try again.');
+        return false;
+      }
+      try {
+        await axios.patch(
+          `${apiBase}/dashboard/widgets`,
+          {
+            widget_key: normalizedKey,
+            is_visible: Boolean(isVisible),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice(null);
+        return true;
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+        return false;
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) return;
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+    },
+    [saveWidgetPreference]
+  );
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -123,8 +192,9 @@ export default function Payroll() {
       fetchPayrolls(storedToken);
       fetchEmployees(storedToken);
       fetchBranches(storedToken);
+      fetchWidgetPreferences(storedToken);
     }
-  }, [router]);
+  }, [router, fetchWidgetPreferences]);
 
   const fetchPayrolls = async (authToken: string) => {
     try {
@@ -404,6 +474,23 @@ export default function Payroll() {
   const pendingCount = filteredPayrolls.filter((payroll) => payroll.status === 'pending').length;
   const processedCount = filteredPayrolls.filter((payroll) => payroll.status === 'processed').length;
   const paidCount = filteredPayrolls.filter((payroll) => payroll.status === 'paid').length;
+  const showEmployeeColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_employee`);
+  const showMonthColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_month`);
+  const showBasicColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_basic`);
+  const showAllowancesColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_allowances`);
+  const showDeductionsColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_deductions`);
+  const showNetColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_net`);
+  const showStatusColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_status`);
+  const showActionsColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_actions`);
+  const showAnyPayrollColumn =
+    showEmployeeColumn ||
+    showMonthColumn ||
+    showBasicColumn ||
+    showAllowancesColumn ||
+    showDeductionsColumn ||
+    showNetColumn ||
+    showStatusColumn ||
+    showActionsColumn;
 
   if (!token) {
     return (
@@ -421,8 +508,28 @@ export default function Payroll() {
         <div className="absolute -bottom-24 left-1/3 h-80 w-80 rounded-full bg-teal-300/20 blur-3xl" />
       </div>
 
+      {widgetNotice && (
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {widgetNotice}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
+      {!hiddenWidgetKeys.includes(`${widgetPrefix}header`) && (
       <div className="relative z-10 bg-white/80 backdrop-blur-xl shadow-lg border-b border-white/50">
+        <WidgetCloseGate>
+          <button
+            type="button"
+            onClick={() => hideWidget(`${widgetPrefix}header`)}
+            className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+            aria-label="Hide payroll header widget"
+            title="Hide widget"
+          >
+            ×
+          </button>
+        </WidgetCloseGate>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
             <div>
@@ -432,40 +539,118 @@ export default function Payroll() {
               <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-slate-900 tracking-tight">Payroll Management</h1>
               <p className="text-sm sm:text-base md:text-lg text-slate-600 mt-2">Accurate salary processing with attendance, overtime, deductions, EPF/ETF, and APIT in one place.</p>
             </div>
-            <div className="md:flex-shrink-0">
-              <button
-                onClick={() => setShowGenerateModal(true)}
-                className="w-full md:w-auto bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white px-7 py-3 rounded-xl font-semibold transition-all duration-300 transform hover:scale-[1.02] shadow-xl"
-              >
-                Generate Payroll
-              </button>
-            </div>
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}btn_generate`) && (
+              <div className="md:flex-shrink-0 relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}btn_generate`)}
+                    className="absolute -top-2 -right-2 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                    aria-label="Hide generate payroll button widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <button
+                  onClick={() => setShowGenerateModal(true)}
+                  className="w-full md:w-auto bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white px-7 py-3 rounded-xl font-semibold transition-all duration-300 transform hover:scale-[1.02] shadow-xl"
+                >
+                  Generate Payroll
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-7">
-            <div className="rounded-2xl border border-cyan-100 bg-white/80 p-4 shadow-sm">
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}stat_rows`) && (
+            <div className="rounded-2xl border border-cyan-100 bg-white/80 p-4 shadow-sm relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => hideWidget(`${widgetPrefix}stat_rows`)}
+                  className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                  aria-label="Hide payroll rows stat widget"
+                  title="Hide widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <p className="text-xs font-semibold text-cyan-700 uppercase tracking-wide">Payroll Rows</p>
               <p className="mt-2 text-2xl font-bold text-slate-900">{filteredPayrolls.length}</p>
             </div>
-            <div className="rounded-2xl border border-emerald-100 bg-white/80 p-4 shadow-sm">
+            )}
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}stat_total_net`) && (
+            <div className="rounded-2xl border border-emerald-100 bg-white/80 p-4 shadow-sm relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => hideWidget(`${widgetPrefix}stat_total_net`)}
+                  className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                  aria-label="Hide total net salary stat widget"
+                  title="Hide widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide">Total Net Salary</p>
               <p className="mt-2 text-2xl font-bold text-slate-900">{formatCurrency(totalNetPayroll, activeCurrency)}</p>
             </div>
-            <div className="rounded-2xl border border-amber-100 bg-white/80 p-4 shadow-sm">
+            )}
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}stat_pending`) && (
+            <div className="rounded-2xl border border-amber-100 bg-white/80 p-4 shadow-sm relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => hideWidget(`${widgetPrefix}stat_pending`)}
+                  className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                  aria-label="Hide pending stat widget"
+                  title="Hide widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide">Pending</p>
               <p className="mt-2 text-2xl font-bold text-slate-900">{pendingCount}</p>
             </div>
-            <div className="rounded-2xl border border-violet-100 bg-white/80 p-4 shadow-sm">
+            )}
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}stat_processed_paid`) && (
+            <div className="rounded-2xl border border-violet-100 bg-white/80 p-4 shadow-sm relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => hideWidget(`${widgetPrefix}stat_processed_paid`)}
+                  className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                  aria-label="Hide processed paid stat widget"
+                  title="Hide widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <p className="text-xs font-semibold text-violet-700 uppercase tracking-wide">Processed / Paid</p>
               <p className="mt-2 text-2xl font-bold text-slate-900">{processedCount} / {paidCount}</p>
             </div>
+            )}
           </div>
         </div>
       </div>
+      )}
 
       {/* Filters */}
+      {!hiddenWidgetKeys.includes(`${widgetPrefix}filters`) && (
       <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="bg-white/85 backdrop-blur-sm rounded-2xl shadow-xl border border-white/60 p-6">
+        <div className="bg-white/85 backdrop-blur-sm rounded-2xl shadow-xl border border-white/60 p-6 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}filters`)}
+              className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide payroll filters widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-900">Filter & Recalculate</h3>
             <span className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">Smart Controls</span>
@@ -509,33 +694,91 @@ export default function Payroll() {
               </select>
             </div>
             <div className="md:col-span-4 flex flex-wrap items-end gap-2 pt-1">
-              <button
-                onClick={() => token && fetchPayrolls(token)}
-                className="bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-all duration-300 shadow"
-              >
-                Apply Filters
-              </button>
-              <button
-                onClick={handleRecalculatePayroll}
-                disabled={recalculateLoading}
-                className="bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 text-white px-6 py-2 rounded-lg font-medium transition-all duration-300 shadow"
-              >
-                {recalculateLoading ? 'Recalculating...' : 'Recalculate Month'}
-              </button>
-              <button
-                onClick={resetFilters}
-                className="bg-slate-500 hover:bg-slate-600 text-white px-6 py-2 rounded-lg font-medium transition-all duration-300"
-              >
-                Reset
-              </button>
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}btn_apply_filters`) && (
+                <div className="relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}btn_apply_filters`)}
+                      className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                      aria-label="Hide apply filters button widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <button
+                    onClick={() => token && fetchPayrolls(token)}
+                    className="bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-all duration-300 shadow"
+                  >
+                    Apply Filters
+                  </button>
+                </div>
+              )}
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}btn_recalculate`) && (
+                <div className="relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}btn_recalculate`)}
+                      className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                      aria-label="Hide recalculate month button widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <button
+                    onClick={handleRecalculatePayroll}
+                    disabled={recalculateLoading}
+                    className="bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 disabled:opacity-50 text-white px-6 py-2 rounded-lg font-medium transition-all duration-300 shadow"
+                  >
+                    {recalculateLoading ? 'Recalculating...' : 'Recalculate Month'}
+                  </button>
+                </div>
+              )}
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}btn_reset_filters`) && (
+                <div className="relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}btn_reset_filters`)}
+                      className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                      aria-label="Hide reset filters button widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <button
+                    onClick={resetFilters}
+                    className="bg-slate-500 hover:bg-slate-600 text-white px-6 py-2 rounded-lg font-medium transition-all duration-300"
+                  >
+                    Reset
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
+      )}
 
       {/* Payroll Table */}
+      {!hiddenWidgetKeys.includes(`${widgetPrefix}payroll_table`) && (
       <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
-        <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-xl border border-white/60 overflow-hidden">
+        <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-xl border border-white/60 overflow-hidden relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}payroll_table`)}
+              className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide payroll table widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="bg-gradient-to-r from-slate-900 via-cyan-900 to-blue-900 px-6 py-4">
             <h3 className="text-white text-lg font-bold">Payroll Ledger</h3>
             <p className="text-cyan-100 text-sm">Review salary computations, statuses, and employee-wise payouts.</p>
@@ -545,103 +788,240 @@ export default function Payroll() {
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
             </div>
           ) : (
+            showAnyPayrollColumn ? (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-slate-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Employee
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Month/Year
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Basic Salary
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Allowances
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Deductions
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Net Salary
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
+                    {showEmployeeColumn && (
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <div className="flex items-center gap-2">
+                          <span>Employee</span>
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={() => hideWidget(`${widgetPrefix}col_employee`)}
+                              className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                              aria-label="Hide employee column"
+                              title="Hide column"
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </div>
+                      </th>
+                    )}
+                    {showMonthColumn && (
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <div className="flex items-center gap-2">
+                          <span>Month/Year</span>
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={() => hideWidget(`${widgetPrefix}col_month`)}
+                              className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                              aria-label="Hide month column"
+                              title="Hide column"
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </div>
+                      </th>
+                    )}
+                    {showBasicColumn && (
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <div className="flex items-center gap-2">
+                          <span>Basic Salary</span>
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={() => hideWidget(`${widgetPrefix}col_basic`)}
+                              className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                              aria-label="Hide basic salary column"
+                              title="Hide column"
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </div>
+                      </th>
+                    )}
+                    {showAllowancesColumn && (
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <div className="flex items-center gap-2">
+                          <span>Allowances</span>
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={() => hideWidget(`${widgetPrefix}col_allowances`)}
+                              className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                              aria-label="Hide allowances column"
+                              title="Hide column"
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </div>
+                      </th>
+                    )}
+                    {showDeductionsColumn && (
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <div className="flex items-center gap-2">
+                          <span>Deductions</span>
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={() => hideWidget(`${widgetPrefix}col_deductions`)}
+                              className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                              aria-label="Hide deductions column"
+                              title="Hide column"
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </div>
+                      </th>
+                    )}
+                    {showNetColumn && (
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <div className="flex items-center gap-2">
+                          <span>Net Salary</span>
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={() => hideWidget(`${widgetPrefix}col_net`)}
+                              className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                              aria-label="Hide net salary column"
+                              title="Hide column"
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </div>
+                      </th>
+                    )}
+                    {showStatusColumn && (
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <div className="flex items-center gap-2">
+                          <span>Status</span>
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={() => hideWidget(`${widgetPrefix}col_status`)}
+                              className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                              aria-label="Hide status column"
+                              title="Hide column"
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </div>
+                      </th>
+                    )}
+                    {showActionsColumn && (
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        <div className="flex items-center gap-2">
+                          <span>Actions</span>
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={() => hideWidget(`${widgetPrefix}col_actions`)}
+                              className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                              aria-label="Hide actions column"
+                              title="Hide column"
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </div>
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {filteredPayrolls.map((payroll) => (
                     <tr key={payroll.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <div>
-                            <div className="text-sm font-medium text-gray-900">
-                              {payroll.employee.first_name} {payroll.employee.last_name}
-                            </div>
-                            <div className="text-sm text-gray-500">
-                              {payroll.employee.employee_code}
+                      {showEmployeeColumn && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center">
+                            <div>
+                              <div className="text-sm font-medium text-gray-900">
+                                {payroll.employee.first_name} {payroll.employee.last_name}
+                              </div>
+                              <div className="text-sm text-gray-500">
+                                {payroll.employee.employee_code}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {payroll.month_year}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {formatCurrency(payroll.basic_salary, resolveBranchCurrency(payroll.branch_id) || activeCurrency)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {formatCurrency(payroll.allowances, resolveBranchCurrency(payroll.branch_id) || activeCurrency)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {formatCurrency(payroll.deductions, resolveBranchCurrency(payroll.branch_id) || activeCurrency)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {formatCurrency(payroll.net_salary, resolveBranchCurrency(payroll.branch_id) || activeCurrency)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(payroll.status)}`}>
-                          {payroll.status.charAt(0).toUpperCase() + payroll.status.slice(1)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div className="flex space-x-2 items-center">
-                          <button
-                            onClick={() => handleViewPayslip(payroll)}
-                            className="text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-md"
-                          >
-                            View
-                          </button>
-                          <button
-                            onClick={() => handleDownloadPayslip(payroll)}
-                            className="text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-3 py-1 rounded-md"
-                          >
-                            Download
-                          </button>
-                          {payroll.status === 'pending' && (
+                        </td>
+                      )}
+                      {showMonthColumn && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {payroll.month_year}
+                        </td>
+                      )}
+                      {showBasicColumn && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {formatCurrency(payroll.basic_salary, resolveBranchCurrency(payroll.branch_id) || activeCurrency)}
+                        </td>
+                      )}
+                      {showAllowancesColumn && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {formatCurrency(payroll.allowances, resolveBranchCurrency(payroll.branch_id) || activeCurrency)}
+                        </td>
+                      )}
+                      {showDeductionsColumn && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {formatCurrency(payroll.deductions, resolveBranchCurrency(payroll.branch_id) || activeCurrency)}
+                        </td>
+                      )}
+                      {showNetColumn && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {formatCurrency(payroll.net_salary, resolveBranchCurrency(payroll.branch_id) || activeCurrency)}
+                        </td>
+                      )}
+                      {showStatusColumn && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(payroll.status)}`}>
+                            {payroll.status.charAt(0).toUpperCase() + payroll.status.slice(1)}
+                          </span>
+                        </td>
+                      )}
+                      {showActionsColumn && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                          <div className="flex space-x-2 items-center">
                             <button
-                              onClick={() => handleStatusUpdate(payroll.id, 'processed')}
-                              className="text-violet-700 hover:text-violet-900 bg-violet-50 hover:bg-violet-100 px-3 py-1 rounded-md"
+                              onClick={() => handleViewPayslip(payroll)}
+                              className="text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-md"
                             >
-                              Process
+                              View
                             </button>
-                          )}
-                          {payroll.status === 'processed' && (
                             <button
-                              onClick={() => handleStatusUpdate(payroll.id, 'paid')}
-                              className="text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 px-3 py-1 rounded-md"
+                              onClick={() => handleDownloadPayslip(payroll)}
+                              className="text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-3 py-1 rounded-md"
                             >
-                              Mark Paid
+                              Download
                             </button>
-                          )}
-                        </div>
-                      </td>
+                            {payroll.status === 'pending' && (
+                              <button
+                                onClick={() => handleStatusUpdate(payroll.id, 'processed')}
+                                className="text-violet-700 hover:text-violet-900 bg-violet-50 hover:bg-violet-100 px-3 py-1 rounded-md"
+                              >
+                                Process
+                              </button>
+                            )}
+                            {payroll.status === 'processed' && (
+                              <button
+                                onClick={() => handleStatusUpdate(payroll.id, 'paid')}
+                                className="text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 px-3 py-1 rounded-md"
+                              >
+                                Mark Paid
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -652,9 +1032,13 @@ export default function Payroll() {
                 </div>
               )}
             </div>
+            ) : (
+              <div className="text-center py-12 text-slate-500">All payroll table columns are hidden.</div>
+            )
           )}
         </div>
       </div>
+      )}
 
       {/* Generate Payroll Modal */}
       {showGenerateModal && (

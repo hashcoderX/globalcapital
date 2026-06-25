@@ -2,6 +2,7 @@
 
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
@@ -39,19 +40,86 @@ type ChargeReportRow = {
 
 const API_BASE = getApiBaseUrl();
 
-export default function ChargesReportPage() {
+export default function MicrofinanceChargesReportPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const branchId = searchParams.get('branch_id') || '';
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ChargeReportRow[]>([]);
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [officerFilter, setOfficerFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [keyword, setKeyword] = useState('');
 
-  const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const list = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of list) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith('mf_charges_widget_')) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+        }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this item. Please try again.',
+      });
+    }
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -61,6 +129,7 @@ export default function ChargesReportPage() {
     }
 
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -180,6 +249,31 @@ export default function ChargesReportPage() {
       }
     );
   }, [filteredRows]);
+
+  const summaryCards = [
+    { key: 'mf_charges_widget_summary_document', label: 'Document Charges', value: summary.document, isCount: false },
+    { key: 'mf_charges_widget_summary_stamp', label: 'Stamp Charges', value: summary.stamp, isCount: false },
+    { key: 'mf_charges_widget_summary_insurance', label: 'Insurance Charges', value: summary.insurance, isCount: false },
+    { key: 'mf_charges_widget_summary_total', label: 'Total Charges', value: summary.total, isCount: false },
+    { key: 'mf_charges_widget_summary_loans_count', label: 'Loans Count', value: filteredRows.length, isCount: true },
+  ];
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+  const showHeaderActions = !hiddenWidgetKeys.has('mf_charges_widget_header_actions');
+  const showFilterPanel = !hiddenWidgetKeys.has('mf_charges_widget_filter_panel');
+
+  const tableColumns = [
+    { key: 'date', label: 'Date' },
+    { key: 'status', label: 'Status' },
+    { key: 'loanCode', label: 'Loan Code' },
+    { key: 'customer', label: 'Customer' },
+    { key: 'fieldOfficer', label: 'Field Officer' },
+    { key: 'mode', label: 'Mode' },
+    { key: 'document', label: 'Document' },
+    { key: 'stamp', label: 'Stamp' },
+    { key: 'insurance', label: 'Insurance' },
+    { key: 'total', label: 'Total' },
+  ];
+  const visibleTableColumns = tableColumns.filter((column) => !hiddenWidgetKeys.has(`mf_charges_widget_col_${column.key}`));
 
   const formatMoney = (value: number) => Number(value || 0).toFixed(2);
 
@@ -310,6 +404,14 @@ export default function ChargesReportPage() {
     doc.save(`microfinance-charges-report-${getReportFileDate()}.pdf`);
   };
 
+  if (!token || loading || loadingWidgets) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-sky-50 via-cyan-50 to-blue-50 flex items-center justify-center">
+        <div className="h-12 w-12 animate-spin rounded-full border-4 border-cyan-100 border-t-cyan-600" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-sky-50 via-cyan-50 to-blue-50 p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -355,7 +457,7 @@ export default function ChargesReportPage() {
                 type="date"
                 value={fromDate}
                 onChange={(e) => setFromDate(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-cyan-100 px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-cyan-100 px-3 py-2 text-sm text-black"
               />
             </div>
             <div>
@@ -364,7 +466,7 @@ export default function ChargesReportPage() {
                 type="date"
                 value={toDate}
                 onChange={(e) => setToDate(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-cyan-100 px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-cyan-100 px-3 py-2 text-sm text-black"
               />
             </div>
             <div>
@@ -372,7 +474,7 @@ export default function ChargesReportPage() {
               <select
                 value={officerFilter}
                 onChange={(e) => setOfficerFilter(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-cyan-100 px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-cyan-100 px-3 py-2 text-sm text-black"
               >
                 <option value="all">All Officers</option>
                 {officerOptions.map((officer) => (
@@ -387,7 +489,7 @@ export default function ChargesReportPage() {
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-cyan-100 px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-cyan-100 px-3 py-2 text-sm text-black"
               >
                 <option value="all">All Statuses</option>
                 <option value="requested">Requested</option>
@@ -403,28 +505,37 @@ export default function ChargesReportPage() {
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
                 placeholder="Loan code, customer, officer"
-                className="mt-1 w-full rounded-lg border border-cyan-100 px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-cyan-100 px-3 py-2 text-sm text-black"
               />
             </div>
           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-          {[
-            { label: 'Document Charges', value: summary.document },
-            { label: 'Stamp Charges', value: summary.stamp },
-            { label: 'Insurance Charges', value: summary.insurance },
-            { label: 'Total Charges', value: summary.total },
-            { label: 'Loans Count', value: filteredRows.length, isCount: true },
-          ].map((item) => (
-            <div key={item.label} className="rounded-xl border border-cyan-100 bg-white p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+          {visibleSummaryCards.map((card) => (
+            <div key={card.key} className="relative rounded-xl border border-cyan-100 bg-white p-4">
+              <WidgetCloseGate>
+<button
+                type="button"
+                onClick={() => void hideWidget(card.key)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label={`Hide ${card.label} card`}
+              >
+                ×
+              </button>
+</WidgetCloseGate>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{card.label}</p>
               <p className="mt-1 text-lg font-extrabold text-slate-900">
-                {loading ? '...' : item.isCount ? Number(item.value).toLocaleString() : `LKR ${formatMoney(Number(item.value))}`}
+                {loading ? '...' : card.isCount ? Number(card.value).toLocaleString() : `LKR ${formatMoney(Number(card.value))}`}
               </p>
             </div>
           ))}
         </div>
+        {visibleSummaryCards.length === 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+            All summary cards are hidden. Restore from dashboard with admin approval.
+          </div>
+        )}
 
         <div className="overflow-x-auto rounded-2xl border border-cyan-100 bg-white">
           <table className="min-w-full text-sm">

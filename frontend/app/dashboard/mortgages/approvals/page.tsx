@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import Badge from '../_components/Badge';
 import ClientMountGate from '@/app/components/ClientMountGate';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   ArrowLeft,
   Banknote,
@@ -226,6 +227,9 @@ export default function MortgageApprovals() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [viewMode, setViewMode] = useState<ViewMode>('cards');
   const [filtersOpen, setFiltersOpen] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
+  const widgetPrefix = 'mortgages_approvals_widget_';
 
   const [actionModalOpen, setActionModalOpen] = useState(false);
   const [actionType, setActionType] = useState<ActionType>('approve');
@@ -270,6 +274,7 @@ export default function MortgageApprovals() {
   useEffect(() => {
     if (!token) return;
     fetchApprovals(token);
+    void fetchWidgetPreferences(token);
   }, [token]);
 
   const fetchApprovals = async (authToken: string) => {
@@ -297,6 +302,51 @@ export default function MortgageApprovals() {
       setLoading(false);
     }
   };
+
+  async function fetchWidgetPreferences(authToken: string) {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  }
+
+  const saveWidgetPreference = useCallback(async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${getApiBaseUrl()}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, [token]);
+
+  const hideWidget = useCallback(async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
+  }, [hiddenWidgetKeys, saveWidgetPreference]);
 
   const statusOptions = useMemo(() => {
     const values = Array.from(
@@ -568,6 +618,50 @@ export default function MortgageApprovals() {
     </div>
   );
 
+  const statsCards = [
+    { key: 'stat_visible', icon: FileSearch, label: 'Visible', value: stats.visible, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
+    { key: 'stat_reviewable', icon: Clock3, label: 'Awaiting Review', value: stats.reviewable, tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
+    { key: 'stat_draft', icon: ShieldAlert, label: 'Draft', value: stats.draftCount, tone: 'text-slate-600', bg: 'from-slate-400/10 to-zinc-500/5' },
+    { key: 'stat_submitted', icon: CheckCircle2, label: 'Submitted', value: stats.submittedCount, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
+    { key: 'stat_requested_total', icon: Banknote, label: 'Requested Total', value: formatAmount(stats.requestedTotal), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
+    { key: 'stat_avg_rate', icon: TrendingUp, label: 'Avg Rate', value: formatPercent(stats.averageRate), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
+    { key: 'stat_approved', icon: CheckCircle2, label: 'Approved', value: stats.approvedCount, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
+    { key: 'stat_reducing', icon: TrendingUp, label: 'Reducing Loans', value: stats.reducingCount, tone: 'text-violet-700', bg: 'from-violet-500/10 to-purple-500/5' },
+  ];
+  const visibleStatsCards = statsCards.filter((item) => !hiddenWidgetKeys.has(`${widgetPrefix}${item.key}`));
+
+  const tableColumns: Array<{
+    key: string;
+    label: string;
+    className?: string;
+    render: (row: MortgageApprovalRow, index: number) => React.ReactNode;
+  }> = [
+    { key: 'id', label: 'ID', className: 'font-bold text-slate-900', render: (row) => `#${row.id}` },
+    { key: 'customer', label: 'Customer', className: 'font-semibold text-black', render: (row) => `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim() || '—' },
+    { key: 'contact', label: 'Contact', className: 'text-black', render: (row) => row.customer?.phone || '—' },
+    { key: 'nic', label: 'NIC', className: 'text-black', render: (row) => row.customer?.nic_passport || '—' },
+    { key: 'type', label: 'Type', className: 'capitalize text-black', render: (row) => row.mortgage_type || '—' },
+    { key: 'requested', label: 'Requested', className: 'font-bold text-cyan-800', render: (row) => formatAmount(row.requested_amount) },
+    { key: 'installment', label: 'Installment', className: 'font-bold text-indigo-700', render: (row) => formatAmount(row.installment_amount) },
+    { key: 'total_repay', label: 'Total Repay', className: 'font-bold text-emerald-700', render: (row) => formatAmount(calculateRefundAmount(row)) },
+    { key: 'rate', label: 'Rate', className: 'text-black', render: (row) => `${formatPercent(row.interest_rate)} (${row.interest_type || '—'})` },
+    { key: 'tenure', label: 'Tenure', className: 'text-black', render: (row) => `${row.tenure_months || '—'} mo` },
+    { key: 'due_date', label: 'Due Date', className: 'text-black', render: (row) => formatDate(row.due_date) },
+    { key: 'status', label: 'Status', render: (row) => <Badge label={String(row.status || '—')} variant={statusVariant(row.status)} /> },
+    { key: 'actions', label: 'Actions', className: 'text-center', render: (row) => <div className="flex justify-center">{renderRowActions(row)}</div> },
+  ];
+  const visibleTableColumns = tableColumns.filter((column) => !hiddenWidgetKeys.has(`${widgetPrefix}table_column_${column.key}`));
+
+  const showHeroWidget = !hiddenWidgetKeys.has(`${widgetPrefix}hero`);
+  const showStatsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}stats_section`);
+  const showFiltersWidget = !hiddenWidgetKeys.has(`${widgetPrefix}filters`);
+  const showRequestsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}requests`);
+  const showAnyWidget =
+    showHeroWidget ||
+    (showStatsWidget && visibleStatsCards.length > 0) ||
+    showFiltersWidget ||
+    showRequestsWidget;
+
   const pageFallback = (
     <div className="flex min-h-screen items-center justify-center bg-[#071a22]">
       <div className="flex flex-col items-center gap-4">
@@ -598,9 +692,32 @@ export default function MortgageApprovals() {
       </div>
 
       <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+        {widgetNotice ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+            {widgetNotice}
+          </div>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+            All widgets are hidden. Use Restore Hidden Widgets from the dashboard to bring them back.
+          </div>
+        ) : null}
+
+        {showHeroWidget ? (
         <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#0a1a24] via-[#0f3a52] to-[#0c5a7a] text-white shadow-[0_30px_80px_-24px_rgba(14,116,144,0.8)]">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.25),transparent_42%)]" />
           <div className="relative p-6 md:p-8">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+                className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/60 bg-white/85 text-sm font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide approvals hero widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
               <div className="max-w-2xl">
                 <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-100">
@@ -646,22 +763,25 @@ export default function MortgageApprovals() {
             </div>
           </div>
         </section>
+        ) : null}
 
+        {showStatsWidget ? (
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
-          {[
-            { icon: FileSearch, label: 'Visible', value: stats.visible, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
-            { icon: Clock3, label: 'Awaiting Review', value: stats.reviewable, tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
-            { icon: ShieldAlert, label: 'Draft', value: stats.draftCount, tone: 'text-slate-600', bg: 'from-slate-400/10 to-zinc-500/5' },
-            { icon: CheckCircle2, label: 'Submitted', value: stats.submittedCount, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
-            { icon: Banknote, label: 'Requested Total', value: formatAmount(stats.requestedTotal), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
-            { icon: TrendingUp, label: 'Avg Rate', value: formatPercent(stats.averageRate), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
-            { icon: CheckCircle2, label: 'Approved', value: stats.approvedCount, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
-            { icon: TrendingUp, label: 'Reducing Loans', value: stats.reducingCount, tone: 'text-violet-700', bg: 'from-violet-500/10 to-purple-500/5' },
-          ].map((item) => (
+          {visibleStatsCards.map((item) => (
             <div
               key={item.label}
-              className={`overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
+              className={`relative overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
             >
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}${item.key}`)}
+                  className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/70 bg-white/85 text-xs font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                  aria-label={`Hide ${item.label} widget`}
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
@@ -673,9 +793,26 @@ export default function MortgageApprovals() {
               </div>
             </div>
           ))}
+          {visibleStatsCards.length === 0 ? (
+            <div className="sm:col-span-2 xl:col-span-4 2xl:col-span-8 rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+              All summary cards are hidden.
+            </div>
+          ) : null}
         </section>
+        ) : null}
 
-        <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl">
+        {showFiltersWidget ? (
+        <section className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide filters widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <button
             type="button"
             onClick={() => setFiltersOpen((v) => !v)}
@@ -733,8 +870,20 @@ export default function MortgageApprovals() {
             </div>
           )}
         </section>
+        ) : null}
 
-        <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+        {showRequestsWidget ? (
+        <section className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}requests`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide mortgage requests widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-lg font-extrabold text-slate-900">Mortgage Requests</h2>
@@ -841,55 +990,49 @@ export default function MortgageApprovals() {
                 <table className="min-w-[1200px] w-full text-sm">
                   <thead>
                     <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
-                      <th className="px-3 py-3 text-black">ID</th>
-                      <th className="px-3 py-3 text-black">Customer</th>
-                      <th className="px-3 py-3 text-black">Contact</th>
-                      <th className="px-3 py-3 text-black">NIC</th>
-                      <th className="px-3 py-3 text-black">Type</th>
-                      <th className="px-3 py-3 text-black">Requested</th>
-                      <th className="px-3 py-3 text-black">Installment</th>
-                      <th className="px-3 py-3 text-black">Total Repay</th>
-                      <th className="px-3 py-3 text-black">Rate</th>
-                      <th className="px-3 py-3 text-black">Tenure</th>
-                      <th className="px-3 py-3 text-black">Due Date</th>
-                      <th className="px-3 py-3 text-black">Status</th>
-                      <th className="px-3 py-3 text-center text-black">Actions</th>
+                      {visibleTableColumns.map((column) => (
+                        <th key={column.key} className={`px-3 py-3 text-black ${column.className || ''}`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>{column.label}</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => void hideWidget(`${widgetPrefix}table_column_${column.key}`)}
+                                className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                                aria-label={`Hide ${column.label} column`}
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {filteredRows.map((row, index) => {
-                      const customerName = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim();
-                      const refundAmount = calculateRefundAmount(row);
                       return (
                         <tr key={row.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                          <td className="px-3 py-2.5 font-bold text-slate-900">#{row.id}</td>
-                          <td className="px-3 py-2.5 font-semibold text-black">{customerName || '—'}</td>
-                          <td className="px-3 py-2.5 text-black">{row.customer?.phone || '—'}</td>
-                          <td className="px-3 py-2.5 text-black">{row.customer?.nic_passport || '—'}</td>
-                          <td className="px-3 py-2.5 capitalize text-black">{row.mortgage_type || '—'}</td>
-                          <td className="px-3 py-2.5 font-bold text-cyan-800">{formatAmount(row.requested_amount)}</td>
-                          <td className="px-3 py-2.5 font-bold text-indigo-700">{formatAmount(row.installment_amount)}</td>
-                          <td className="px-3 py-2.5 font-bold text-emerald-700">{formatAmount(refundAmount)}</td>
-                          <td className="px-3 py-2.5 text-black">
-                            {formatPercent(row.interest_rate)} ({row.interest_type || '—'})
-                          </td>
-                          <td className="px-3 py-2.5 text-black">{row.tenure_months || '—'} mo</td>
-                          <td className="px-3 py-2.5 text-black">{formatDate(row.due_date)}</td>
-                          <td className="px-3 py-2.5">
-                            <Badge label={String(row.status || '—')} variant={statusVariant(row.status)} />
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <div className="flex justify-center">{renderRowActions(row)}</div>
-                          </td>
+                          {visibleTableColumns.map((column) => (
+                            <td key={column.key} className={`px-3 py-2.5 ${column.className || ''}`}>
+                              {column.render(row, index)}
+                            </td>
+                          ))}
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
+                {visibleTableColumns.length === 0 ? (
+                  <div className="py-8 text-center text-sm text-slate-600">
+                    All request table columns are hidden.
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
         </section>
+        ) : null}
       </div>
 
       {detailModalOpen && (

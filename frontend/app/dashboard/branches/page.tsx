@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import {
@@ -24,6 +24,8 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
+import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 interface Company {
   id: number;
@@ -91,6 +93,7 @@ function newBankRow(): BankFormRow {
 
 export default function Branches() {
   const router = useRouter();
+  const widgetPrefix = 'branches_dashboard_widget_';
 
   const [token, setToken] = useState('');
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -106,6 +109,8 @@ export default function Branches() {
     company: null,
   });
   const [deleting, setDeleting] = useState(false);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState('');
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -154,6 +159,79 @@ export default function Branches() {
       totalOpening,
     };
   }, [companies]);
+  const statCards = [
+    { key: 'total_branches', label: 'Total branches', value: stats.total, sub: 'Active locations', icon: Building2, accent: 'from-teal-500 to-emerald-600' },
+    { key: 'with_manager', label: 'With manager', value: stats.withManager, sub: 'Assigned leadership', icon: UserCircle2, accent: 'from-blue-500 to-indigo-600' },
+    { key: 'opening_assets', label: 'Opening assets', value: formatMoney(stats.totalOpening), sub: 'Combined main balances', icon: Landmark, accent: 'from-violet-500 to-purple-600' },
+  ];
+  const showHeroWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}hero`);
+  const showStatsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}stats`);
+  const showNoticeWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}notice`);
+  const showSearchListWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}search_list`);
+  const visibleStatCards = statCards.filter((card) => !hiddenWidgetKeys.includes(`${widgetPrefix}stat_${card.key}`));
+  const showAnyWidget = showHeroWidget || showStatsWidget || showNoticeWidget || showSearchListWidget;
+
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const widgets = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data?.widgets)
+          ? response.data.widgets
+          : [];
+      const hidden = widgets
+        .filter(
+          (item: { widget_key?: unknown; is_visible?: unknown }) =>
+            typeof item.widget_key === 'string' &&
+            item.widget_key.startsWith(widgetPrefix) &&
+            (item.is_visible === false || Number(item.is_visible) === 0)
+        )
+        .map((item: { widget_key: string }) => item.widget_key);
+      setHiddenWidgetKeys(hidden);
+    } catch {
+      setWidgetNotice('Failed to load widget preferences.');
+    }
+  }, []);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return;
+      const normalizedKey = String(widgetKey || '').trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Failed to save widget preference.');
+        return;
+      }
+      try {
+        await axios.patch(
+          `${getApiBaseUrl()}/dashboard/widgets`,
+          { widget_key: normalizedKey, is_visible: Boolean(isVisible) },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice('');
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+      }
+    },
+    [token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+      await saveWidgetPreference(widgetKey, false);
+    },
+    [saveWidgetPreference]
+  );
 
   const fetchUsers = async (authToken?: string) => {
     const tokenToUse = authToken || token;
@@ -322,8 +400,31 @@ export default function Branches() {
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
+        {widgetNotice ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <div className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-5 text-sm font-semibold text-teal-900">
+            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
+          </div>
+        ) : null}
+
         {/* Hero */}
-        <div className="overflow-hidden rounded-3xl border border-white/70 bg-white/85 shadow-xl backdrop-blur-xl">
+        {showHeroWidget ? (
+        <div className="relative overflow-hidden rounded-3xl border border-white/70 bg-white/85 shadow-xl backdrop-blur-xl">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+              className="absolute right-4 top-4 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/40 bg-white/20 text-white hover:bg-white/30"
+              aria-label="Hide branch hero widget"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </WidgetCloseGate>
           <div className="bg-gradient-to-r from-teal-600 via-emerald-600 to-cyan-600 px-6 py-6 sm:px-8">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex items-start gap-4">
@@ -368,40 +469,77 @@ export default function Branches() {
             </div>
           </div>
         </div>
+        ) : null}
 
         {/* KPIs */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {[
-            { label: 'Total branches', value: stats.total, sub: 'Active locations', icon: Building2, accent: 'from-teal-500 to-emerald-600' },
-            { label: 'With manager', value: stats.withManager, sub: 'Assigned leadership', icon: UserCircle2, accent: 'from-blue-500 to-indigo-600' },
-            { label: 'Opening assets', value: formatMoney(stats.totalOpening), sub: 'Combined main balances', icon: Landmark, accent: 'from-violet-500 to-purple-600' },
-          ].map((item) => {
-            const Icon = item.icon;
-            return (
-              <div key={item.label} className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
-                    <p className="mt-1 text-2xl font-extrabold text-slate-900 tabular-nums">{item.value}</p>
-                    <p className="mt-0.5 text-[11px] text-slate-500">{item.sub}</p>
-                  </div>
-                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${item.accent} text-white shadow-sm`}>
-                    <Icon className="h-4 w-4" />
-                  </div>
-                </div>
+        {showStatsWidget ? (
+          <div className="relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}stats`)}
+                className="absolute right-2 -top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
+                aria-label="Hide branch stats widget"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </WidgetCloseGate>
+            {visibleStatCards.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {visibleStatCards.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <div key={item.key} className="relative rounded-2xl border border-white/80 bg-white/90 p-4 shadow-sm">
+                      <WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={() => void hideWidget(`${widgetPrefix}stat_${item.key}`)}
+                          className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
+                          aria-label={`Hide ${item.label} stat widget`}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </WidgetCloseGate>
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
+                          <p className="mt-1 text-2xl font-extrabold text-slate-900 tabular-nums">{item.value}</p>
+                          <p className="mt-0.5 text-[11px] text-slate-500">{item.sub}</p>
+                        </div>
+                        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${item.accent} text-white shadow-sm`}>
+                          <Icon className="h-4 w-4" />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
+            ) : (
+              <div className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-4 text-sm font-medium text-teal-900">
+                All branch stats are hidden.
+              </div>
+            )}
+          </div>
+        ) : null}
 
-        {notice ? (
+        {notice && showNoticeWidget ? (
           <div
-            className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm font-medium ${
+            className={`relative flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm font-medium ${
               notice.type === 'success'
                 ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
                 : 'border-rose-200 bg-rose-50 text-rose-800'
             }`}
           >
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}notice`)}
+                className="absolute right-3 top-3 rounded-lg p-1 hover:bg-black/5"
+                aria-label="Hide branch notice widget"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </WidgetCloseGate>
             <div className="flex items-start gap-2">
               {notice.type === 'success' ? (
                 <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
@@ -417,7 +555,18 @@ export default function Branches() {
         ) : null}
 
         {/* Search + grid */}
-        <div className="rounded-3xl border border-white/80 bg-white/90 shadow-lg overflow-hidden">
+        {showSearchListWidget ? (
+        <div className="relative rounded-3xl border border-white/80 bg-white/90 shadow-lg overflow-hidden">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}search_list`)}
+              className="absolute right-4 top-4 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
+              aria-label="Hide branch list widget"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </WidgetCloseGate>
           <div className="border-b border-teal-100 px-4 sm:px-6 py-4">
             <div className="relative max-w-md">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-teal-500/70" />
@@ -559,6 +708,7 @@ export default function Branches() {
             )}
           </div>
         </div>
+        ) : null}
       </div>
 
       {/* Add / Edit modal */}

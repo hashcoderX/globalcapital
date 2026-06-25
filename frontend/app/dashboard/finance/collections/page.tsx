@@ -1,7 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { ArrowLeft, CalendarDays, Eye, HandCoins, Search, ShieldCheck, Users, Wallet } from 'lucide-react';
 
 type FinanceRow = {
@@ -208,10 +211,13 @@ function getCollectionHealth(dueDate: unknown, graceDaysRaw: unknown): {
 
 export default function FinanceCollectionsPage() {
   const PAGE_SIZE = 10;
+  const widgetPrefix = 'finance_collections_widget_';
   const router = useRouter();
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<FinanceRow[]>([]);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'pending_approval' | 'rejected'>('all');
   const [page, setPage] = useState(1);
@@ -287,6 +293,68 @@ export default function FinanceCollectionsPage() {
     run();
   }, [token]);
 
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const widgets = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data?.widgets)
+          ? response.data.widgets
+          : [];
+      const hidden = widgets
+        .filter(
+          (item: { widget_key?: unknown; is_visible?: unknown }) =>
+            typeof item.widget_key === 'string' &&
+            item.widget_key.startsWith(widgetPrefix) &&
+            (item.is_visible === false || Number(item.is_visible) === 0)
+        )
+        .map((item: { widget_key: string }) => item.widget_key);
+      setHiddenWidgetKeys(hidden);
+    } catch {
+      setWidgetNotice('Failed to load widget preferences.');
+    }
+  }, []);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return;
+      try {
+        await axios.post(
+          `${getApiBaseUrl()}/dashboard/widgets`,
+          { widget_key: widgetKey, is_visible: isVisible ? 1 : 0 },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice('');
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+      }
+    },
+    [token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+      await saveWidgetPreference(widgetKey, false);
+    },
+    [saveWidgetPreference]
+  );
+
+  useEffect(() => {
+    if (!token) return;
+    void fetchWidgetPreferences(token);
+  }, [token, fetchWidgetPreferences]);
+
   const filteredRows = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
 
@@ -324,6 +392,34 @@ export default function FinanceCollectionsPage() {
   const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(Math.max(page, 1), pageCount);
   const pagedRows = filteredRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const statsCards = [
+    { key: 'accounts', title: 'Accounts', value: String(totalAccounts), icon: Users, tone: 'text-cyan-700', border: 'border-cyan-100' },
+    { key: 'active', title: 'Active', value: String(activeAccounts), icon: ShieldCheck, tone: 'text-emerald-700', border: 'border-emerald-100' },
+    { key: 'pending', title: 'Pending', value: String(pendingAccounts), icon: CalendarDays, tone: 'text-amber-700', border: 'border-amber-100' },
+    { key: 'installment_book', title: 'Installment Book', value: formatAmount(expectedInstallment), icon: Wallet, tone: 'text-violet-700', border: 'border-violet-100' },
+  ];
+  const tableColumns = [
+    { key: 'finance_id', label: 'Finance ID' },
+    { key: 'customer_no', label: 'Customer No' },
+    { key: 'customer', label: 'Customer' },
+    { key: 'phone', label: 'Phone' },
+    { key: 'vehicle_no', label: 'Vehicle No' },
+    { key: 'product', label: 'Product' },
+    { key: 'financed', label: 'Financed' },
+    { key: 'arrears', label: 'Arrears' },
+    { key: 'installment', label: 'Installment' },
+    { key: 'terms', label: 'Terms' },
+    { key: 'start_date', label: 'Start Date' },
+    { key: 'status', label: 'Status' },
+    { key: 'action', label: 'Action' },
+  ];
+  const showHeaderWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}header`);
+  const showStatsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}stats`);
+  const showFiltersWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}filters`);
+  const showTableWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}table`);
+  const visibleStatsCards = statsCards.filter((card) => !hiddenWidgetKeys.includes(`${widgetPrefix}stat_${card.key}`));
+  const visibleTableColumns = tableColumns.filter((column) => !hiddenWidgetKeys.includes(`${widgetPrefix}col_${column.key}`));
+  const showAnyWidget = showHeaderWidget || showStatsWidget || showFiltersWidget || showTableWidget;
   const collectionHealth = useMemo(
     () => getCollectionHealth(selectedRecord?.due_date, selectedRecord?.repayment_plan?.grace_period_days),
     [selectedRecord?.due_date, selectedRecord?.repayment_plan?.grace_period_days],
@@ -468,7 +564,30 @@ export default function FinanceCollectionsPage() {
       </div>
 
       <div className="relative z-10 max-w-6xl mx-auto space-y-5">
-        <div className="bg-white/90 rounded-3xl border border-cyan-100 p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        {widgetNotice ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-5 text-sm font-semibold text-cyan-900">
+            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
+          </div>
+        ) : null}
+
+        {showHeaderWidget ? (
+        <div className="relative bg-white/90 rounded-3xl border border-cyan-100 p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+              aria-label="Hide finance collection header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div>
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700">Finance Section</p>
             <h1 className="text-2xl font-extrabold text-slate-900 mt-2">Finance Collection</h1>
@@ -483,39 +602,62 @@ export default function FinanceCollectionsPage() {
             Back
           </button>
         </div>
+        ) : null}
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="rounded-2xl border border-cyan-100 bg-white/86 backdrop-blur-xl p-4">
-            <div className="inline-flex items-center gap-2 text-cyan-700">
-              <Users className="h-4 w-4" />
-              <p className="text-xs font-bold uppercase tracking-wide">Accounts</p>
-            </div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{totalAccounts}</p>
+        {showStatsWidget ? (
+          <div className="relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}stats`)}
+                className="absolute right-2 -top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                aria-label="Hide collection stats widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            {visibleStatsCards.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                {visibleStatsCards.map((card) => (
+                  <div key={card.key} className={`relative rounded-2xl border ${card.border} bg-white/86 backdrop-blur-xl p-4`}>
+                    <WidgetCloseGate>
+                      <button
+                        type="button"
+                        onClick={() => void hideWidget(`${widgetPrefix}stat_${card.key}`)}
+                        className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                        aria-label={`Hide ${card.title} stat widget`}
+                      >
+                        ×
+                      </button>
+                    </WidgetCloseGate>
+                    <div className={`inline-flex items-center gap-2 ${card.tone}`}>
+                      <card.icon className="h-4 w-4" />
+                      <p className="text-xs font-bold uppercase tracking-wide">{card.title}</p>
+                    </div>
+                    <p className="mt-2 text-2xl font-extrabold text-slate-900">{card.value}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+                All collection stat widgets are hidden.
+              </div>
+            )}
           </div>
-          <div className="rounded-2xl border border-emerald-100 bg-white/86 backdrop-blur-xl p-4">
-            <div className="inline-flex items-center gap-2 text-emerald-700">
-              <ShieldCheck className="h-4 w-4" />
-              <p className="text-xs font-bold uppercase tracking-wide">Active</p>
-            </div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{activeAccounts}</p>
-          </div>
-          <div className="rounded-2xl border border-amber-100 bg-white/86 backdrop-blur-xl p-4">
-            <div className="inline-flex items-center gap-2 text-amber-700">
-              <CalendarDays className="h-4 w-4" />
-              <p className="text-xs font-bold uppercase tracking-wide">Pending</p>
-            </div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{pendingAccounts}</p>
-          </div>
-          <div className="rounded-2xl border border-violet-100 bg-white/86 backdrop-blur-xl p-4">
-            <div className="inline-flex items-center gap-2 text-violet-700">
-              <Wallet className="h-4 w-4" />
-              <p className="text-xs font-bold uppercase tracking-wide">Installment Book</p>
-            </div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{formatAmount(expectedInstallment)}</p>
-          </div>
-        </div>
+        ) : null}
 
-        <div className="bg-white/90 rounded-3xl border border-cyan-100 p-5 space-y-3">
+        {showFiltersWidget ? (
+        <div className="relative bg-white/90 rounded-3xl border border-cyan-100 p-5 space-y-3">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+              className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+              aria-label="Hide collection filters widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex flex-col md:flex-row gap-3">
             <div className="flex-1 flex items-center gap-2 rounded-xl border border-cyan-100 bg-cyan-50/50 px-3 py-2">
               <Search className="h-4 w-4 text-cyan-700" />
@@ -539,8 +681,20 @@ export default function FinanceCollectionsPage() {
             </select>
           </div>
         </div>
+        ) : null}
 
-        <div className="bg-white/90 rounded-3xl border border-cyan-100 p-5">
+        {showTableWidget ? (
+        <div className="relative bg-white/90 rounded-3xl border border-cyan-100 p-5">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}table`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+              aria-label="Hide collection table widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between mb-3">
             <div className="inline-flex items-center gap-2 text-cyan-800">
               <HandCoins className="h-5 w-5" />
@@ -555,24 +709,35 @@ export default function FinanceCollectionsPage() {
               <p className="mt-3 text-lg font-bold text-slate-900">No collection records found</p>
               <p className="mt-1 text-sm text-slate-600">Adjust your search or filter to view finance collection accounts.</p>
             </div>
+          ) : visibleTableColumns.length === 0 ? (
+            <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+              All collection table columns are hidden.
+            </div>
           ) : (
             <div className="overflow-x-auto rounded-xl border border-cyan-100">
               <table className="min-w-full text-sm text-left text-slate-700 bg-white">
                 <thead className="bg-cyan-50/70 text-slate-700">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Finance ID</th>
-                    <th className="px-3 py-2 font-semibold">Customer No</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Phone</th>
-                    <th className="px-3 py-2 font-semibold">Vehicle No</th>
-                    <th className="px-3 py-2 font-semibold">Product</th>
-                    <th className="px-3 py-2 font-semibold">Financed</th>
-                    <th className="px-3 py-2 font-semibold">Arrears</th>
-                    <th className="px-3 py-2 font-semibold">Installment</th>
-                    <th className="px-3 py-2 font-semibold">Terms</th>
-                    <th className="px-3 py-2 font-semibold">Start Date</th>
-                    <th className="px-3 py-2 font-semibold">Status</th>
-                    <th className="px-3 py-2 font-semibold">Action</th>
+                    {visibleTableColumns.map((column) => (
+                      <th key={column.key} className="px-3 py-2 font-semibold">
+                        <div className="inline-flex items-center gap-2">
+                          <span>{column.label}</span>
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void hideWidget(`${widgetPrefix}col_${column.key}`);
+                              }}
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                              aria-label={`Hide ${column.label} column`}
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </div>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -580,33 +745,41 @@ export default function FinanceCollectionsPage() {
                     const customer = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim();
                     return (
                       <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                        <td className="px-3 py-2 font-semibold text-slate-900">#{row.id}</td>
-                        <td className="px-3 py-2">{displayCustomerNo(row.customer)}</td>
-                        <td className="px-3 py-2">{customer || '-'}</td>
-                        <td className="px-3 py-2">{row.customer?.phone || '-'}</td>
-                        <td className="px-3 py-2">{row.vehicle_details?.vehicle_no || '-'}</td>
-                        <td className="px-3 py-2">{row.product_type || '-'}</td>
-                        <td className="px-3 py-2">{formatAmount(row.financed_amount)}</td>
-                        <td className="px-3 py-2">{formatAmount(row.arrears)}</td>
-                        <td className="px-3 py-2">{formatAmount(row.installment_amount)}</td>
-                        <td className="px-3 py-2">{Number.isFinite(toNumber(row.interest_rate)) ? `${toNumber(row.interest_rate).toFixed(2)}%` : '-'} / {row.tenure_months || '-'} mo</td>
-                        <td className="px-3 py-2">{formatDate(row.start_date)}</td>
-                        <td className="px-3 py-2">
-                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold ${row.status === 'active' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : row.status === 'pending_approval' ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
-                            <ShieldCheck className="h-3.5 w-3.5" />
-                            {row.status || '-'}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <button
-                            type="button"
-                            onClick={() => openFullRecord(row.id)}
-                            className="rounded-lg bg-cyan-100 hover:bg-cyan-200 border border-cyan-200 px-3 py-1.5 text-xs font-semibold text-cyan-800 inline-flex items-center gap-1.5"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            View
-                          </button>
-                        </td>
+                        {visibleTableColumns.map((column) => {
+                          if (column.key === 'finance_id') return <td key={column.key} className="px-3 py-2 font-semibold text-slate-900">#{row.id}</td>;
+                          if (column.key === 'customer_no') return <td key={column.key} className="px-3 py-2">{displayCustomerNo(row.customer)}</td>;
+                          if (column.key === 'customer') return <td key={column.key} className="px-3 py-2">{customer || '-'}</td>;
+                          if (column.key === 'phone') return <td key={column.key} className="px-3 py-2">{row.customer?.phone || '-'}</td>;
+                          if (column.key === 'vehicle_no') return <td key={column.key} className="px-3 py-2">{row.vehicle_details?.vehicle_no || '-'}</td>;
+                          if (column.key === 'product') return <td key={column.key} className="px-3 py-2">{row.product_type || '-'}</td>;
+                          if (column.key === 'financed') return <td key={column.key} className="px-3 py-2">{formatAmount(row.financed_amount)}</td>;
+                          if (column.key === 'arrears') return <td key={column.key} className="px-3 py-2">{formatAmount(row.arrears)}</td>;
+                          if (column.key === 'installment') return <td key={column.key} className="px-3 py-2">{formatAmount(row.installment_amount)}</td>;
+                          if (column.key === 'terms') return <td key={column.key} className="px-3 py-2">{Number.isFinite(toNumber(row.interest_rate)) ? `${toNumber(row.interest_rate).toFixed(2)}%` : '-'} / {row.tenure_months || '-'} mo</td>;
+                          if (column.key === 'start_date') return <td key={column.key} className="px-3 py-2">{formatDate(row.start_date)}</td>;
+                          if (column.key === 'status') {
+                            return (
+                              <td key={column.key} className="px-3 py-2">
+                                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-bold ${row.status === 'active' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : row.status === 'pending_approval' ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+                                  <ShieldCheck className="h-3.5 w-3.5" />
+                                  {row.status || '-'}
+                                </span>
+                              </td>
+                            );
+                          }
+                          return (
+                            <td key={column.key} className="px-3 py-2">
+                              <button
+                                type="button"
+                                onClick={() => openFullRecord(row.id)}
+                                className="rounded-lg bg-cyan-100 hover:bg-cyan-200 border border-cyan-200 px-3 py-1.5 text-xs font-semibold text-cyan-800 inline-flex items-center gap-1.5"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                                View
+                              </button>
+                            </td>
+                          );
+                        })}
                       </tr>
                     );
                   })}
@@ -642,6 +815,7 @@ export default function FinanceCollectionsPage() {
             </div>
           )}
         </div>
+        ) : null}
       </div>
 
       {detailOpen && (

@@ -2,7 +2,8 @@
 
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
-import { useEffect, useMemo, useState } from 'react';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
 type Branch = {
@@ -63,12 +64,6 @@ type ReportCategory = {
   reports: ReportItem[];
 };
 
-type AuthUser = {
-  id?: number;
-  designation?: { id?: number; name?: string } | null;
-  roles?: Array<{ id?: number; name?: string }>;
-};
-
 export default function BranchDashboardPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -78,9 +73,11 @@ export default function BranchDashboardPage() {
   const apiBase = getApiBaseUrl();
 
   const [token, setToken] = useState('');
+  const widgetPrefix = 'branch_detail_dashboard_widget_';
   const [loading, setLoading] = useState(true);
   const [branch, setBranch] = useState<Branch | null>(null);
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [branchAccounts, setBranchAccounts] = useState<BranchAccount[]>([]);
   const [bankAccountModalOpen, setBankAccountModalOpen] = useState(false);
@@ -116,18 +113,75 @@ export default function BranchDashboardPage() {
     }
 
     setToken(storedToken);
-
-    const storedUser = localStorage.getItem('auth_user');
-    if (storedUser) {
-      try {
-        setAuthUser(JSON.parse(storedUser));
-      } catch {
-        setAuthUser(null);
-      }
-    } else {
-      setAuthUser(null);
-    }
   }, [router]);
+
+  const fetchWidgetPreferences = useCallback(async () => {
+    if (!token) return;
+
+    try {
+      const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+      });
+
+      const widgets = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const hiddenKeys = widgets
+        .filter((item: { widget_key?: string; is_visible?: boolean | number | null }) => !item?.is_visible)
+        .map((item: { widget_key?: string }) => item.widget_key)
+        .filter((key: unknown): key is string => typeof key === 'string' && key.startsWith(widgetPrefix));
+
+      setHiddenWidgetKeys(hiddenKeys);
+      setWidgetNotice(null);
+    } catch {
+      setWidgetNotice('Failed to load widget preferences.');
+    }
+  }, [apiBase, token, widgetPrefix]);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+
+      const normalizedKey = widgetKey.trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Invalid widget key. Please refresh the page and try again.');
+        return false;
+      }
+
+      try {
+        await axios.patch(
+          `${apiBase}/dashboard/widgets`,
+          {
+            widget_key: normalizedKey,
+            is_visible: Boolean(isVisible),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice(null);
+        return true;
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+        return false;
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) return;
+
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+    },
+    [saveWidgetPreference]
+  );
 
   useEffect(() => {
     if (!token || !branchId) return;
@@ -152,6 +206,11 @@ export default function BranchDashboardPage() {
 
     loadBranch();
   }, [apiBase, token, branchId]);
+
+  useEffect(() => {
+    if (!token) return;
+    fetchWidgetPreferences();
+  }, [token, fetchWidgetPreferences]);
 
   useEffect(() => {
     if (!token || !branchId) return;
@@ -368,20 +427,6 @@ export default function BranchDashboardPage() {
     }
   };
 
-  const normalizeText = (value: string) =>
-    String(value || '')
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-  const designationName = normalizeText(String(authUser?.designation?.name || ''));
-  const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
-  const isCollectionOfficer =
-    designationName.includes('collection officer') ||
-    roleNames.some((role) => role.includes('collection officer'));
-
   const withBranch = (path: string) => {
     if (!branchId) return path;
     if (path.includes('?')) return `${path}&branch_id=${branchId}`;
@@ -516,32 +561,46 @@ export default function BranchDashboardPage() {
     [branchId]
   );
 
-  const collectionOfficerBlockedCategoryKeys = new Set(['mortgage', 'savings', 'finance']);
-  const collectionOfficerBlockedMicrofinanceReportTitles = new Set([
-    'Arrears Report',
-    'Active Member Report',
-    'Blacklisted Customer Report',
-    'Re-Payment Report',
-    'Recovery Report',
-  ]);
+  const visibleCategories = categories.filter(
+    (category) => !hiddenWidgetKeys.includes(`${widgetPrefix}report_category_${category.key}`)
+  );
+  const showActionAddBankButton = !hiddenWidgetKeys.includes(`${widgetPrefix}actions_btn_add_bank`);
+  const showActionCreateCashButton = !hiddenWidgetKeys.includes(`${widgetPrefix}actions_btn_create_cash`);
+  const showActionPerformanceReportButton = !hiddenWidgetKeys.includes(`${widgetPrefix}actions_btn_performance_report`);
+  const showActionCollectionReportButton = !hiddenWidgetKeys.includes(`${widgetPrefix}actions_btn_collection_report`);
+  const showActionRepaymentReportButton = !hiddenWidgetKeys.includes(`${widgetPrefix}actions_btn_repayment_report`);
+  const showActionViewReportsButton = !hiddenWidgetKeys.includes(`${widgetPrefix}actions_btn_view_reports`);
+  const showActionBackDashboardButton = !hiddenWidgetKeys.includes(`${widgetPrefix}actions_btn_back_dashboard`);
+  const showAnyActionButton =
+    showActionAddBankButton ||
+    showActionCreateCashButton ||
+    showActionPerformanceReportButton ||
+    showActionCollectionReportButton ||
+    showActionRepaymentReportButton ||
+    showActionViewReportsButton ||
+    showActionBackDashboardButton;
 
-  const visibleCategories = isCollectionOfficer
-    ? categories
-        .filter((category) => !collectionOfficerBlockedCategoryKeys.has(category.key))
-        .map((category) => {
-          if (category.key !== 'microfinance') {
-            return category;
-          }
+  const showBankColumnAccountName = !hiddenWidgetKeys.includes(`${widgetPrefix}bank_col_account_name`);
+  const showBankColumnBankName = !hiddenWidgetKeys.includes(`${widgetPrefix}bank_col_bank_name`);
+  const showBankColumnBranch = !hiddenWidgetKeys.includes(`${widgetPrefix}bank_col_branch`);
+  const showBankColumnAccountNumber = !hiddenWidgetKeys.includes(`${widgetPrefix}bank_col_account_number`);
+  const showBankColumnCurrentBalance = !hiddenWidgetKeys.includes(`${widgetPrefix}bank_col_current_balance`);
+  const showAnyBankColumn =
+    showBankColumnAccountName ||
+    showBankColumnBankName ||
+    showBankColumnBranch ||
+    showBankColumnAccountNumber ||
+    showBankColumnCurrentBalance;
 
-          return {
-            ...category,
-            reports: category.reports.filter(
-              (report) => !collectionOfficerBlockedMicrofinanceReportTitles.has(report.title)
-            ),
-          };
-        })
-        .filter((category) => category.reports.length > 0)
-    : categories;
+  const showCashColumnAccountName = !hiddenWidgetKeys.includes(`${widgetPrefix}cash_col_account_name`);
+  const showCashColumnType = !hiddenWidgetKeys.includes(`${widgetPrefix}cash_col_type`);
+  const showCashColumnOpeningBalance = !hiddenWidgetKeys.includes(`${widgetPrefix}cash_col_opening_balance`);
+  const showCashColumnCurrentBalance = !hiddenWidgetKeys.includes(`${widgetPrefix}cash_col_current_balance`);
+  const showAnyCashColumn =
+    showCashColumnAccountName ||
+    showCashColumnType ||
+    showCashColumnOpeningBalance ||
+    showCashColumnCurrentBalance;
 
   if (!token) {
     return (
@@ -584,19 +643,36 @@ export default function BranchDashboardPage() {
       </nav>
 
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        <div className="mb-8">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-                <div className="w-10 h-10 bg-gradient-to-r from-teal-500 to-green-500 rounded-xl flex items-center justify-center text-white text-xl">
-                  🏢
-                </div>
-                {branch?.name || `Branch #${branchId || '-'}`}
-              </h1>
-              <p className="mt-2 text-gray-600">Branch reports and quick access</p>
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}header`) && (
+          <div className="mb-8 relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}header`)}
+                className="absolute -top-2 right-0 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                aria-label="Hide branch page header widget"
+                title="Hide widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-r from-teal-500 to-green-500 rounded-xl flex items-center justify-center text-white text-xl">
+                    🏢
+                  </div>
+                  {branch?.name || `Branch #${branchId || '-'}`}
+                </h1>
+                <p className="mt-2 text-gray-600">Branch reports and quick access</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {widgetNotice && (
+          <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{widgetNotice}</div>
+        )}
 
         {loading ? (
           <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-8 flex items-center justify-center">
@@ -609,201 +685,602 @@ export default function BranchDashboardPage() {
         ) : (
           <>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-              <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6">
-                <h2 className="text-lg font-bold text-gray-900 mb-3">Branch Details</h2>
-                <div className="space-y-2 text-sm text-gray-700">
-                  <div>
-                    <span className="font-semibold">Email:</span> {branch.email || '-'}
-                  </div>
-                  <div>
-                    <span className="font-semibold">Phone:</span> {branch.phone || '-'}
-                  </div>
-                  <div>
-                    <span className="font-semibold">Address:</span> {branch.address || '-'}
-                  </div>
-                  <div>
-                    <span className="font-semibold">Opening Asset:</span>{' '}
-                    {Number(branch.opening_asset || 0).toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}branch_details`) && (
+                <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6 relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}branch_details`)}
+                      className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                      aria-label="Hide branch details widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <h2 className="text-lg font-bold text-gray-900 mb-3">Branch Details</h2>
+                  <div className="space-y-2 text-sm text-gray-700">
+                    <div>
+                      <span className="font-semibold">Email:</span> {branch.email || '-'}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Phone:</span> {branch.phone || '-'}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Address:</span> {branch.address || '-'}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Opening Asset:</span>{' '}
+                      {Number(branch.opening_asset || 0).toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
-              <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6">
-                <h2 className="text-lg font-bold text-gray-900 mb-3">Manager</h2>
-                <div className="space-y-2 text-sm text-gray-700">
-                  <div>
-                    <span className="font-semibold">Name:</span> {branch.manager?.name || 'Not assigned'}
-                  </div>
-                  <div>
-                    <span className="font-semibold">Email:</span> {branch.manager?.email || '-'}
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}manager`) && (
+                <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6 relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}manager`)}
+                      className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                      aria-label="Hide branch manager widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <h2 className="text-lg font-bold text-gray-900 mb-3">Manager</h2>
+                  <div className="space-y-2 text-sm text-gray-700">
+                    <div>
+                      <span className="font-semibold">Name:</span> {branch.manager?.name || 'Not assigned'}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Email:</span> {branch.manager?.email || '-'}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
-              <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6">
-                <h2 className="text-lg font-bold text-gray-900 mb-3">Actions</h2>
-                <div className="flex flex-col gap-3">
-                  <button
-                    type="button"
-                    onClick={openBankAccountsModal}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-teal-600 to-cyan-600 text-white text-sm font-semibold shadow-sm hover:from-teal-700 hover:to-cyan-700"
-                  >
-                    Add Branch Bank Accounts
-                  </button>
-                  <button
-                    type="button"
-                    onClick={openCashAccountModal}
-                    disabled={!!cashAccount}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 text-white text-sm font-semibold shadow-sm hover:from-amber-700 hover:to-orange-700 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {cashAccount ? 'Cash Account Created' : 'Create Branch Cash Account'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => router.push(`/dashboard/reports/branch-performance?branch_id=${branchId}`)}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 text-white text-sm font-semibold shadow-sm hover:from-rose-700 hover:to-red-700"
-                  >
-                    Branch Performance Report
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => router.push(`/dashboard/reports/branch-collection?branch_id=${branchId}`)}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 text-white text-sm font-semibold shadow-sm hover:from-orange-700 hover:to-amber-700"
-                  >
-                    Branch Collection Report
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => router.push(`/dashboard/reports/branch-repayment?branch_id=${branchId}`)}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-violet-600 to-purple-600 text-white text-sm font-semibold shadow-sm hover:from-violet-700 hover:to-purple-700"
-                  >
-                    Branch Repayment Report
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => router.push(`/dashboard/branches/${branchId}#reports`)}
-                    className="px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm"
-                  >
-                    View All Branch Reports
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => router.push('/dashboard')}
-                    className="px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm"
-                  >
-                    Back to Main Dashboard
-                  </button>
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}actions`) && (
+                <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6 relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}actions`)}
+                      className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                      aria-label="Hide branch action widget"
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <h2 className="text-lg font-bold text-gray-900 mb-3">Actions</h2>
+                  <div className="flex flex-col gap-3">
+                    {showActionAddBankButton && (
+                      <div className="relative">
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => hideWidget(`${widgetPrefix}actions_btn_add_bank`)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-white/70 bg-white/95 text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-10"
+                            aria-label="Hide add branch bank accounts button"
+                            title="Hide widget"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={openBankAccountsModal}
+                          className="w-full px-4 py-2 rounded-xl bg-gradient-to-r from-teal-600 to-cyan-600 text-white text-sm font-semibold shadow-sm hover:from-teal-700 hover:to-cyan-700"
+                        >
+                          Add Branch Bank Accounts
+                        </button>
+                      </div>
+                    )}
+                    {showActionCreateCashButton && (
+                      <div className="relative">
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => hideWidget(`${widgetPrefix}actions_btn_create_cash`)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-white/70 bg-white/95 text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-10"
+                            aria-label="Hide create branch cash account button"
+                            title="Hide widget"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={openCashAccountModal}
+                          disabled={!!cashAccount}
+                          className="w-full px-4 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 text-white text-sm font-semibold shadow-sm hover:from-amber-700 hover:to-orange-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {cashAccount ? 'Cash Account Created' : 'Create Branch Cash Account'}
+                        </button>
+                      </div>
+                    )}
+                    {showActionPerformanceReportButton && (
+                      <div className="relative">
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => hideWidget(`${widgetPrefix}actions_btn_performance_report`)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-white/70 bg-white/95 text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-10"
+                            aria-label="Hide branch performance report button"
+                            title="Hide widget"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/dashboard/reports/branch-performance?branch_id=${branchId}`)}
+                          className="w-full px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 text-white text-sm font-semibold shadow-sm hover:from-rose-700 hover:to-red-700"
+                        >
+                          Branch Performance Report
+                        </button>
+                      </div>
+                    )}
+                    {showActionCollectionReportButton && (
+                      <div className="relative">
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => hideWidget(`${widgetPrefix}actions_btn_collection_report`)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-white/70 bg-white/95 text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-10"
+                            aria-label="Hide branch collection report button"
+                            title="Hide widget"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/dashboard/reports/branch-collection?branch_id=${branchId}`)}
+                          className="w-full px-4 py-2 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 text-white text-sm font-semibold shadow-sm hover:from-orange-700 hover:to-amber-700"
+                        >
+                          Branch Collection Report
+                        </button>
+                      </div>
+                    )}
+                    {showActionRepaymentReportButton && (
+                      <div className="relative">
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => hideWidget(`${widgetPrefix}actions_btn_repayment_report`)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-white/70 bg-white/95 text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-10"
+                            aria-label="Hide branch repayment report button"
+                            title="Hide widget"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/dashboard/reports/branch-repayment?branch_id=${branchId}`)}
+                          className="w-full px-4 py-2 rounded-xl bg-gradient-to-r from-violet-600 to-purple-600 text-white text-sm font-semibold shadow-sm hover:from-violet-700 hover:to-purple-700"
+                        >
+                          Branch Repayment Report
+                        </button>
+                      </div>
+                    )}
+                    {showActionViewReportsButton && (
+                      <div className="relative">
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => hideWidget(`${widgetPrefix}actions_btn_view_reports`)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-10"
+                            aria-label="Hide view all branch reports button"
+                            title="Hide widget"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/dashboard/branches/${branchId}#reports`)}
+                          className="w-full px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm"
+                        >
+                          View All Branch Reports
+                        </button>
+                      </div>
+                    )}
+                    {showActionBackDashboardButton && (
+                      <div className="relative">
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => hideWidget(`${widgetPrefix}actions_btn_back_dashboard`)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-10"
+                            aria-label="Hide back to main dashboard button"
+                            title="Hide widget"
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={() => router.push('/dashboard')}
+                          className="w-full px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm"
+                        >
+                          Back to Main Dashboard
+                        </button>
+                      </div>
+                    )}
+                    {!showAnyActionButton && (
+                      <p className="rounded-xl border border-dashed border-gray-300 bg-white/70 px-4 py-3 text-sm text-gray-600">
+                        Action buttons are hidden. Use `Restore Hidden Widgets` in the main dashboard to bring them back.
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
-            <div className="mb-8 bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6">
-              <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
-                <h2 className="text-lg font-bold text-gray-900">Branch Bank Accounts</h2>
-                <button
-                  type="button"
-                  onClick={openBankAccountsModal}
-                  className="px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm"
-                >
-                  Add Multiple
-                </button>
+            {hiddenWidgetKeys.includes(`${widgetPrefix}branch_details`) &&
+            hiddenWidgetKeys.includes(`${widgetPrefix}manager`) &&
+            hiddenWidgetKeys.includes(`${widgetPrefix}actions`) ? (
+              <div className="mb-8 rounded-2xl border border-dashed border-gray-300 bg-white/60 px-5 py-4 text-sm text-gray-600">
+                Overview widgets are hidden. Use `Restore Hidden Widgets` in the main dashboard to bring them back.
               </div>
+            ) : null}
 
-              {accountsLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}bank_accounts`) && (
+              <div className="mb-8 bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6 relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}bank_accounts`)}
+                    className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                    aria-label="Hide branch bank accounts widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                  <h2 className="text-lg font-bold text-gray-900">Branch Bank Accounts</h2>
+                  {!hiddenWidgetKeys.includes(`${widgetPrefix}bank_btn_add_multiple`) ? (
+                    <div className="relative">
+                      <WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={() => hideWidget(`${widgetPrefix}bank_btn_add_multiple`)}
+                          className="absolute -left-9 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                          aria-label="Hide add multiple bank accounts button"
+                          title="Hide widget"
+                        >
+                          ×
+                        </button>
+                      </WidgetCloseGate>
+                      <button
+                        type="button"
+                        onClick={openBankAccountsModal}
+                        className="px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm"
+                      >
+                        Add Multiple
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
-              ) : bankAccounts.length === 0 ? (
-                <p className="text-sm text-gray-600">No bank accounts created for this branch yet.</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm text-left text-gray-700">
-                    <thead className="bg-gray-50 text-gray-700">
-                      <tr>
-                        <th className="px-4 py-2 font-semibold">Account Name</th>
-                        <th className="px-4 py-2 font-semibold">Bank Name</th>
-                        <th className="px-4 py-2 font-semibold">Branch</th>
-                        <th className="px-4 py-2 font-semibold">Account Number</th>
-                        <th className="px-4 py-2 font-semibold text-right">Current Balance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bankAccounts.map((account) => (
-                        <tr key={account.id} className="border-t border-gray-100">
-                          <td className="px-4 py-2 font-semibold text-gray-900">{account.account_name || '-'}</td>
-                          <td className="px-4 py-2">{account.bank_name || '-'}</td>
-                          <td className="px-4 py-2">{account.bank_branch || '-'}</td>
-                          <td className="px-4 py-2">{account.account_number || '-'}</td>
-                          <td className="px-4 py-2 text-right font-semibold text-gray-900">
-                            {Number(account.current_balance || 0).toLocaleString(undefined, {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
-                          </td>
+
+                {accountsLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
+                  </div>
+                ) : bankAccounts.length === 0 ? (
+                  <p className="text-sm text-gray-600">No bank accounts created for this branch yet.</p>
+                ) : !showAnyBankColumn ? (
+                  <p className="text-sm text-gray-600">All bank account table columns are hidden.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm text-left text-gray-700">
+                      <thead className="bg-gray-50 text-gray-700">
+                        <tr>
+                          {showBankColumnAccountName && (
+                            <th className="px-4 py-2 font-semibold">
+                              <div className="flex items-center gap-2">
+                                <span>Account Name</span>
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => hideWidget(`${widgetPrefix}bank_col_account_name`)}
+                                    className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                    aria-label="Hide bank account name column"
+                                    title="Hide column"
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                              </div>
+                            </th>
+                          )}
+                          {showBankColumnBankName && (
+                            <th className="px-4 py-2 font-semibold">
+                              <div className="flex items-center gap-2">
+                                <span>Bank Name</span>
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => hideWidget(`${widgetPrefix}bank_col_bank_name`)}
+                                    className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                    aria-label="Hide bank name column"
+                                    title="Hide column"
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                              </div>
+                            </th>
+                          )}
+                          {showBankColumnBranch && (
+                            <th className="px-4 py-2 font-semibold">
+                              <div className="flex items-center gap-2">
+                                <span>Branch</span>
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => hideWidget(`${widgetPrefix}bank_col_branch`)}
+                                    className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                    aria-label="Hide bank branch column"
+                                    title="Hide column"
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                              </div>
+                            </th>
+                          )}
+                          {showBankColumnAccountNumber && (
+                            <th className="px-4 py-2 font-semibold">
+                              <div className="flex items-center gap-2">
+                                <span>Account Number</span>
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => hideWidget(`${widgetPrefix}bank_col_account_number`)}
+                                    className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                    aria-label="Hide bank account number column"
+                                    title="Hide column"
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                              </div>
+                            </th>
+                          )}
+                          {showBankColumnCurrentBalance && (
+                            <th className="px-4 py-2 font-semibold text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => hideWidget(`${widgetPrefix}bank_col_current_balance`)}
+                                    className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                    aria-label="Hide bank current balance column"
+                                    title="Hide column"
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                                <span>Current Balance</span>
+                              </div>
+                            </th>
+                          )}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            <div className="mb-8 bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6">
-              <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
-                <h2 className="text-lg font-bold text-gray-900">Branch Cash Account</h2>
-                <button
-                  type="button"
-                  onClick={openCashAccountModal}
-                  disabled={!!cashAccount}
-                  className="px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {cashAccount ? 'Already Created' : 'Create Cash Account'}
-                </button>
+                      </thead>
+                      <tbody>
+                        {bankAccounts.map((account) => (
+                          <tr key={account.id} className="border-t border-gray-100">
+                            {showBankColumnAccountName && (
+                              <td className="px-4 py-2 font-semibold text-gray-900">{account.account_name || '-'}</td>
+                            )}
+                            {showBankColumnBankName && <td className="px-4 py-2">{account.bank_name || '-'}</td>}
+                            {showBankColumnBranch && <td className="px-4 py-2">{account.bank_branch || '-'}</td>}
+                            {showBankColumnAccountNumber && <td className="px-4 py-2">{account.account_number || '-'}</td>}
+                            {showBankColumnCurrentBalance && (
+                              <td className="px-4 py-2 text-right font-semibold text-gray-900">
+                                {Number(account.current_balance || 0).toLocaleString(undefined, {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
+            )}
 
-              {!cashAccount ? (
-                <p className="text-sm text-gray-600">No cash account created for this branch yet.</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm text-left text-gray-700">
-                    <thead className="bg-gray-50 text-gray-700">
-                      <tr>
-                        <th className="px-4 py-2 font-semibold">Account Name</th>
-                        <th className="px-4 py-2 font-semibold">Type</th>
-                        <th className="px-4 py-2 font-semibold text-right">Opening Balance</th>
-                        <th className="px-4 py-2 font-semibold text-right">Current Balance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr className="border-t border-gray-100">
-                        <td className="px-4 py-2 font-semibold text-gray-900">{cashAccount.account_name || '-'}</td>
-                        <td className="px-4 py-2 uppercase">{String(cashAccount.account_type || '-')}</td>
-                        <td className="px-4 py-2 text-right font-semibold text-gray-900">
-                          {Number(cashAccount.opening_balance || 0).toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </td>
-                        <td className="px-4 py-2 text-right font-semibold text-gray-900">
-                          {Number(cashAccount.current_balance || 0).toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}cash_account`) && (
+              <div className="mb-8 bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-6 relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}cash_account`)}
+                    className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                    aria-label="Hide branch cash account widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                  <h2 className="text-lg font-bold text-gray-900">Branch Cash Account</h2>
+                  {!hiddenWidgetKeys.includes(`${widgetPrefix}cash_btn_create`) ? (
+                    <div className="relative">
+                      <WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={() => hideWidget(`${widgetPrefix}cash_btn_create`)}
+                          className="absolute -left-9 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                          aria-label="Hide create cash account button"
+                          title="Hide widget"
+                        >
+                          ×
+                        </button>
+                      </WidgetCloseGate>
+                      <button
+                        type="button"
+                        onClick={openCashAccountModal}
+                        disabled={!!cashAccount}
+                        className="px-4 py-2 rounded-xl bg-white hover:bg-gray-50 text-gray-800 text-sm font-semibold border border-gray-200 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {cashAccount ? 'Already Created' : 'Create Cash Account'}
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
-              )}
-            </div>
 
-            <div id="reports" className="mb-4">
-              <h2 className="text-2xl font-bold text-gray-900">Branch Reports</h2>
-              <p className="text-gray-600 mt-1">Same Reports Hub, auto-filtered by this branch.</p>
-            </div>
+                {!cashAccount ? (
+                  <p className="text-sm text-gray-600">No cash account created for this branch yet.</p>
+                ) : !showAnyCashColumn ? (
+                  <p className="text-sm text-gray-600">All cash account table columns are hidden.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm text-left text-gray-700">
+                      <thead className="bg-gray-50 text-gray-700">
+                        <tr>
+                          {showCashColumnAccountName && (
+                            <th className="px-4 py-2 font-semibold">
+                              <div className="flex items-center gap-2">
+                                <span>Account Name</span>
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => hideWidget(`${widgetPrefix}cash_col_account_name`)}
+                                    className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                    aria-label="Hide cash account name column"
+                                    title="Hide column"
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                              </div>
+                            </th>
+                          )}
+                          {showCashColumnType && (
+                            <th className="px-4 py-2 font-semibold">
+                              <div className="flex items-center gap-2">
+                                <span>Type</span>
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => hideWidget(`${widgetPrefix}cash_col_type`)}
+                                    className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                    aria-label="Hide cash account type column"
+                                    title="Hide column"
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                              </div>
+                            </th>
+                          )}
+                          {showCashColumnOpeningBalance && (
+                            <th className="px-4 py-2 font-semibold text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => hideWidget(`${widgetPrefix}cash_col_opening_balance`)}
+                                    className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                    aria-label="Hide cash opening balance column"
+                                    title="Hide column"
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                                <span>Opening Balance</span>
+                              </div>
+                            </th>
+                          )}
+                          {showCashColumnCurrentBalance && (
+                            <th className="px-4 py-2 font-semibold text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => hideWidget(`${widgetPrefix}cash_col_current_balance`)}
+                                    className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                    aria-label="Hide cash current balance column"
+                                    title="Hide column"
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                                <span>Current Balance</span>
+                              </div>
+                            </th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr className="border-t border-gray-100">
+                          {showCashColumnAccountName && (
+                            <td className="px-4 py-2 font-semibold text-gray-900">{cashAccount.account_name || '-'}</td>
+                          )}
+                          {showCashColumnType && (
+                            <td className="px-4 py-2 uppercase">{String(cashAccount.account_type || '-')}</td>
+                          )}
+                          {showCashColumnOpeningBalance && (
+                            <td className="px-4 py-2 text-right font-semibold text-gray-900">
+                              {Number(cashAccount.opening_balance || 0).toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </td>
+                          )}
+                          {showCashColumnCurrentBalance && (
+                            <td className="px-4 py-2 text-right font-semibold text-gray-900">
+                              {Number(cashAccount.current_balance || 0).toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </td>
+                          )}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {hiddenWidgetKeys.includes(`${widgetPrefix}bank_accounts`) && hiddenWidgetKeys.includes(`${widgetPrefix}cash_account`) ? (
+              <div className="mb-8 rounded-2xl border border-dashed border-gray-300 bg-white/60 px-5 py-4 text-sm text-gray-600">
+                Account widgets are hidden. Use `Restore Hidden Widgets` in the main dashboard to bring them back.
+              </div>
+            ) : null}
+
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}reports_header`) && (
+              <div id="reports" className="mb-4 relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}reports_header`)}
+                    className="absolute top-1 right-0 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                    aria-label="Hide reports header widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <h2 className="text-2xl font-bold text-gray-900">Branch Reports</h2>
+                <p className="text-gray-600 mt-1">Same Reports Hub, auto-filtered by this branch.</p>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               {visibleCategories.map((category) => (
@@ -812,6 +1289,18 @@ export default function BranchDashboardPage() {
                   className="group relative bg-white/80 backdrop-blur-sm rounded-3xl shadow-[0_20px_40px_-30px_rgba(8,47,73,0.85)] border border-white/50 overflow-hidden"
                 >
                   <div className={`absolute inset-0 bg-gradient-to-br ${category.bg} opacity-40`}></div>
+
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => hideWidget(`${widgetPrefix}report_category_${category.key}`)}
+                      className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                      aria-label={`Hide ${category.title} widget`}
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
 
                   <div className="relative p-6">
                     <div className="flex items-start justify-between mb-5">
@@ -842,13 +1331,7 @@ export default function BranchDashboardPage() {
                           {report.path ? (
                             <button
                               type="button"
-                              onClick={() => {
-                                if (isCollectionOfficer && collectionOfficerBlockedCategoryKeys.has(category.key)) {
-                                  return;
-                                }
-
-                                router.push(report.path as string);
-                              }}
+                              onClick={() => router.push(report.path as string)}
                               className="shrink-0 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-700"
                             >
                               Open
@@ -865,6 +1348,12 @@ export default function BranchDashboardPage() {
                 </div>
               ))}
             </div>
+
+            {visibleCategories.length === 0 && (
+              <div className="rounded-2xl border border-dashed border-gray-300 bg-white/60 px-5 py-4 text-sm text-gray-600">
+                Report widgets are hidden. Use `Restore Hidden Widgets` in the main dashboard to bring them back.
+              </div>
+            )}
           </>
         )}
       </main>

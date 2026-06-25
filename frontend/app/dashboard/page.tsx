@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
-import { getApiBaseUrl } from '@/lib/api';
+import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { useWidgetsFixed, WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type AuthPermission = {
   id: number;
@@ -108,29 +109,38 @@ type WalletManager = {
 };
 
 type DashboardModule = {
+  key: string;
   name: string;
   icon: string;
   color: string;
   bgColor: string;
   path: string;
-  requiredModules: string[];
-  requiredPermissionKeywords?: string[];
 };
 
 type DashboardSetting = {
+  key: string;
   icon: string;
   title: string;
   desc: string;
   color: string;
   path: string;
-  requiredModules: string[];
-  requiredPermissionKeywords?: string[];
+};
+
+type NotificationPreviewItem = {
+  id: number;
+  title: string;
+  type: string;
+  is_read: boolean;
+  is_important: boolean;
+  created_at: string;
 };
 
 export default function Dashboard() {
   const [token, setToken] = useState('');
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loadingPrivileges, setLoadingPrivileges] = useState(true);
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
   const [logoLoadFailed, setLogoLoadFailed] = useState(false);
   const [walletSummary, setWalletSummary] = useState<WalletSummary | null>(null);
   const [walletBankAccounts, setWalletBankAccounts] = useState<WalletBankAccount[]>([]);
@@ -175,8 +185,38 @@ export default function Dashboard() {
     note: '',
     saving: false,
   });
+  const [restoreWidgetsModal, setRestoreWidgetsModal] = useState<{
+    open: boolean;
+    adminEmail: string;
+    adminPassword: string;
+    verifying: boolean;
+  }>({
+    open: false,
+    adminEmail: '',
+    adminPassword: '',
+    verifying: false,
+  });
+  const [fixWidgetsModal, setFixWidgetsModal] = useState<{
+    open: boolean;
+    action: 'fix' | 'unfix';
+    adminEmail: string;
+    adminPassword: string;
+    verifying: boolean;
+  }>({
+    open: false,
+    action: 'fix',
+    adminEmail: '',
+    adminPassword: '',
+    verifying: false,
+  });
+  const [notificationPreviewOpen, setNotificationPreviewOpen] = useState(false);
+  const [notificationPreviewLoading, setNotificationPreviewLoading] = useState(false);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [notificationPreviewItems, setNotificationPreviewItems] = useState<NotificationPreviewItem[]>([]);
+  const notificationPreviewRef = useRef<HTMLDivElement | null>(null);
   const router = useRouter();
   const apiBaseUrl = getApiBaseUrl();
+  const companyLogoUrl = `${getBackendOrigin()}/media/company/logo`;
 
   const normalizeText = (value: string) =>
     String(value || '')
@@ -204,6 +244,9 @@ export default function Dashboard() {
   const primaryRoleName = String(primaryRoleRaw || 'User').trim();
   const isCollectionOfficer = hasOfficerKeyword('collection officer');
   const isFieldOfficer = hasOfficerKeyword('field officer');
+  const canRestoreHiddenWidgets = normalizedRoleSources.some(
+    (value) => value === 'admin' || value === 'super admin'
+  );
   const canUseWalletDeposit = isCollectionOfficer || isFieldOfficer;
   const collectorCashInHand = Number(
     walletSummary?.cash_in_hand ?? authUser?.employee?.wallet?.current_balance ?? 0
@@ -222,106 +265,9 @@ export default function Dashboard() {
       maximumFractionDigits: 2,
     })}`;
 
-  const isSuperAdmin =
-    authUser?.email === 'superadmin@softcodelk.com' ||
-    roleNames.some((roleName) =>
-      ['super admin', 'superadmin', 'admin', 'system admin', 'md'].some((adminKey) => roleName.includes(adminKey))
-    );
-
-  const userPermissionNames = new Set(
-    (authUser?.roles || [])
-      .flatMap((role) => role.permissions || [])
-      .map((permission) => normalizeText(permission.name))
-  );
-
-  const userPermissionModules = new Set(
-    (authUser?.roles || [])
-      .flatMap((role) => role.permissions || [])
-      .map((permission) => permission.module || '')
-      .map((moduleName: string) => normalizeText(moduleName))
-      .filter((moduleName: string) => moduleName.length > 0)
-  );
-
-  const userPermissionTexts = (authUser?.roles || [])
-    .flatMap((role) => role.permissions || [])
-    .map((permission) =>
-      normalizeText(`${permission.name || ''} ${permission.module || ''} ${permission.description || ''}`)
-    )
-    .filter(Boolean);
-
-  const moduleAliases: Record<string, string[]> = {
-    hrm: ['hr', 'hrm', 'human resource management', 'employee', 'employees', 'department', 'designation', 'attendance', 'leave', 'payroll', 'candidate'],
-    credit: ['credit', 'finance', 'finances', 'finance product types', 'loan requests', 'loan request', 'microfinance', 'mortgages', 'mortgage', 'customers', 'customer'],
-    savings: ['savings', 'savings accounts', 'deposit', 'deposits'],
-    branches: ['branch', 'branches', 'company', 'companies'],
-    accounting: ['accounting', 'account', 'accounts', 'ledger', 'general ledger', 'chart of accounts'],
-    reports: ['report', 'reports', 'ledger', 'snapshot', 'arrears', 'portfolio'],
-  };
-
-  const moduleMatches = (requiredModule: string, assignedModule: string) => {
-    const required = normalizeText(requiredModule);
-    const assigned = normalizeText(assignedModule);
-    if (!required || !assigned) return false;
-
-    if (assigned === required || assigned.includes(required) || required.includes(assigned)) {
-      return true;
-    }
-
-    const aliasTokens = moduleAliases[required] || [];
-    if (aliasTokens.some((alias) => assigned.includes(alias))) {
-      return true;
-    }
-
-    return false;
-  };
-
-  const hasModuleAccess = (requiredModules: string[]) =>
-    requiredModules.some((moduleName) =>
-      Array.from(userPermissionModules).some((assignedModule) => moduleMatches(moduleName, assignedModule))
-    );
-
-  const hasPermissionKeywordAccess = (requiredKeywords: string[]) =>
-    requiredKeywords.some((keyword) => {
-      const normalizedKeyword = normalizeText(keyword);
-      const singularKeyword = normalizedKeyword.endsWith('s')
-        ? normalizedKeyword.slice(0, -1)
-        : normalizedKeyword;
-
-      return Array.from(userPermissionNames).some((permissionName) =>
-        permissionName.includes(normalizedKeyword) ||
-        permissionName.includes(singularKeyword)
-      );
-    });
-
-  const hasPermissionTokenAccess = (tokens: string[]) =>
-    tokens.some((token) => {
-      const normalizedToken = normalizeText(token);
-      if (!normalizedToken) return false;
-
-      const singularToken = normalizedToken.endsWith('s')
-        ? normalizedToken.slice(0, -1)
-        : normalizedToken;
-
-      return userPermissionTexts.some((text) =>
-        text.includes(normalizedToken) || text.includes(singularToken)
-      );
-    });
-
-  const canAccess = (requiredModules: string[], requiredPermissionKeywords: string[] = []) => {
-    if (isSuperAdmin) {
-      return true;
-    }
-
-    if (requiredModules.length === 0 && requiredPermissionKeywords.length === 0) {
-      return true;
-    }
-
-    return (
-      hasModuleAccess(requiredModules) ||
-      hasPermissionKeywordAccess(requiredPermissionKeywords) ||
-      hasPermissionTokenAccess([...requiredModules, ...requiredPermissionKeywords])
-    );
-  };
+  const previewAllFeaturesForAllUsers = true;
+  const canUseWidgetCloseFeature = true;
+  const { widgetsFixed, toggleWidgetsFixed } = useWidgetsFixed();
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -330,6 +276,8 @@ export default function Dashboard() {
     } else {
       setToken(storedToken);
       fetchAuthUser(storedToken);
+      fetchWidgetPreferences(storedToken);
+      fetchNotificationPreview(storedToken);
     }
   }, [router]);
 
@@ -382,6 +330,43 @@ export default function Dashboard() {
     void fetchMyWallet();
   }, [token, canUseWalletDeposit, apiBaseUrl]);
 
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (!notificationPreviewOpen) return;
+      if (notificationPreviewRef.current && !notificationPreviewRef.current.contains(event.target as Node)) {
+        setNotificationPreviewOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [notificationPreviewOpen]);
+
+  const fetchNotificationPreview = async (authToken?: string) => {
+    const tokenToUse = authToken || token;
+    if (!tokenToUse) return;
+
+    try {
+      setNotificationPreviewLoading(true);
+      const response = await axios.get(`${apiBaseUrl}/notifications/preview`, {
+        headers: {
+          Authorization: `Bearer ${tokenToUse}`,
+          Accept: 'application/json',
+        },
+        params: { limit: 4 },
+      });
+
+      const items = Array.isArray(response.data?.items) ? response.data.items : [];
+      setNotificationPreviewItems(items as NotificationPreviewItem[]);
+      setNotificationUnreadCount(Number(response.data?.unread_count || 0));
+    } catch {
+      setNotificationPreviewItems([]);
+      setNotificationUnreadCount(0);
+    } finally {
+      setNotificationPreviewLoading(false);
+    }
+  };
+
   const fetchAuthUser = async (authToken: string) => {
     setLoadingPrivileges(true);
     try {
@@ -402,6 +387,191 @@ export default function Dashboard() {
       }
     } finally {
       setLoadingPrivileges(false);
+    }
+  };
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${apiBaseUrl}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key) continue;
+        if (row?.is_visible === false) {
+          nextHidden.add(key);
+        }
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    const normalizedKey = String(widgetKey || '').trim();
+    if (!normalizedKey) return false;
+    if (normalizedKey.length > 120) return false;
+    try {
+      await axios.patch(
+        `${apiBaseUrl}/dashboard/widgets`,
+        { widget_key: normalizedKey, is_visible: Boolean(isVisible) },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+        }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWalletNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to update widget visibility. Please try again.',
+      });
+    }
+  };
+
+  const resetHiddenWidgets = async () => {
+    if (!token) return;
+    const adminEmail = restoreWidgetsModal.adminEmail.trim();
+    const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail);
+    if (!adminEmail || !emailLooksValid || !restoreWidgetsModal.adminPassword) {
+      setWalletNotice({
+        open: true,
+        title: 'Validation',
+        message: 'Valid admin email and password are required.',
+      });
+      return;
+    }
+
+    try {
+      setRestoreWidgetsModal((prev) => ({ ...prev, verifying: true }));
+      await axios.delete(`${apiBaseUrl}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+        data: {
+          admin_email: adminEmail,
+          admin_password: restoreWidgetsModal.adminPassword,
+        },
+      });
+      setHiddenWidgetKeys(new Set());
+      setRestoreWidgetsModal({
+        open: false,
+        adminEmail: '',
+        adminPassword: '',
+        verifying: false,
+      });
+      setWalletNotice({
+        open: true,
+        title: 'Widgets Restored',
+        message: 'All dashboard widgets are visible again.',
+      });
+    } catch (error: unknown) {
+      const message =
+        axios.isAxiosError(error) && typeof error.response?.data?.message === 'string'
+          ? error.response.data.message
+          : 'Failed to restore dashboard widgets. Please verify admin credentials and try again.';
+      setWalletNotice({
+        open: true,
+        title: 'Reset Failed',
+        message,
+      });
+    } finally {
+      setRestoreWidgetsModal((prev) => ({ ...prev, verifying: false }));
+    }
+  };
+
+  const openFixWidgetsApprovalModal = () => {
+    setFixWidgetsModal({
+      open: true,
+      action: widgetsFixed ? 'unfix' : 'fix',
+      adminEmail: '',
+      adminPassword: '',
+      verifying: false,
+    });
+  };
+
+  const approveAndToggleWidgetsFixed = async () => {
+    if (!token) return;
+
+    const adminEmail = fixWidgetsModal.adminEmail.trim();
+    const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail);
+    if (!adminEmail || !emailLooksValid || !fixWidgetsModal.adminPassword) {
+      setWalletNotice({
+        open: true,
+        title: 'Validation',
+        message: 'Valid admin email and password are required.',
+      });
+      return;
+    }
+
+    try {
+      setFixWidgetsModal((prev) => ({ ...prev, verifying: true }));
+      await axios.post(
+        `${apiBaseUrl}/dashboard/widgets/authorize-admin`,
+        {
+          admin_email: adminEmail,
+          admin_password: fixWidgetsModal.adminPassword,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+        }
+      );
+
+      const isFixing = fixWidgetsModal.action === 'fix';
+      toggleWidgetsFixed();
+      setFixWidgetsModal({
+        open: false,
+        action: isFixing ? 'fix' : 'unfix',
+        adminEmail: '',
+        adminPassword: '',
+        verifying: false,
+      });
+      setWalletNotice({
+        open: true,
+        title: isFixing ? 'Widgets Fixed' : 'Widgets Unfixed',
+        message: isFixing
+          ? 'Widget close buttons are now hidden.'
+          : 'Widget close buttons are now enabled.',
+      });
+    } catch (error: unknown) {
+      const message =
+        axios.isAxiosError(error) && typeof error.response?.data?.message === 'string'
+          ? error.response.data.message
+          : 'Admin approval failed. Please verify credentials and try again.';
+      setWalletNotice({
+        open: true,
+        title: 'Approval Failed',
+        message,
+      });
+    } finally {
+      setFixWidgetsModal((prev) => ({ ...prev, verifying: false }));
     }
   };
 
@@ -628,115 +798,93 @@ export default function Dashboard() {
 
   const allModules: DashboardModule[] = [
     {
+      key: 'module_credit',
       name: 'Credit',
       icon: '💳',
       color: 'from-emerald-500 to-cyan-500',
       bgColor: 'from-emerald-50 to-cyan-50',
       path: '/dashboard/credit',
-      requiredModules: ['finances', 'finance product types', 'loan requests', 'microfinance', 'mortgages', 'customers'],
-      requiredPermissionKeywords: ['credit', 'finance', 'loan_requests', 'loan request', 'microfinance', 'mortgages', 'customer', 'customers'],
     },
     {
+      key: 'module_office_collection_center',
       name: 'Office Collection Center',
       icon: '🏛️',
       color: 'from-indigo-500 to-violet-500',
       bgColor: 'from-indigo-50 to-violet-50',
       path: '/dashboard/office-collections',
-      requiredModules: ['finances', 'finance product types', 'loan requests', 'microfinance', 'mortgages', 'customers'],
-      requiredPermissionKeywords: [
-        'collection',
-        'collections',
-        'collect',
-        'office',
-        'credit',
-        'finance',
-        'loan_requests',
-        'microfinance',
-        'mortgage',
-        'mortgages',
-      ],
     },
     {
+      key: 'module_hrm',
       name: 'HRM (Human Resource Management)',
       icon: '👥',
       color: 'from-red-500 to-pink-500',
       bgColor: 'from-red-50 to-pink-50',
       path: '/dashboard/hrm',
-      requiredModules: [
-        'hrm',
-        'hr',
-        'employee management',
-        'department management',
-        'attendance management',
-        'leave management',
-        'payroll management',
-        'candidate management',
-        'roles',
-        'permissions',
-        'role management',
-        'permission management',
-        'users',
-        'user management',
-      ],
-      requiredPermissionKeywords: ['hrm', 'employee', 'employees', 'department', 'departments', 'attendance', 'leave', 'leaves', 'payroll', 'candidate', 'candidates', 'roles', 'permissions'],
     },
     {
+      key: 'module_savings_deposits',
       name: 'Savings & Deposits',
       icon: '💸',
       color: 'from-yellow-500 to-orange-500',
       bgColor: 'from-yellow-50 to-orange-50',
       path: '/dashboard/savings-deposits',
-      requiredModules: ['savings accounts'],
-      requiredPermissionKeywords: ['savings', 'savings_accounts', 'deposit', 'withdraw'],
     },
     {
+      key: 'module_branch_management',
       name: 'Branch Management',
       icon: '🏢',
       color: 'from-teal-500 to-green-500',
       bgColor: 'from-teal-50 to-green-50',
       path: '/dashboard/branches',
-      requiredModules: ['branches'],
-      requiredPermissionKeywords: ['branch', 'branches', 'company', 'companies'],
     },
     {
+      key: 'module_accounting',
       name: 'Accounting',
       icon: '📒',
       color: 'from-violet-500 to-purple-500',
       bgColor: 'from-violet-50 to-purple-50',
       path: '/dashboard/accounting',
-      requiredModules: ['accounting', 'branches', 'companies', 'finance', 'reports'],
-      requiredPermissionKeywords: ['accounting', 'account', 'accounts', 'ledger', 'company', 'companies', 'branch', 'branches'],
     },
     {
+      key: 'module_reports',
       name: 'Reports',
       icon: '📈',
       color: 'from-rose-500 to-red-500',
       bgColor: 'from-rose-50 to-red-50',
       path: '/dashboard/reports',
-      requiredModules: ['reports'],
-      requiredPermissionKeywords: ['report', 'reports', 'ledger', 'snapshot'],
     },
   ];
 
   const otherModules = allModules.filter((module) => {
-    if (isCollectionOfficer && (module.name === 'Office Collection Center' || module.name === 'Accounting')) {
+    if (canUseWidgetCloseFeature && hiddenWidgetKeys.has(module.key)) {
       return false;
     }
-
-    return canAccess(module.requiredModules, module.requiredPermissionKeywords || []);
+    return true;
   });
 
   const settings: DashboardSetting[] = [
     {
+      key: 'setting_notifications',
+      icon: '🔔',
+      title: 'Notifications',
+      desc: 'View alerts, reminders, and updates',
+      color: 'from-amber-500 to-orange-500',
+      path: '/dashboard/notifications',
+    },
+    {
+      key: 'setting_company_settings',
       icon: '🏢',
       title: 'Company Settings',
       desc: 'Manage company information',
       color: 'from-blue-500 to-cyan-500',
       path: '/dashboard/company-settings',
-      requiredModules: ['branches', 'companies'],
-      requiredPermissionKeywords: ['view_branches', 'edit_branches', 'view_companies', 'edit_companies', 'document_templates'],
     },
-  ].filter((setting) => canAccess(setting.requiredModules, setting.requiredPermissionKeywords || []));
+  ].filter((setting) => {
+    if (canUseWidgetCloseFeature && hiddenWidgetKeys.has(setting.key)) {
+      return false;
+    }
+    return true;
+  });
 
   const handleModuleClick = (moduleName: string) => {
     const selectedModule = allModules.find((item) => item.name === moduleName);
@@ -745,7 +893,7 @@ export default function Dashboard() {
     }
   };
 
-  if (!token || loadingPrivileges) {
+  if (!token || loadingPrivileges || loadingWidgets) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-red-50 via-pink-50 to-purple-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
@@ -787,29 +935,79 @@ export default function Dashboard() {
                   <p className="text-[11px] font-medium text-slate-500">{primaryRoleName}</p>
                 </div>
               </div>
-              <div className="flex w-full items-center rounded-full border border-emerald-200 bg-emerald-50/90 px-3 py-1.5 text-left sm:w-auto">
+              <div className="relative" ref={notificationPreviewRef}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextOpen = !notificationPreviewOpen;
+                    setNotificationPreviewOpen(nextOpen);
+                    if (nextOpen) void fetchNotificationPreview();
+                  }}
+                  className="flex w-full items-center gap-2 rounded-full border border-amber-200 bg-amber-50/90 px-3 py-1.5 text-left transition hover:bg-amber-100 sm:w-auto"
+                >
+                  <span className="text-sm">🔔</span>
+                  <span className="text-xs font-semibold text-amber-800">Notifications</span>
+                  <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+                    {notificationUnreadCount}
+                  </span>
+                </button>
+
+                {notificationPreviewOpen && (
+                  <div className="absolute right-0 mt-2 w-80 rounded-2xl border border-amber-100 bg-white/95 p-3 shadow-2xl backdrop-blur z-30">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold text-slate-900">User Notifications</h4>
+                      <span className="text-xs text-slate-500">{notificationUnreadCount} unread</span>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {notificationPreviewLoading ? (
+                        <p className="text-xs text-slate-500">Loading...</p>
+                      ) : notificationPreviewItems.length === 0 ? (
+                        <p className="text-xs text-slate-500">No notifications.</p>
+                      ) : (
+                        notificationPreviewItems.map((item) => (
+                          <div
+                            key={item.id}
+                            className={`rounded-xl border px-3 py-2 ${
+                              item.is_read ? 'border-slate-200 bg-slate-50' : 'border-amber-200 bg-amber-50'
+                            }`}
+                          >
+                            <p className="text-xs font-semibold text-slate-800">{item.title}</p>
+                            <p className="mt-1 text-[11px] text-slate-500">
+                              {new Date(item.created_at).toLocaleString('en-GB', {
+                                day: '2-digit',
+                                month: 'short',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNotificationPreviewOpen(false);
+                        router.push('/dashboard/notifications');
+                      }}
+                      className="mt-3 w-full rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700"
+                    >
+                      Open Notification Center
+                    </button>
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => router.push('/dashboard/wallet')}
+                className="flex w-full items-center rounded-full border border-emerald-200 bg-emerald-50/90 px-3 py-1.5 text-left transition hover:bg-emerald-100 sm:w-auto"
+              >
                 <div className="leading-tight">
                   <p className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">Wallet Preview</p>
                   <p className="text-xs font-semibold text-emerald-900">{formatLkr(walletPreviewBalance)}</p>
                   <p className="text-[11px] font-medium text-emerald-700">Wallet No: {walletPreviewHasWallet ? walletPreviewNo : 'Not created'}</p>
                 </div>
-              </div>
-              {canUseWalletDeposit && (
-                <button
-                  onClick={() => setAccountPreviewOpen(true)}
-                  className="w-full rounded-full border border-cyan-200 bg-white px-3 py-2 text-xs font-semibold text-cyan-700 transition-all hover:bg-cyan-50 sm:w-auto sm:px-4 sm:text-sm"
-                >
-                  Preview Account
-                </button>
-              )}
-              {canUseWalletDeposit && (
-                <button
-                  onClick={openDepositModal}
-                  className="w-full rounded-full border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition-all hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:px-4 sm:text-sm"
-                >
-                  Deposit to Bank
-                </button>
-              )}
+              </button>
               <button
                 onClick={handleLogout}
                 className="w-full rounded-full bg-gradient-to-r from-red-500 to-pink-500 px-4 py-2 text-xs font-medium text-white shadow-lg transition-all duration-300 hover:from-red-600 hover:to-pink-600 hover:shadow-xl sm:w-auto sm:px-6 sm:text-sm"
@@ -830,7 +1028,7 @@ export default function Dashboard() {
                 <span className="text-3xl sm:text-4xl">🚀</span>
               ) : (
                 <img
-                  src="/media/company/logo"
+                  src={companyLogoUrl}
                   alt="Company logo"
                   className="h-28 w-28 sm:h-36 sm:w-36 rounded-2xl object-contain"
                   onError={() => setLogoLoadFailed(true)}
@@ -848,13 +1046,42 @@ export default function Dashboard() {
               <span>Real-time Updates</span>
             </div>
           </div>
+          {canUseWidgetCloseFeature && (
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {canRestoreHiddenWidgets && (
+                <button
+                  onClick={() =>
+                    setRestoreWidgetsModal({
+                      open: true,
+                      adminEmail: '',
+                      adminPassword: '',
+                      verifying: false,
+                    })
+                  }
+                  className="rounded-full border border-red-200 bg-white/80 px-4 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                >
+                  Restore Hidden Widgets
+                </button>
+              )}
+              <button
+                onClick={openFixWidgetsApprovalModal}
+                className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${
+                  widgetsFixed
+                    ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                    : 'border-slate-200 bg-white/80 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                {widgetsFixed ? 'Unfix Widgets' : 'Fix Widget'}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Module Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 mb-16">
-          {otherModules.map((module, index) => (
+          {otherModules.map((module) => (
             <div
-              key={index}
+              key={module.key}
               onClick={() => handleModuleClick(module.name)}
               className={`group relative bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 cursor-pointer border border-white/20 overflow-hidden transform hover:-translate-y-2 hover:scale-105 ${
                 module.name === 'HRM (Human Resource Management)' ? 'ring-2 ring-red-500/50' : ''
@@ -865,6 +1092,19 @@ export default function Dashboard() {
 
               {/* Content */}
               <div className="relative p-6">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void hideWidget(module.key);
+                    }}
+                    className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${module.name} widget`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="flex items-start justify-between mb-4">
                   <div className={`w-14 h-14 bg-gradient-to-r ${module.color} rounded-xl flex items-center justify-center text-2xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
                     {module.icon}
@@ -901,9 +1141,9 @@ export default function Dashboard() {
 
         {otherModules.length === 0 && (
           <div className="mb-16 rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center">
-            <h3 className="text-lg font-semibold text-amber-800">No Module Access Assigned</h3>
+            <h3 className="text-lg font-semibold text-amber-800">No Widgets Available</h3>
             <p className="text-amber-700 mt-2">
-              Your account currently has no dashboard module privileges. Please contact an administrator to assign permissions.
+              All feature widgets are currently hidden for this user. Use "Restore Hidden Widgets" to show them again.
             </p>
           </div>
         )}
@@ -924,14 +1164,27 @@ export default function Dashboard() {
 
           <div className="p-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {settings.map((setting, index) => (
+              {settings.map((setting) => (
                 <div
-                  key={index}
+                  key={setting.key}
                   onClick={() => {
                     if (setting.path) router.push(setting.path);
                   }}
-                  className="group bg-white/50 hover:bg-white/80 rounded-xl p-4 border border-white/30 hover:border-white/50 transition-all duration-300 cursor-pointer transform hover:scale-105"
+                  className="group relative bg-white/50 hover:bg-white/80 rounded-xl p-4 border border-white/30 hover:border-white/50 transition-all duration-300 cursor-pointer transform hover:scale-105"
                 >
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void hideWidget(setting.key);
+                      }}
+                      className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                      aria-label={`Hide ${setting.title} widget`}
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
                   <div className="flex items-center space-x-3">
                     <div className={`w-12 h-12 bg-gradient-to-r ${setting.color} rounded-lg flex items-center justify-center text-xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
                       {setting.icon}
@@ -1047,6 +1300,130 @@ export default function Dashboard() {
                 className="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2 text-sm font-semibold text-white hover:from-emerald-600 hover:to-teal-600 disabled:opacity-60"
               >
                 {depositModal.saving ? 'Posting...' : 'Deposit'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {restoreWidgetsModal.open && (
+        <div className="fixed inset-0 z-[94] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/35 backdrop-blur-sm"
+            onClick={() => {
+              if (restoreWidgetsModal.verifying) return;
+              setRestoreWidgetsModal((prev) => ({ ...prev, open: false }));
+            }}
+          />
+          <div className="relative w-full max-w-md rounded-2xl border border-red-200 bg-white px-6 py-5 shadow-xl">
+            <h3 className="text-lg font-bold text-slate-900">Admin Approval Required</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Enter super admin or admin credentials to restore hidden widgets for this logged user.
+            </p>
+
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Admin Email</label>
+                <input
+                  type="email"
+                  value={restoreWidgetsModal.adminEmail}
+                  onChange={(e) => setRestoreWidgetsModal((prev) => ({ ...prev, adminEmail: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-red-200"
+                  placeholder="admin@example.com"
+                  disabled={restoreWidgetsModal.verifying}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Admin Password</label>
+                <input
+                  type="password"
+                  value={restoreWidgetsModal.adminPassword}
+                  onChange={(e) => setRestoreWidgetsModal((prev) => ({ ...prev, adminPassword: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-red-200"
+                  placeholder="Enter password"
+                  disabled={restoreWidgetsModal.verifying}
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setRestoreWidgetsModal((prev) => ({ ...prev, open: false }))}
+                disabled={restoreWidgetsModal.verifying}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={resetHiddenWidgets}
+                disabled={restoreWidgetsModal.verifying}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+              >
+                {restoreWidgetsModal.verifying ? 'Verifying...' : 'Verify & Restore'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {fixWidgetsModal.open && (
+        <div className="fixed inset-0 z-[94] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/35 backdrop-blur-sm"
+            onClick={() => {
+              if (fixWidgetsModal.verifying) return;
+              setFixWidgetsModal((prev) => ({ ...prev, open: false }));
+            }}
+          />
+          <div className="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-xl">
+            <h3 className="text-lg font-bold text-slate-900">Admin Approval Required</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Enter admin credentials to {fixWidgetsModal.action === 'fix' ? 'fix' : 'unfix'} widgets.
+            </p>
+
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Admin Email</label>
+                <input
+                  type="email"
+                  value={fixWidgetsModal.adminEmail}
+                  onChange={(e) => setFixWidgetsModal((prev) => ({ ...prev, adminEmail: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  placeholder="admin@example.com"
+                  disabled={fixWidgetsModal.verifying}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Admin Password</label>
+                <input
+                  type="password"
+                  value={fixWidgetsModal.adminPassword}
+                  onChange={(e) => setFixWidgetsModal((prev) => ({ ...prev, adminPassword: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-black focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  placeholder="Enter password"
+                  disabled={fixWidgetsModal.verifying}
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setFixWidgetsModal((prev) => ({ ...prev, open: false }))}
+                disabled={fixWidgetsModal.verifying}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={approveAndToggleWidgetsFixed}
+                disabled={fixWidgetsModal.verifying}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-60"
+              >
+                {fixWidgetsModal.verifying
+                  ? 'Verifying...'
+                  : fixWidgetsModal.action === 'fix'
+                    ? 'Verify & Fix'
+                    : 'Verify & Unfix'}
               </button>
             </div>
           </div>

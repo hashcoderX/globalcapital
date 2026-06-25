@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import Badge from '../_components/Badge';
 import ClientMountGate from '@/app/components/ClientMountGate';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   ArrowLeft,
   BarChart3,
@@ -167,6 +168,9 @@ export default function MortgageReportsPage() {
   const [settledQuery, setSettledQuery] = useState('');
   const [settledFrom, setSettledFrom] = useState('');
   const [settledTo, setSettledTo] = useState('');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
+  const widgetPrefix = 'mortgages_reports_widget_';
 
   useEffect(() => {
     const t = localStorage.getItem('token');
@@ -175,7 +179,53 @@ export default function MortgageReportsPage() {
       return;
     }
     setToken(t);
+    void fetchWidgetPreferences(t);
   }, [router]);
+
+  async function fetchWidgetPreferences(authToken: string) {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  }
+
+  const saveWidgetPreference = useCallback(async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${getApiBaseUrl()}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, [token]);
+
+  const hideWidget = useCallback(async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
+  }, [hiddenWidgetKeys, saveWidgetPreference]);
 
   const fetchRows = async (authToken: string) => {
     setLoading(true);
@@ -533,6 +583,75 @@ export default function MortgageReportsPage() {
     { id: 'settled', label: 'Settled', count: filteredSettledRows.length },
   ];
 
+  const kpiCards = [
+    { key: 'kpi_total', label: 'Total', value: metrics.total, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
+    { key: 'kpi_running', label: 'Running', value: metrics.running, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
+    { key: 'kpi_approved', label: 'Approved', value: metrics.approved, tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
+    { key: 'kpi_submitted', label: 'Submitted', value: metrics.submitted, tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
+    { key: 'kpi_rejected', label: 'Rejected', value: metrics.rejected, tone: 'text-rose-700', bg: 'from-rose-500/10 to-red-500/5' },
+    { key: 'kpi_settled', label: 'Settled', value: metrics.settled, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
+    { key: 'kpi_requested', label: 'Requested', value: formatAmount(metrics.totalRequested), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
+    { key: 'kpi_approved_value', label: 'Approved Value', value: formatAmount(metrics.totalApproved), tone: 'text-teal-700', bg: 'from-teal-500/10 to-emerald-500/5' },
+  ];
+  const visibleKpiCards = kpiCards.filter((item) => !hiddenWidgetKeys.has(`${widgetPrefix}${item.key}`));
+
+  const runningColumns = [
+    { key: 'id', label: 'ID', render: (row: MortgageRow) => <span className="font-bold text-slate-900">#{row.id}</span> },
+    { key: 'type', label: 'Type', render: (row: MortgageRow) => <span className="capitalize text-black">{row.mortgage_type || '—'}</span> },
+    { key: 'approved', label: 'Approved', render: (row: MortgageRow) => <span className="font-semibold text-teal-700">{formatAmount(row.approved_amount ?? row.requested_amount)}</span> },
+    { key: 'installment', label: 'Installment', render: (row: MortgageRow) => <span className="font-semibold text-cyan-700">{formatAmount(calculateInstallmentAmount(row))}</span> },
+    { key: 'interest', label: 'Interest', render: (row: MortgageRow) => Number.isFinite(toNumber(row.interest_rate)) ? `${toNumber(row.interest_rate).toFixed(2)}%` : '—' },
+    { key: 'due_date', label: 'Due Date', render: (row: MortgageRow) => formatDate(row.due_date) },
+    { key: 'status', label: 'Status', render: (row: MortgageRow) => <Badge label={String(row.status || '—')} variant={statusVariant(String(row.status || ''))} /> },
+  ];
+  const visibleRunningColumns = runningColumns.filter((col) => !hiddenWidgetKeys.has(`${widgetPrefix}running_col_${col.key}`));
+
+  const rejectedColumns = [
+    { key: 'id', label: 'ID', render: (row: MortgageRow) => <span className="font-bold text-slate-900">#{row.id}</span> },
+    { key: 'type', label: 'Type', render: (row: MortgageRow) => <span className="capitalize text-black">{row.mortgage_type || '—'}</span> },
+    { key: 'requested', label: 'Requested', render: (row: MortgageRow) => <span className="text-black">{formatAmount(row.requested_amount)}</span> },
+    { key: 'interest', label: 'Interest', render: (row: MortgageRow) => Number.isFinite(toNumber(row.interest_rate)) ? `${toNumber(row.interest_rate).toFixed(2)}%` : '—' },
+    { key: 'due_date', label: 'Due Date', render: (row: MortgageRow) => formatDate(row.due_date) },
+    { key: 'created', label: 'Created', render: (row: MortgageRow) => formatDate(row.created_at) },
+  ];
+  const visibleRejectedColumns = rejectedColumns.filter((col) => !hiddenWidgetKeys.has(`${widgetPrefix}rejected_col_${col.key}`));
+
+  const settledColumns = [
+    { key: 'id', label: 'ID', render: (row: MortgageRow) => <span className="font-bold text-slate-900">#{row.id}</span> },
+    { key: 'type', label: 'Type', render: (row: MortgageRow) => <span className="capitalize text-black">{row.mortgage_type || '—'}</span> },
+    { key: 'customer', label: 'Customer', render: (row: MortgageRow) => `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim() || '—' },
+    { key: 'approved', label: 'Approved', render: (row: MortgageRow) => formatAmount(row.approved_amount ?? row.requested_amount) },
+    { key: 'installment', label: 'Installment', render: (row: MortgageRow) => <span className="font-semibold text-emerald-700">{formatAmount(calculateInstallmentAmount(row))}</span> },
+    { key: 'created', label: 'Created', render: (row: MortgageRow) => formatDate(row.created_at) },
+    {
+      key: 'history',
+      label: 'History',
+      render: (row: MortgageRow) => (
+        <button
+          type="button"
+          onClick={() => openHistoryModal(row)}
+          className="inline-flex items-center gap-1 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
+        >
+          <History className="h-3.5 w-3.5" />
+          History
+        </button>
+      ),
+    },
+  ];
+  const visibleSettledColumns = settledColumns.filter((col) => !hiddenWidgetKeys.has(`${widgetPrefix}settled_col_${col.key}`));
+
+  const showHeroWidget = !hiddenWidgetKeys.has(`${widgetPrefix}hero`);
+  const showKpiWidget = !hiddenWidgetKeys.has(`${widgetPrefix}kpis`);
+  const showInsightsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}insights`);
+  const showTabsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}tabs`);
+  const showFooterNoteWidget = !hiddenWidgetKeys.has(`${widgetPrefix}footer_note`);
+  const showAnyWidget =
+    showHeroWidget ||
+    (showKpiWidget && visibleKpiCards.length > 0) ||
+    showInsightsWidget ||
+    showTabsWidget ||
+    showFooterNoteWidget;
+
   if (!token) {
     return <ClientMountGate fallback={pageFallback}>{pageFallback}</ClientMountGate>;
   }
@@ -554,10 +673,33 @@ export default function MortgageReportsPage() {
         </div>
 
         <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+          {widgetNotice ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+              {widgetNotice}
+            </div>
+          ) : null}
+
+          {!showAnyWidget ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+              All widgets are hidden. Use Restore Hidden Widgets from the dashboard to bring them back.
+            </div>
+          ) : null}
+
           {/* Hero */}
+          {showHeroWidget ? (
           <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#0a1816] via-[#0f3d38] to-[#115e59] text-white shadow-[0_30px_80px_-24px_rgba(17,94,89,0.8)]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(45,212,191,0.25),transparent_42%)]" />
             <div className="relative p-6 md:p-8">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+                  className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/60 bg-white/85 text-sm font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide mortgage reports hero widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                 <div className="max-w-2xl">
                   <span className="inline-flex items-center gap-2 rounded-full border border-teal-300/30 bg-teal-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-teal-100">
@@ -609,28 +751,48 @@ export default function MortgageReportsPage() {
               </div>
             </div>
           </section>
+          ) : null}
 
           {/* KPIs */}
+          {showKpiWidget ? (
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
-            {[
-              { label: 'Total', value: metrics.total, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
-              { label: 'Running', value: metrics.running, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
-              { label: 'Approved', value: metrics.approved, tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
-              { label: 'Submitted', value: metrics.submitted, tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
-              { label: 'Rejected', value: metrics.rejected, tone: 'text-rose-700', bg: 'from-rose-500/10 to-red-500/5' },
-              { label: 'Settled', value: metrics.settled, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
-              { label: 'Requested', value: formatAmount(metrics.totalRequested), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
-              { label: 'Approved Value', value: formatAmount(metrics.totalApproved), tone: 'text-teal-700', bg: 'from-teal-500/10 to-emerald-500/5' },
-            ].map((item) => (
+            {visibleKpiCards.map((item) => (
               <div key={item.label} className={`rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-3 shadow-sm backdrop-blur`}>
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}${item.key}`)}
+                    className="float-right inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/70 bg-white/85 text-[10px] font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${item.label} widget`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{item.label}</p>
                 <p className={`mt-1 text-lg font-black ${item.tone}`}>{item.value}</p>
               </div>
             ))}
+            {visibleKpiCards.length === 0 ? (
+              <div className="sm:col-span-2 xl:col-span-4 2xl:col-span-8 rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+                All KPI widgets are hidden.
+              </div>
+            ) : null}
           </section>
+          ) : null}
 
           {/* Insight cards */}
-          <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          {showInsightsWidget ? (
+          <section className="relative grid grid-cols-1 gap-4 md:grid-cols-3">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}insights`)}
+                className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide insights widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             {[
               { icon: Banknote, title: 'Portfolio Value Lens', desc: 'Track requested vs approved scale before release decisions.', color: 'text-emerald-700' },
               { icon: CheckCircle2, title: 'Approval Throughput', desc: 'Measure pipeline movement from submitted to approved.', color: 'text-teal-700' },
@@ -645,9 +807,21 @@ export default function MortgageReportsPage() {
               </div>
             ))}
           </section>
+          ) : null}
 
           {/* Tabs */}
-          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(17,94,89,0.45)] backdrop-blur-xl">
+          {showTabsWidget ? (
+          <section className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(17,94,89,0.45)] backdrop-blur-xl">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}tabs`)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide report tabs widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="flex flex-wrap gap-2 border-b border-slate-100 p-4">
               {tabs.map((tab) => (
                 <button
@@ -688,36 +862,44 @@ export default function MortgageReportsPage() {
                   ) : (
                     <>
                       <div className="overflow-x-auto rounded-2xl border border-teal-100">
-                        <table className="min-w-full text-sm">
-                          <thead>
-                            <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
-                              <th className="px-3 py-3 text-black">ID</th>
-                              <th className="px-3 py-3 text-black">Type</th>
-                              <th className="px-3 py-3 text-black">Approved</th>
-                              <th className="px-3 py-3 text-black">Installment</th>
-                              <th className="px-3 py-3 text-black">Interest</th>
-                              <th className="px-3 py-3 text-black">Due Date</th>
-                              <th className="px-3 py-3 text-black">Status</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 bg-white">
-                            {pagedRunningRows.map((row, i) => (
-                              <tr key={row.id} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                                <td className="px-3 py-2.5 font-bold text-slate-900">#{row.id}</td>
-                                <td className="px-3 py-2.5 capitalize text-black">{row.mortgage_type || '—'}</td>
-                                <td className="px-3 py-2.5 font-semibold text-teal-700">{formatAmount(row.approved_amount ?? row.requested_amount)}</td>
-                                <td className="px-3 py-2.5 font-semibold text-cyan-700">{formatAmount(calculateInstallmentAmount(row))}</td>
-                                <td className="px-3 py-2.5 text-black">
-                                  {Number.isFinite(toNumber(row.interest_rate)) ? `${toNumber(row.interest_rate).toFixed(2)}%` : '—'}
-                                </td>
-                                <td className="px-3 py-2.5 text-black">{formatDate(row.due_date)}</td>
-                                <td className="px-3 py-2.5">
-                                  <Badge label={String(row.status || '—')} variant={statusVariant(String(row.status || ''))} />
-                                </td>
+                        {visibleRunningColumns.length > 0 ? (
+                          <table className="min-w-full text-sm">
+                            <thead>
+                              <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
+                                {visibleRunningColumns.map((column) => (
+                                  <th key={column.key} className="px-3 py-3 text-black">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span>{column.label}</span>
+                                      <WidgetCloseGate>
+                                        <button
+                                          type="button"
+                                          onClick={() => void hideWidget(`${widgetPrefix}running_col_${column.key}`)}
+                                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                                          aria-label={`Hide running ${column.label} column`}
+                                        >
+                                          ×
+                                        </button>
+                                      </WidgetCloseGate>
+                                    </div>
+                                  </th>
+                                ))}
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 bg-white">
+                              {pagedRunningRows.map((row, i) => (
+                                <tr key={row.id} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                                  {visibleRunningColumns.map((column) => (
+                                    <td key={column.key} className="px-3 py-2.5 text-black">
+                                      {column.render(row)}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        ) : (
+                          <div className="py-8 text-center text-sm text-slate-600">All running table columns are hidden.</div>
+                        )}
                       </div>
                       {runningRows.length > PAGE_SIZE && (
                         <Pagination
@@ -744,32 +926,44 @@ export default function MortgageReportsPage() {
                   ) : (
                     <>
                       <div className="overflow-x-auto rounded-2xl border border-rose-100">
-                        <table className="min-w-full text-sm">
-                          <thead>
-                            <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
-                              <th className="px-3 py-3 text-black">ID</th>
-                              <th className="px-3 py-3 text-black">Type</th>
-                              <th className="px-3 py-3 text-black">Requested</th>
-                              <th className="px-3 py-3 text-black">Interest</th>
-                              <th className="px-3 py-3 text-black">Due Date</th>
-                              <th className="px-3 py-3 text-black">Created</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-rose-50 bg-white">
-                            {pagedRejectedRows.map((row) => (
-                              <tr key={row.id}>
-                                <td className="px-3 py-2.5 font-bold text-slate-900">#{row.id}</td>
-                                <td className="px-3 py-2.5 capitalize text-black">{row.mortgage_type || '—'}</td>
-                                <td className="px-3 py-2.5 text-black">{formatAmount(row.requested_amount)}</td>
-                                <td className="px-3 py-2.5 text-black">
-                                  {Number.isFinite(toNumber(row.interest_rate)) ? `${toNumber(row.interest_rate).toFixed(2)}%` : '—'}
-                                </td>
-                                <td className="px-3 py-2.5 text-black">{formatDate(row.due_date)}</td>
-                                <td className="px-3 py-2.5 text-black">{formatDate(row.created_at)}</td>
+                        {visibleRejectedColumns.length > 0 ? (
+                          <table className="min-w-full text-sm">
+                            <thead>
+                              <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
+                                {visibleRejectedColumns.map((column) => (
+                                  <th key={column.key} className="px-3 py-3 text-black">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span>{column.label}</span>
+                                      <WidgetCloseGate>
+                                        <button
+                                          type="button"
+                                          onClick={() => void hideWidget(`${widgetPrefix}rejected_col_${column.key}`)}
+                                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                                          aria-label={`Hide rejected ${column.label} column`}
+                                        >
+                                          ×
+                                        </button>
+                                      </WidgetCloseGate>
+                                    </div>
+                                  </th>
+                                ))}
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody className="divide-y divide-rose-50 bg-white">
+                              {pagedRejectedRows.map((row) => (
+                                <tr key={row.id}>
+                                  {visibleRejectedColumns.map((column) => (
+                                    <td key={column.key} className="px-3 py-2.5 text-black">
+                                      {column.render(row)}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        ) : (
+                          <div className="py-8 text-center text-sm text-slate-600">All rejected table columns are hidden.</div>
+                        )}
                       </div>
                       {rejectedRows.length > PAGE_SIZE && (
                         <Pagination
@@ -882,55 +1076,68 @@ export default function MortgageReportsPage() {
                     <p className="py-12 text-center text-sm text-slate-500">No settled mortgages found.</p>
                   ) : (
                     <div className="overflow-x-auto rounded-2xl border border-emerald-100">
-                      <table className="min-w-full text-sm">
-                        <thead>
-                          <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
-                            <th className="px-3 py-3 text-black">ID</th>
-                            <th className="px-3 py-3 text-black">Type</th>
-                            <th className="px-3 py-3 text-black">Customer</th>
-                            <th className="px-3 py-3 text-black">Approved</th>
-                            <th className="px-3 py-3 text-black">Installment</th>
-                            <th className="px-3 py-3 text-black">Created</th>
-                            <th className="px-3 py-3 text-center text-black">History</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-emerald-50 bg-white">
-                          {filteredSettledRows.map((row) => {
-                            const customerName = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim();
-                            return (
+                      {visibleSettledColumns.length > 0 ? (
+                        <table className="min-w-full text-sm">
+                          <thead>
+                            <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
+                              {visibleSettledColumns.map((column) => (
+                                <th key={column.key} className="px-3 py-3 text-black">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span>{column.label}</span>
+                                    <WidgetCloseGate>
+                                      <button
+                                        type="button"
+                                        onClick={() => void hideWidget(`${widgetPrefix}settled_col_${column.key}`)}
+                                        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                                        aria-label={`Hide settled ${column.label} column`}
+                                      >
+                                        ×
+                                      </button>
+                                    </WidgetCloseGate>
+                                  </div>
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-emerald-50 bg-white">
+                            {filteredSettledRows.map((row) => (
                               <tr key={row.id}>
-                                <td className="px-3 py-2.5 font-bold text-slate-900">#{row.id}</td>
-                                <td className="px-3 py-2.5 capitalize text-black">{row.mortgage_type || '—'}</td>
-                                <td className="px-3 py-2.5 text-black">{customerName || '—'}</td>
-                                <td className="px-3 py-2.5">{formatAmount(row.approved_amount ?? row.requested_amount)}</td>
-                                <td className="px-3 py-2.5 font-semibold text-emerald-700">{formatAmount(calculateInstallmentAmount(row))}</td>
-                                <td className="px-3 py-2.5">{formatDate(row.created_at)}</td>
-                                <td className="px-3 py-2.5 text-center">
-                                  <button
-                                    type="button"
-                                    onClick={() => openHistoryModal(row)}
-                                    className="inline-flex items-center gap-1 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
-                                  >
-                                    <History className="h-3.5 w-3.5" />
-                                    History
-                                  </button>
-                                </td>
+                                {visibleSettledColumns.map((column) => (
+                                  <td key={column.key} className="px-3 py-2.5 text-black">
+                                    {column.render(row)}
+                                  </td>
+                                ))}
                               </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div className="py-8 text-center text-sm text-slate-600">All settled table columns are hidden.</div>
+                      )}
                     </div>
                   )}
                 </div>
               )}
             </div>
           </section>
+          ) : null}
 
-          <div className="flex items-center gap-2 rounded-2xl border border-teal-100 bg-white/90 px-4 py-3 text-xs text-slate-500 backdrop-blur">
-            <Clock3 className="h-4 w-4 shrink-0 text-teal-700" />
-            Dedicated mortgage report surface — separate from the global dashboard reports module.
-          </div>
+          {showFooterNoteWidget ? (
+            <div className="relative flex items-center gap-2 rounded-2xl border border-teal-100 bg-white/90 px-4 py-3 text-xs text-slate-500 backdrop-blur">
+              <Clock3 className="h-4 w-4 shrink-0 text-teal-700" />
+              Dedicated mortgage report surface — separate from the global dashboard reports module.
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}footer_note`)}
+                  className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide reports footer note widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
+            </div>
+          ) : null}
         </div>
 
         {/* History modal */}

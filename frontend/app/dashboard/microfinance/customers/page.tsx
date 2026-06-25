@@ -2,6 +2,7 @@
 
 import axios from 'axios';
 import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import jsPDF from 'jspdf';
@@ -49,6 +50,13 @@ export default function MicrofinanceCustomersPage() {
   const [token, setToken] = useState('');
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -93,6 +101,61 @@ export default function MicrofinanceCustomersPage() {
   const designationName = String(authUser?.designation?.name || '').toLowerCase();
   const isFieldOfficer = designationName.includes('field') && designationName.includes('officer');
 
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith('mf_customers_widget_')) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this card. Please try again.',
+      });
+    }
+  };
+
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
@@ -101,6 +164,7 @@ export default function MicrofinanceCustomersPage() {
     }
 
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
 
     const storedUser = localStorage.getItem('auth_user');
     if (storedUser) {
@@ -153,6 +217,38 @@ export default function MicrofinanceCustomersPage() {
     () => customers.filter((c) => (c.status || '').toLowerCase() === 'active').length,
     [customers]
   );
+
+  const summaryCards = [
+    {
+      key: 'mf_customers_widget_total_customers',
+      label: 'Total Customers',
+      value: String(customers.length),
+      valueClass: 'text-amber-600',
+      borderClass: 'border-amber-100',
+    },
+    {
+      key: 'mf_customers_widget_active_customers',
+      label: 'Active Customers',
+      value: String(activeCount),
+      valueClass: 'text-cyan-600',
+      borderClass: 'border-cyan-100',
+    },
+    {
+      key: 'mf_customers_widget_showing_range',
+      label: 'Showing',
+      value:
+        filteredCustomers.length === 0
+          ? '0'
+          : `${startIndex + 1}-${Math.min(startIndex + pageSize, filteredCustomers.length)}`,
+      valueClass: 'text-blue-600',
+      borderClass: 'border-blue-100',
+    },
+  ];
+
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+  const showFiltersPanel = !hiddenWidgetKeys.has('mf_customers_widget_filters_panel');
+  const showExportButtons = !hiddenWidgetKeys.has('mf_customers_widget_export_buttons');
+  const showPaginationControls = !hiddenWidgetKeys.has('mf_customers_widget_pagination_controls');
 
   const exportRows = useMemo(
     () =>
@@ -369,7 +465,7 @@ export default function MicrofinanceCustomersPage() {
     }
   };
 
-  if (!token || loading) {
+  if (!token || loading || loadingWidgets) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-500"></div>
@@ -394,69 +490,110 @@ export default function MicrofinanceCustomersPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="rounded-xl bg-white/85 border border-amber-100 shadow-sm p-4">
-            <p className="text-xs uppercase tracking-wide text-gray-500">Total Customers</p>
-            <p className="text-2xl font-bold text-amber-600 mt-1">{customers.length}</p>
-          </div>
-          <div className="rounded-xl bg-white/85 border border-cyan-100 shadow-sm p-4">
-            <p className="text-xs uppercase tracking-wide text-gray-500">Active Customers</p>
-            <p className="text-2xl font-bold text-cyan-600 mt-1">{activeCount}</p>
-          </div>
-          <div className="rounded-xl bg-white/85 border border-blue-100 shadow-sm p-4">
-            <p className="text-xs uppercase tracking-wide text-gray-500">Showing</p>
-            <p className="text-2xl font-bold text-blue-600 mt-1">
-              {filteredCustomers.length === 0 ? 0 : startIndex + 1}-{Math.min(startIndex + pageSize, filteredCustomers.length)}
-            </p>
-          </div>
+          {visibleSummaryCards.map((card) => (
+            <div key={card.key} className={`relative rounded-xl bg-white/85 border ${card.borderClass} shadow-sm p-4`}>
+              <WidgetCloseGate>
+<button
+                type="button"
+                onClick={() => void hideWidget(card.key)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label={`Hide ${card.label} card`}
+              >
+                ×
+              </button>
+</WidgetCloseGate>
+              <p className="text-xs uppercase tracking-wide text-gray-500">{card.label}</p>
+              <p className={`text-2xl font-bold mt-1 ${card.valueClass}`}>{card.value}</p>
+            </div>
+          ))}
         </div>
+        {visibleSummaryCards.length === 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            All customer summary cards are hidden. Restore from dashboard with admin approval.
+          </div>
+        )}
 
-        <div className="bg-white/90 rounded-2xl shadow-lg border border-amber-100 p-5 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3 text-black">
-          <input
-            className="px-3 py-2 rounded-lg border border-amber-100 text-sm"
-            placeholder="Search name / NIC / code / phone"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <select className="px-3 py-2 rounded-lg border border-amber-100 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="all">All Status</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-            <option value="blacklisted">Blacklisted</option>
-          </select>
-          <div className="md:col-span-1 lg:col-span-2"></div>
-          <div className="flex items-center gap-2 justify-start lg:justify-end">
-            <label className="text-sm text-gray-600">Rows:</label>
-            <select
-              className="px-2 py-1 rounded-md border border-amber-100 text-sm"
-              value={pageSize}
-              onChange={(e) => setPageSize(Number(e.target.value))}
+        {showFiltersPanel && (
+          <div className="relative bg-white/90 rounded-2xl shadow-lg border border-amber-100 p-5 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3 text-black">
+            <WidgetCloseGate>
+<button
+              type="button"
+              onClick={() => void hideWidget('mf_customers_widget_filters_panel')}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide filter controls widget"
             >
-              <option value={6}>6</option>
-              <option value={12}>12</option>
-              <option value={24}>24</option>
-              <option value={48}>48</option>
+              ×
+            </button>
+</WidgetCloseGate>
+            <input
+              className="px-3 py-2 rounded-lg border border-amber-100 text-sm"
+              placeholder="Search name / NIC / code / phone"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <select className="px-3 py-2 rounded-lg border border-amber-100 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="all">All Status</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+              <option value="blacklisted">Blacklisted</option>
             </select>
+            <div className="md:col-span-1 lg:col-span-2"></div>
+            <div className="flex items-center gap-2 justify-start lg:justify-end">
+              <label className="text-sm text-gray-600">Rows:</label>
+              <select
+                className="px-2 py-1 rounded-md border border-amber-100 text-sm"
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+              >
+                <option value={6}>6</option>
+                <option value={12}>12</option>
+                <option value={24}>24</option>
+                <option value={48}>48</option>
+              </select>
+            </div>
           </div>
-        </div>
+        )}
+        {!showFiltersPanel && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            Filter controls are hidden. Restore from dashboard with admin approval.
+          </div>
+        )}
 
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={downloadCsv}
-            disabled={exportRows.length === 0}
-            className="px-3 py-2 rounded-lg border border-amber-200 bg-white text-amber-700 text-sm font-semibold hover:bg-amber-50 disabled:opacity-50"
-          >
-            Download CSV
-          </button>
-          <button
-            type="button"
-            onClick={downloadPdf}
-            disabled={exportRows.length === 0}
-            className="px-3 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-semibold hover:from-amber-600 hover:to-orange-600 disabled:opacity-50"
-          >
-            Download PDF
-          </button>
-        </div>
+        {showExportButtons && (
+          <div className="relative flex flex-wrap items-center justify-end gap-2">
+            <WidgetCloseGate>
+<button
+              type="button"
+              onClick={() => void hideWidget('mf_customers_widget_export_buttons')}
+              className="absolute -top-3 left-0 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/95 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide export buttons widget"
+            >
+              ×
+            </button>
+</WidgetCloseGate>
+            <button
+              type="button"
+              onClick={downloadCsv}
+              disabled={exportRows.length === 0}
+              className="px-3 py-2 rounded-lg border border-amber-200 bg-white text-amber-700 text-sm font-semibold hover:bg-amber-50 disabled:opacity-50"
+            >
+              Download CSV
+            </button>
+            <button
+              type="button"
+              onClick={downloadPdf}
+              disabled={exportRows.length === 0}
+              className="px-3 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-semibold hover:from-amber-600 hover:to-orange-600 disabled:opacity-50"
+            >
+              Download PDF
+            </button>
+          </div>
+        )}
+        {!showExportButtons && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            Export buttons are hidden. Restore from dashboard with admin approval.
+          </div>
+        )}
 
         {filteredCustomers.length === 0 ? (
           <div className="bg-white rounded-2xl shadow-lg p-8 text-center text-gray-600">
@@ -525,8 +662,18 @@ export default function MicrofinanceCustomersPage() {
           </div>
         )}
 
-        {filteredCustomers.length > 0 && (
-          <div className="flex items-center justify-center gap-2 pt-2">
+        {filteredCustomers.length > 0 && showPaginationControls && (
+          <div className="relative flex items-center justify-center gap-2 pt-2">
+            <WidgetCloseGate>
+<button
+              type="button"
+              onClick={() => void hideWidget('mf_customers_widget_pagination_controls')}
+              className="absolute left-0 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/95 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide pagination controls widget"
+            >
+              ×
+            </button>
+</WidgetCloseGate>
             <button
               onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
               disabled={safePage === 1}
@@ -546,6 +693,11 @@ export default function MicrofinanceCustomersPage() {
             >
               Next
             </button>
+          </div>
+        )}
+        {filteredCustomers.length > 0 && !showPaginationControls && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            Pagination controls are hidden. Restore from dashboard with admin approval.
           </div>
         )}
 
@@ -729,6 +881,28 @@ export default function MicrofinanceCustomersPage() {
                   </div>
                 </>
               )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {widgetNotice.open && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/35 backdrop-blur-sm"
+              onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
+            />
+            <div className="relative w-full max-w-sm rounded-2xl border border-amber-100 bg-white p-5 shadow-xl">
+              <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
+              <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
+                  className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700"
+                >
+                  OK
+                </button>
               </div>
             </div>
           </div>

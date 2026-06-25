@@ -1,13 +1,25 @@
+'use client';
+
 import React from "react";
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 interface ModuleHeaderProps {
   title: string;
   subtitle?: string;
   actions?: React.ReactNode;
   breadcrumbs?: Array<{ label: string; href?: string }>;
+  onHideWidget?: () => void;
+  hideWidgetAriaLabel?: string;
 }
 
-export default function ModuleHeader({ title, subtitle, actions, breadcrumbs }: ModuleHeaderProps) {
+export default function ModuleHeader({
+  title,
+  subtitle,
+  actions,
+  breadcrumbs,
+  onHideWidget,
+  hideWidgetAriaLabel,
+}: ModuleHeaderProps) {
   return (
     <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 text-white shadow-xl">
       <div className="absolute inset-0 opacity-20">
@@ -25,6 +37,18 @@ export default function ModuleHeader({ title, subtitle, actions, breadcrumbs }: 
         </svg>
       </div>
       <div className="relative p-6 sm:p-8">
+        {onHideWidget ? (
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={onHideWidget}
+              className="absolute right-4 top-4 inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/50 bg-white/85 text-xs font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+              aria-label={hideWidgetAriaLabel || `Hide ${title} widget`}
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
+        ) : null}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold sm:text-3xl">{title}</h1>

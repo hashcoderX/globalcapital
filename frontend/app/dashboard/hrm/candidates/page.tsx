@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 interface Candidate {
   id: number;
@@ -96,6 +97,7 @@ export default function Candidates() {
   const [token, setToken] = useState('');
   const apiBase = getApiBaseUrl();
   const backendOrigin = getBackendOrigin();
+  const widgetPrefix = 'hrm_candidates_widget_';
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [designations, setDesignations] = useState<Designation[]>([]);
@@ -183,6 +185,8 @@ export default function Candidates() {
   const [noticeType, setNoticeType] = useState<'success' | 'error' | 'info'>('info');
   const [noticeTitle, setNoticeTitle] = useState<string>('');
   const [noticeMessage, setNoticeMessage] = useState<string>('');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
 
   const showSuccess = (message: string, title = 'Success') => {
     setNoticeType('success');
@@ -196,6 +200,76 @@ export default function Candidates() {
     setNoticeMessage(message);
     setShowNotice(true);
   };
+
+  const fetchWidgetPreferences = useCallback(
+    async (authToken?: string) => {
+      const tokenToUse = authToken || token;
+      if (!tokenToUse) return;
+
+      try {
+        const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+          headers: {
+            Authorization: `Bearer ${tokenToUse}`,
+            Accept: 'application/json',
+          },
+        });
+
+        const widgets = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+        const hiddenKeys = widgets
+          .filter((item: { widget_key?: string; is_visible?: boolean | number | null }) => !item?.is_visible)
+          .map((item: { widget_key?: string }) => item.widget_key)
+          .filter((key: unknown): key is string => typeof key === 'string' && key.startsWith(widgetPrefix));
+
+        setHiddenWidgetKeys(hiddenKeys);
+        setWidgetNotice(null);
+      } catch {
+        setWidgetNotice('Failed to load widget preferences.');
+      }
+    },
+    [apiBase, token, widgetPrefix]
+  );
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+      const normalizedKey = widgetKey.trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Invalid widget key. Please refresh and try again.');
+        return false;
+      }
+
+      try {
+        await axios.patch(
+          `${apiBase}/dashboard/widgets`,
+          {
+            widget_key: normalizedKey,
+            is_visible: Boolean(isVisible),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice(null);
+        return true;
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+        return false;
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) return;
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+    },
+    [saveWidgetPreference]
+  );
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -227,8 +301,9 @@ export default function Candidates() {
       fetchBranches(storedToken);
       fetchEmployees(storedToken);
       fetchUpcomingInterviews(storedToken);
+      fetchWidgetPreferences(storedToken);
     }
-  }, [router]);
+  }, [router, fetchWidgetPreferences]);
 
   const fetchCandidates = async (authToken?: string) => {
     const tokenToUse = authToken || token;
@@ -799,6 +874,21 @@ export default function Candidates() {
       default: return 'bg-gray-100 text-gray-800';
     }
   };
+  const showCodeColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_code`);
+  const showNameColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_name`);
+  const showEmailColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_email`);
+  const showPhoneColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_phone`);
+  const showPositionColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_position`);
+  const showStatusColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_status`);
+  const showActionsColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_actions`);
+  const showAnyCandidateColumn =
+    showCodeColumn ||
+    showNameColumn ||
+    showEmailColumn ||
+    showPhoneColumn ||
+    showPositionColumn ||
+    showStatusColumn ||
+    showActionsColumn;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 relative overflow-hidden">
@@ -810,7 +900,19 @@ export default function Candidates() {
       </div>
 
       {/* Modern Navigation */}
+      {!hiddenWidgetKeys.includes(`${widgetPrefix}top_nav`) && (
       <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
+        <WidgetCloseGate>
+          <button
+            type="button"
+            onClick={() => hideWidget(`${widgetPrefix}top_nav`)}
+            className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+            aria-label="Hide candidates top navigation widget"
+            title="Hide widget"
+          >
+            ×
+          </button>
+        </WidgetCloseGate>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row justify-between sm:items-center h-auto sm:h-16 py-3 gap-3">
             <div className="flex items-center justify-between sm:justify-start gap-3">
@@ -848,56 +950,170 @@ export default function Candidates() {
           </div>
         </div>
       </nav>
+      )}
 
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        {widgetNotice && (
+          <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 px-4 py-3">
+            {widgetNotice}
+          </div>
+        )}
         {apiError && (
           <div className="mb-6 rounded-xl border border-red-200 bg-red-50 text-red-700 px-4 py-3">
             {apiError}
           </div>
         )}
         {/* Hero Section */}
-        <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}hero`) && (
+        <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}hero`)}
+              className="absolute -top-2 right-0 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide candidates hero widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div>
             <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-900">Candidates</h1>
             <p className="text-sm sm:text-base md:text-lg text-gray-600">Manage applicants, interviews and conversions</p>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => { resetForm(); resetEditForm(); setShowForm(true); }}
-              className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-            >
-              Add Candidate
-            </button>
-            <button onClick={() => fetchCandidates()} className="px-4 py-2 rounded-lg border">Refresh</button>
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}btn_add_candidate`) && (
+              <div className="relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}btn_add_candidate`)}
+                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                    aria-label="Hide add candidate button widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <button
+                  onClick={() => { resetForm(); resetEditForm(); setShowForm(true); }}
+                  className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  Add Candidate
+                </button>
+              </div>
+            )}
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}btn_refresh`) && (
+              <div className="relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}btn_refresh`)}
+                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                    aria-label="Hide refresh button widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <button onClick={() => fetchCandidates()} className="px-4 py-2 rounded-lg border">Refresh</button>
+              </div>
+            )}
           </div>
         </div>
+        )}
 
         {/* Candidates Table */}
-        <div className="bg-white/80 backdrop-blur rounded-xl shadow-sm border">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}candidates_table`) && (
+        <div className="bg-white/80 backdrop-blur rounded-xl shadow-sm border relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}candidates_table`)}
+              className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide candidates table widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
+          {showAnyCandidateColumn ? (
           <table className="min-w-full">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">Code</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">Name</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">Email</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">Phone</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">Position</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">Actions</th>
+                {showCodeColumn && (
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">
+                    <div className="flex items-center gap-2">
+                      <span>Code</span>
+                      <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_code`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                    </div>
+                  </th>
+                )}
+                {showNameColumn && (
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">
+                    <div className="flex items-center gap-2">
+                      <span>Name</span>
+                      <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_name`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                    </div>
+                  </th>
+                )}
+                {showEmailColumn && (
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">
+                    <div className="flex items-center gap-2">
+                      <span>Email</span>
+                      <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_email`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                    </div>
+                  </th>
+                )}
+                {showPhoneColumn && (
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">
+                    <div className="flex items-center gap-2">
+                      <span>Phone</span>
+                      <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_phone`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                    </div>
+                  </th>
+                )}
+                {showPositionColumn && (
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">
+                    <div className="flex items-center gap-2">
+                      <span>Position</span>
+                      <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_position`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                    </div>
+                  </th>
+                )}
+                {showStatusColumn && (
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">
+                    <div className="flex items-center gap-2">
+                      <span>Status</span>
+                      <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_status`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                    </div>
+                  </th>
+                )}
+                {showActionsColumn && (
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600">
+                    <div className="flex items-center gap-2">
+                      <span>Actions</span>
+                      <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_actions`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                    </div>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
               {candidates.map((candidate) => (
                 <tr key={candidate.id} className="border-t">
-                  <td className="px-6 py-4 text-sm text-gray-700">{candidate.candidate_code}</td>
-                  <td className="px-6 py-4 text-sm text-gray-900">{candidate.first_name} {candidate.last_name}</td>
-                  <td className="px-6 py-4 text-sm text-gray-700">{candidate.email}</td>
-                  <td className="px-6 py-4 text-sm text-gray-700">{candidate.phone}</td>
-                  <td className="px-6 py-4 text-sm text-gray-700">{candidate.position_applied}</td>
-                  <td className="px-6 py-4 text-sm">
-                    <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(candidate.status)}`}>{candidate.status}</span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                  {showCodeColumn && <td className="px-6 py-4 text-sm text-gray-700">{candidate.candidate_code}</td>}
+                  {showNameColumn && <td className="px-6 py-4 text-sm text-gray-900">{candidate.first_name} {candidate.last_name}</td>}
+                  {showEmailColumn && <td className="px-6 py-4 text-sm text-gray-700">{candidate.email}</td>}
+                  {showPhoneColumn && <td className="px-6 py-4 text-sm text-gray-700">{candidate.phone}</td>}
+                  {showPositionColumn && <td className="px-6 py-4 text-sm text-gray-700">{candidate.position_applied}</td>}
+                  {showStatusColumn && (
+                    <td className="px-6 py-4 text-sm">
+                      <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(candidate.status)}`}>{candidate.status}</span>
+                    </td>
+                  )}
+                  {showActionsColumn && (
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <div className="relative inline-block" ref={openMenuFor === candidate.id ? menuRef : undefined}>
                       <button
                         aria-haspopup="menu"
@@ -980,11 +1196,16 @@ export default function Candidates() {
                       )}
                     </div>
                   </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
+          ) : (
+            <div className="py-12 text-center text-sm text-gray-500">All candidate table columns are hidden.</div>
+          )}
         </div>
+        )}
       </main>
 
       {/* Notification Modal */}

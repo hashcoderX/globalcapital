@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import Badge from '../_components/Badge';
@@ -8,6 +8,7 @@ import ActionButton from '../_components/ActionButton';
 import Modal from '../_components/Modal';
 import ClientMountGate from '@/app/components/ClientMountGate';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -207,6 +208,9 @@ export default function Mortgages() {
   const [searchDeed, setSearchDeed] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('cards');
   const [filtersOpen, setFiltersOpen] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
+  const widgetPrefix = 'mortgages_portfolio_widget_';
   const router = useRouter();
 
   const stats = useMemo(() => {
@@ -246,8 +250,54 @@ export default function Mortgages() {
     } else {
       setToken(t);
       fetchMortgages(t, 1);
+      void fetchWidgetPreferences(t);
     }
   }, [router]);
+
+  async function fetchWidgetPreferences(authToken: string) {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  }
+
+  const saveWidgetPreference = useCallback(async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${getApiBaseUrl()}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, [token]);
+
+  const hideWidget = useCallback(async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
+  }, [hiddenWidgetKeys, saveWidgetPreference]);
 
   const fetchMortgages = async (authToken: string, page: number = 1) => {
     try {
@@ -394,6 +444,122 @@ export default function Mortgages() {
     </div>
   );
 
+  const statsCards = [
+    { key: 'stat_accounts', icon: Briefcase, label: 'Accounts', value: stats.totalAccounts, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
+    { key: 'stat_portfolio_value', icon: Wallet, label: 'Portfolio Value', value: formatAmount(stats.totalApprovedAmount), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
+    { key: 'stat_avg_installment', icon: TrendingUp, label: 'Avg Installment', value: formatAmount(stats.averageInstallment), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
+    { key: 'stat_avg_rate', icon: Clock, label: 'Avg Rate', value: `${stats.averageRate.toFixed(2)}%`, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
+    { key: 'stat_overdue', icon: AlertTriangle, label: 'Overdue', value: stats.overdueCount, tone: 'text-rose-700', bg: 'from-rose-500/10 to-red-500/5' },
+    { key: 'stat_total_arrears', icon: Banknote, label: 'Total Arrears', value: formatAmount(stats.totalArrears), tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
+  ];
+  const visibleStatsCards = statsCards.filter((item) => !hiddenWidgetKeys.has(`${widgetPrefix}${item.key}`));
+
+  const tableColumns: Array<{
+    key: string;
+    label: string;
+    thClassName?: string;
+    tdClassName?: string;
+    render: (m: Mortgage) => any;
+  }> = [
+    {
+      key: 'account',
+      label: 'Account',
+      thClassName: 'sticky left-0 z-10 bg-slate-900',
+      tdClassName: 'sticky left-0 z-10 whitespace-nowrap bg-inherit',
+      render: (m) => {
+        const typeMeta = mortgageTypeMeta(m.mortgage_type);
+        const TypeIcon = typeMeta.icon;
+        return (
+          <div className="flex items-center gap-2">
+            <div className={`flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br ${typeMeta.color} text-white`}>
+              <TypeIcon className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-slate-900">#{m.id}</p>
+              <p className="text-xs capitalize text-slate-500">{typeMeta.label}</p>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'customer',
+      label: 'Customer',
+      tdClassName: 'text-sm',
+      render: (m) => {
+        const customerName = `${m.customer?.first_name || ''} ${m.customer?.last_name || ''}`.trim() || '—';
+        return (
+          <>
+            <p className="font-semibold text-slate-900">{customerName}</p>
+            <p className="text-xs text-slate-500">{m.customer?.phone || '—'}</p>
+            <p className="text-xs text-slate-500">{m.customer?.nic_passport || '—'}</p>
+          </>
+        );
+      },
+    },
+    { key: 'collateral', label: 'Collateral', tdClassName: 'text-sm text-slate-700', render: (m) => m.asset?.vehicle_reg_no || m.asset?.deed_number || m.asset?.description || '—' },
+    { key: 'principal', label: 'Principal', tdClassName: 'text-sm font-bold text-cyan-700', render: (m) => formatAmount(m.approved_amount ?? m.requested_amount) },
+    {
+      key: 'rate',
+      label: 'Rate',
+      tdClassName: 'text-sm text-slate-700',
+      render: (m) => (
+        <>
+          {m.interest_rate}% <span className="text-xs">({m.interest_type})</span>
+          <div className="text-xs text-slate-500">{m.tenure_months} mo</div>
+        </>
+      ),
+    },
+    {
+      key: 'due_date',
+      label: 'Due Date',
+      tdClassName: 'text-sm',
+      render: (m) => {
+        const overdueDays = daysOverdue(m.due_date);
+        return (
+          <>
+            <p className="font-semibold text-slate-900">{formatDate(m.due_date)}</p>
+            {(overdueDays ?? 0) > 0 ? (
+              <p className="text-xs font-semibold text-rose-600">{overdueDays}d overdue</p>
+            ) : (
+              <p className="text-xs text-emerald-600">On schedule</p>
+            )}
+          </>
+        );
+      },
+    },
+    { key: 'arrears', label: 'Arrears', tdClassName: 'text-sm font-semibold text-rose-700', render: (m) => formatAmount(m.arrears_amount ?? 0) },
+    { key: 'due_principal', label: 'Due Principal', tdClassName: 'text-sm font-semibold text-slate-800', render: (m) => formatAmount(m.due_amount ?? 0) },
+    { key: 'due_interest', label: 'Due Interest', tdClassName: 'text-sm font-semibold text-slate-800', render: (m) => formatAmount(m.due_interest_amount ?? 0) },
+    {
+      key: 'installment',
+      label: 'Installment',
+      tdClassName: 'text-sm font-semibold text-indigo-700',
+      render: (m) => {
+        const { installmentAmount } = computeInstallmentFigures(m);
+        return (
+          <>
+            {formatAmount(installmentAmount)}
+            <div className="text-xs font-medium text-slate-500">{frequencyLabel(m.installment_frequency)}</div>
+          </>
+        );
+      },
+    },
+    { key: 'status', label: 'Status', render: (m) => <Badge label={m.status} variant={statusTone(m.status)} /> },
+    { key: 'actions', label: 'Actions', render: (m) => renderMortgageActions(m.id) },
+  ];
+  const visibleTableColumns = tableColumns.filter((column) => !hiddenWidgetKeys.has(`${widgetPrefix}table_column_${column.key}`));
+
+  const showHeroWidget = !hiddenWidgetKeys.has(`${widgetPrefix}hero`);
+  const showStatsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}stats`);
+  const showFiltersWidget = !hiddenWidgetKeys.has(`${widgetPrefix}filters`);
+  const showPortfolioWidget = !hiddenWidgetKeys.has(`${widgetPrefix}portfolio_list`);
+  const showAnyWidget =
+    showHeroWidget ||
+    (showStatsWidget && visibleStatsCards.length > 0) ||
+    showFiltersWidget ||
+    showPortfolioWidget;
+
   const pageFallback = (
     <div className="flex min-h-screen items-center justify-center bg-[#070d1a]">
       <div className="flex flex-col items-center gap-4">
@@ -421,10 +587,33 @@ export default function Mortgages() {
         </div>
 
         <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+          {widgetNotice ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+              {widgetNotice}
+            </div>
+          ) : null}
+
+          {!showAnyWidget ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+              All widgets are hidden. Use Restore Hidden Widgets from the dashboard to bring them back.
+            </div>
+          ) : null}
+
           {/* Hero */}
+          {showHeroWidget ? (
           <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#0b1224] via-[#0f2744] to-[#0c4a6e] text-white shadow-[0_30px_80px_-24px_rgba(8,47,73,0.75)]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.22),transparent_45%)]" />
             <div className="relative p-6 md:p-8">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+                  className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/60 bg-white/85 text-sm font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide portfolio hero widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                 <div className="max-w-2xl">
                   <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-100">
@@ -472,21 +661,26 @@ export default function Mortgages() {
               </div>
             </div>
           </section>
+          ) : null}
 
           {/* Stats */}
+          {showStatsWidget ? (
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-            {[
-              { icon: Briefcase, label: 'Accounts', value: stats.totalAccounts, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
-              { icon: Wallet, label: 'Portfolio Value', value: formatAmount(stats.totalApprovedAmount), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
-              { icon: TrendingUp, label: 'Avg Installment', value: formatAmount(stats.averageInstallment), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
-              { icon: Clock, label: 'Avg Rate', value: `${stats.averageRate.toFixed(2)}%`, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
-              { icon: AlertTriangle, label: 'Overdue', value: stats.overdueCount, tone: 'text-rose-700', bg: 'from-rose-500/10 to-red-500/5' },
-              { icon: Banknote, label: 'Total Arrears', value: formatAmount(stats.totalArrears), tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
-            ].map((item) => (
+            {visibleStatsCards.map((item) => (
               <div
                 key={item.label}
                 className={`group relative overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-[0_16px_40px_-28px_rgba(14,116,144,0.55)] backdrop-blur transition hover:-translate-y-0.5 hover:shadow-[0_22px_50px_-24px_rgba(14,116,144,0.6)]`}
               >
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}${item.key}`)}
+                    className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/70 bg-white/85 text-xs font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${item.label} widget`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
@@ -498,10 +692,27 @@ export default function Mortgages() {
                 </div>
               </div>
             ))}
+            {visibleStatsCards.length === 0 ? (
+              <div className="sm:col-span-2 xl:col-span-3 2xl:col-span-6 rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+                All portfolio stat cards are hidden.
+              </div>
+            ) : null}
           </section>
+          ) : null}
 
           {/* Filters */}
-          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/90 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl">
+          {showFiltersWidget ? (
+          <section className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/90 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide portfolio filters widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <button
               type="button"
               onClick={() => setFiltersOpen((v) => !v)}
@@ -570,9 +781,21 @@ export default function Mortgages() {
               </div>
             )}
           </section>
+          ) : null}
 
           {/* Portfolio list */}
-          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+          {showPortfolioWidget ? (
+          <section className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}portfolio_list`)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide portfolio list widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <h2 className="text-lg font-extrabold text-slate-900">Portfolio Accounts</h2>
@@ -703,84 +926,49 @@ export default function Mortgages() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="min-w-[1400px] w-full">
-                  <thead>
-                    <tr className="bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-900 text-left text-[11px] font-bold uppercase tracking-[0.14em] text-white">
-                      <th className="sticky left-0 z-10 bg-slate-900 px-4 py-3">Account</th>
-                      <th className="px-4 py-3">Customer</th>
-                      <th className="px-4 py-3">Collateral</th>
-                      <th className="px-4 py-3">Principal</th>
-                      <th className="px-4 py-3">Rate</th>
-                      <th className="px-4 py-3">Due Date</th>
-                      <th className="px-4 py-3">Arrears</th>
-                      <th className="px-4 py-3">Due Principal</th>
-                      <th className="px-4 py-3">Due Interest</th>
-                      <th className="px-4 py-3">Installment</th>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {mortgages.map((m, index) => {
-                      const overdueDays = daysOverdue(m.due_date);
-                      const typeMeta = mortgageTypeMeta(m.mortgage_type);
-                      const TypeIcon = typeMeta.icon;
-                      const { installmentAmount } = computeInstallmentFigures(m);
-                      const customerName = `${m.customer?.first_name || ''} ${m.customer?.last_name || ''}`.trim() || '—';
-
-                      return (
+                {visibleTableColumns.length > 0 ? (
+                  <table className="min-w-[1400px] w-full">
+                    <thead>
+                      <tr className="bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-900 text-left text-[11px] font-bold uppercase tracking-[0.14em] text-white">
+                        {visibleTableColumns.map((column) => (
+                          <th key={column.key} className={`${column.thClassName || ''} px-4 py-3`}>
+                            <div className="flex items-center justify-between gap-2">
+                              <span>{column.label}</span>
+                              <WidgetCloseGate>
+                                <button
+                                  type="button"
+                                  onClick={() => void hideWidget(`${widgetPrefix}table_column_${column.key}`)}
+                                  className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-cyan-200/80 bg-white/90 text-[10px] font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                                  aria-label={`Hide ${column.label} column`}
+                                >
+                                  ×
+                                </button>
+                              </WidgetCloseGate>
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {mortgages.map((m, index) => (
                         <tr
                           key={m.id}
                           className={`transition hover:bg-cyan-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}
                         >
-                          <td className="sticky left-0 z-10 whitespace-nowrap bg-inherit px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <div className={`flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br ${typeMeta.color} text-white`}>
-                                <TypeIcon className="h-4 w-4" />
-                              </div>
-                              <div>
-                                <p className="text-sm font-bold text-slate-900">#{m.id}</p>
-                                <p className="text-xs capitalize text-slate-500">{typeMeta.label}</p>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            <p className="font-semibold text-slate-900">{customerName}</p>
-                            <p className="text-xs text-slate-500">{m.customer?.phone || '—'}</p>
-                            <p className="text-xs text-slate-500">{m.customer?.nic_passport || '—'}</p>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-slate-700">
-                            {m.asset?.vehicle_reg_no || m.asset?.deed_number || m.asset?.description || '—'}
-                          </td>
-                          <td className="px-4 py-3 text-sm font-bold text-cyan-700">{formatAmount(m.approved_amount ?? m.requested_amount)}</td>
-                          <td className="px-4 py-3 text-sm text-slate-700">
-                            {m.interest_rate}% <span className="text-xs">({m.interest_type})</span>
-                            <div className="text-xs text-slate-500">{m.tenure_months} mo</div>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            <p className="font-semibold text-slate-900">{formatDate(m.due_date)}</p>
-                            {(overdueDays ?? 0) > 0 ? (
-                              <p className="text-xs font-semibold text-rose-600">{overdueDays}d overdue</p>
-                            ) : (
-                              <p className="text-xs text-emerald-600">On schedule</p>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-sm font-semibold text-rose-700">{formatAmount(m.arrears_amount ?? 0)}</td>
-                          <td className="px-4 py-3 text-sm font-semibold text-slate-800">{formatAmount(m.due_amount ?? 0)}</td>
-                          <td className="px-4 py-3 text-sm font-semibold text-slate-800">{formatAmount(m.due_interest_amount ?? 0)}</td>
-                          <td className="px-4 py-3 text-sm font-semibold text-indigo-700">
-                            {formatAmount(installmentAmount)}
-                            <div className="text-xs font-medium text-slate-500">{frequencyLabel(m.installment_frequency)}</div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge label={m.status} variant={statusTone(m.status)} />
-                          </td>
-                          <td className="px-4 py-3">{renderMortgageActions(m.id)}</td>
+                          {visibleTableColumns.map((column) => (
+                            <td key={column.key} className={`${column.tdClassName || ''} px-4 py-3`}>
+                              {column.render(m)}
+                            </td>
+                          ))}
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="py-10 text-center text-sm text-slate-600">
+                    All portfolio table columns are hidden.
+                  </div>
+                )}
               </div>
             )}
 
@@ -816,6 +1004,7 @@ export default function Mortgages() {
               </div>
             )}
           </section>
+          ) : null}
         </div>
 
         {/* Payment toast */}

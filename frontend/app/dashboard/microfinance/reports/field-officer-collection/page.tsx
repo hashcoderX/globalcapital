@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type LoanRow = {
   id: number;
@@ -53,8 +54,68 @@ export default function FieldOfficerCollectionReportPage() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [officerFilter, setOfficerFilter] = useState('all');
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
 
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
+  const widgetPrefix = 'mf_field_officer_collection_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this widget. Please try again.',
+      });
+    }
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -64,6 +125,7 @@ export default function FieldOfficerCollectionReportPage() {
     }
 
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -364,7 +426,49 @@ export default function FieldOfficerCollectionReportPage() {
     doc.save(`field-officer-collection-report-${getReportFileDate()}.pdf`);
   };
 
-  if (!token || loading) {
+  const summaryCards = [
+    {
+      key: `${widgetPrefix}summary_transactions`,
+      label: 'Transactions',
+      value: String(summary.transactionCount),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: `${widgetPrefix}summary_officers`,
+      label: 'Officers',
+      value: String(summary.officerCount),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: `${widgetPrefix}summary_collected`,
+      label: 'Collected',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: `${widgetPrefix}summary_capital`,
+      label: 'Capital',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.capital),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: `${widgetPrefix}summary_interest`,
+      label: 'Interest',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.interest),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: `${widgetPrefix}summary_penalty`,
+      label: 'Penalty',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.penalty),
+      valueClass: 'text-rose-700',
+    },
+  ];
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+  const showOfficerSummarySection = !hiddenWidgetKeys.has(`${widgetPrefix}officer_summary_section`);
+  const showTransactionDetailsSection = !hiddenWidgetKeys.has(`${widgetPrefix}transaction_details_section`);
+
+  if (!token || loading || loadingWidgets) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
@@ -399,42 +503,42 @@ export default function FieldOfficerCollectionReportPage() {
           </div>
 
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Transactions</p>
-              <p className="text-sm font-extrabold text-slate-900 mt-1">{summary.transactionCount}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Officers</p>
-              <p className="text-sm font-extrabold text-slate-900 mt-1">{summary.officerCount}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Collected</p>
-              <p className="text-sm font-extrabold text-slate-900 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Capital</p>
-              <p className="text-sm font-extrabold text-slate-900 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.capital)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Interest</p>
-              <p className="text-sm font-extrabold text-slate-900 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.interest)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Penalty</p>
-              <p className="text-sm font-extrabold text-rose-700 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.penalty)}
-              </p>
-            </div>
+            {visibleSummaryCards.map((card) => (
+              <div key={card.key} className="relative rounded-xl bg-white/90 border border-white shadow-sm p-4">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(card.key)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${card.label} summary card`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
+                <p className={`text-sm font-extrabold mt-1 ${card.valueClass}`}>{card.value}</p>
+              </div>
+            ))}
           </div>
+          {visibleSummaryCards.length === 0 && (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              All summary widgets are hidden. Restore from dashboard with admin approval.
+            </div>
+          )}
         </div>
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+        {showOfficerSummarySection && (
+        <div className="relative bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}officer_summary_section`)}
+              className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide officer performance summary widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">Officer Performance Summary</h2>
             <div className="flex items-end gap-2 flex-wrap">
@@ -534,8 +638,20 @@ export default function FieldOfficerCollectionReportPage() {
             </div>
           )}
         </div>
+        )}
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+        {showTransactionDetailsSection && (
+        <div className="relative bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}transaction_details_section`)}
+              className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide transaction details widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <h2 className="text-lg font-bold text-slate-900">Transaction Details</h2>
 
           {filteredRows.length === 0 ? (
@@ -581,7 +697,31 @@ export default function FieldOfficerCollectionReportPage() {
             </div>
           )}
         </div>
+        )}
+        {!showOfficerSummarySection && !showTransactionDetailsSection && visibleSummaryCards.length === 0 && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            All widgets on this page are hidden. Use "Restore Hidden Widgets" on dashboard to show them again.
+          </div>
+        )}
       </div>
+      {widgetNotice.open && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={() => setWidgetNotice({ open: false, title: '', message: '' })} />
+          <div className="relative w-full max-w-sm rounded-2xl border border-cyan-100 bg-white p-5 shadow-xl">
+            <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
+            <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
+                className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

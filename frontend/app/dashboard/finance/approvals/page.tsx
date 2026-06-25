@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { ArrowLeft, CheckCircle2, ClipboardCheck, Clock3, Eye, Sparkles, XCircle } from 'lucide-react';
 
 type FinanceApprovalRow = {
@@ -116,9 +118,12 @@ function formatDate(v: unknown): string {
 
 export default function FinanceApprovalsPage() {
   const router = useRouter();
+  const widgetPrefix = 'finance_approvals_widget_';
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<FinanceApprovalRow[]>([]);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState('');
   const [processingId, setProcessingId] = useState<number | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -184,6 +189,68 @@ export default function FinanceApprovalsPage() {
     if (!token) return;
     fetchRows(token);
   }, [token]);
+
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const widgets = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data?.widgets)
+          ? response.data.widgets
+          : [];
+      const hidden = widgets
+        .filter(
+          (item: { widget_key?: unknown; is_visible?: unknown }) =>
+            typeof item.widget_key === 'string' &&
+            item.widget_key.startsWith(widgetPrefix) &&
+            (item.is_visible === false || Number(item.is_visible) === 0)
+        )
+        .map((item: { widget_key: string }) => item.widget_key);
+      setHiddenWidgetKeys(hidden);
+    } catch {
+      setWidgetNotice('Failed to load widget preferences.');
+    }
+  }, []);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return;
+      try {
+        await axios.post(
+          `${getApiBaseUrl()}/dashboard/widgets`,
+          { widget_key: widgetKey, is_visible: isVisible ? 1 : 0 },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice('');
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+      }
+    },
+    [token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+      await saveWidgetPreference(widgetKey, false);
+    },
+    [saveWidgetPreference]
+  );
+
+  useEffect(() => {
+    if (!token) return;
+    void fetchWidgetPreferences(token);
+  }, [token, fetchWidgetPreferences]);
 
   const buildDefaultDeductionRules = (finance: FinanceApprovalRow, defaultProfit: string): DeductionInstallmentRule[] => {
     const profitText = Number.isFinite(toNumber(defaultProfit)) ? toNumber(defaultProfit).toFixed(2) : '18.00';
@@ -481,6 +548,48 @@ export default function FinanceApprovalsPage() {
     }
   };
 
+  const statsCards = [
+    {
+      key: 'pending_queue',
+      title: 'Pending Queue',
+      value: String(pendingCount),
+      subtitle: 'Records waiting for decision',
+      icon: Clock3,
+      toneClass: 'text-cyan-800',
+    },
+    {
+      key: 'exposure',
+      title: 'Exposure',
+      value: formatAmount(totalPendingAmount),
+      subtitle: 'Total financed amount awaiting approval',
+      icon: CheckCircle2,
+      toneClass: 'text-emerald-800',
+    },
+    {
+      key: 'avg_tenure',
+      title: 'Avg Tenure',
+      value: averageTenure > 0 ? `${averageTenure.toFixed(1)} mo` : '-',
+      subtitle: 'Average tenure of queued applications',
+      icon: ClipboardCheck,
+      toneClass: 'text-violet-800',
+    },
+  ];
+  const tableColumns = [
+    { key: 'id', label: 'ID', className: 'px-3 py-2 font-semibold' },
+    { key: 'customer', label: 'Customer', className: 'px-3 py-2 font-semibold' },
+    { key: 'type', label: 'Type', className: 'px-3 py-2 font-semibold' },
+    { key: 'product', label: 'Product', className: 'px-3 py-2 font-semibold' },
+    { key: 'financed', label: 'Financed', className: 'px-3 py-2 font-semibold' },
+    { key: 'terms', label: 'Terms', className: 'px-3 py-2 font-semibold' },
+    { key: 'review', label: 'Review', className: 'px-3 py-2 font-semibold' },
+  ];
+  const showHeaderWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}header`);
+  const showStatsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}stats`);
+  const showQueueWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}queue`);
+  const visibleStatsCards = statsCards.filter((card) => !hiddenWidgetKeys.includes(`${widgetPrefix}stat_${card.key}`));
+  const visibleTableColumns = tableColumns.filter((column) => !hiddenWidgetKeys.includes(`${widgetPrefix}col_${column.key}`));
+  const showAnyWidget = showHeaderWidget || showStatsWidget || showQueueWidget;
+
   if (!token || loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
@@ -501,7 +610,30 @@ export default function FinanceApprovalsPage() {
       </div>
 
       <div className="relative z-10 max-w-6xl mx-auto space-y-5">
-        <div className="bg-white/90 rounded-3xl border border-cyan-100 p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 shadow-[0_24px_50px_-28px_rgba(8,145,178,0.45)]">
+        {widgetNotice ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-5 text-sm font-semibold text-cyan-900">
+            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
+          </div>
+        ) : null}
+
+        {showHeaderWidget ? (
+        <div className="relative bg-white/90 rounded-3xl border border-cyan-100 p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 shadow-[0_24px_50px_-28px_rgba(8,145,178,0.45)]">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+              aria-label="Hide finance approvals header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700">
               <Sparkles className="h-3.5 w-3.5" />
@@ -520,96 +652,160 @@ export default function FinanceApprovalsPage() {
             Back
           </button>
         </div>
+        ) : null}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="rounded-2xl border border-cyan-100 bg-white/90 backdrop-blur-xl p-4">
-            <div className="inline-flex items-center gap-2 text-cyan-800">
-              <Clock3 className="h-5 w-5" />
-              <p className="text-xs font-bold uppercase tracking-wide">Pending Queue</p>
-            </div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{pendingCount}</p>
-            <p className="text-xs text-slate-500">Records waiting for decision</p>
-          </div>
-
-          <div className="rounded-2xl border border-cyan-100 bg-white/90 backdrop-blur-xl p-4">
-            <div className="inline-flex items-center gap-2 text-emerald-800">
-              <CheckCircle2 className="h-5 w-5" />
-              <p className="text-xs font-bold uppercase tracking-wide">Exposure</p>
-            </div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{formatAmount(totalPendingAmount)}</p>
-            <p className="text-xs text-slate-500">Total financed amount awaiting approval</p>
-          </div>
-
-          <div className="rounded-2xl border border-cyan-100 bg-white/90 backdrop-blur-xl p-4">
-            <div className="inline-flex items-center gap-2 text-violet-800">
-              <ClipboardCheck className="h-5 w-5" />
-              <p className="text-xs font-bold uppercase tracking-wide">Avg Tenure</p>
-            </div>
-            <p className="mt-2 text-2xl font-extrabold text-slate-900">{averageTenure > 0 ? `${averageTenure.toFixed(1)} mo` : '-'}</p>
-            <p className="text-xs text-slate-500">Average tenure of queued applications</p>
-          </div>
-        </div>
-
-        <div className="bg-white/90 rounded-3xl border border-cyan-100 p-5 shadow-[0_24px_50px_-28px_rgba(8,145,178,0.35)]">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-            <div className="inline-flex items-center gap-2 text-cyan-800">
-              <ClipboardCheck className="h-5 w-5" />
-              <p className="font-bold">Pending Approval Queue</p>
-            </div>
-            <span className="inline-flex rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-bold text-cyan-700">{rows.length} records</span>
-          </div>
-
-          {rows.length === 0 ? (
-            <div className="rounded-2xl border border-cyan-100 bg-cyan-50/40 p-6 text-center">
-              <div className="mx-auto h-10 w-10 rounded-full bg-white border border-cyan-100 flex items-center justify-center">
-                <CheckCircle2 className="h-5 w-5 text-cyan-700" />
+        {showStatsWidget ? (
+          <div className="relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}stats`)}
+                className="absolute right-2 -top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                aria-label="Hide approvals stats widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            {visibleStatsCards.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {visibleStatsCards.map((card) => (
+                  <div key={card.key} className="relative rounded-2xl border border-cyan-100 bg-white/90 backdrop-blur-xl p-4">
+                    <WidgetCloseGate>
+                      <button
+                        type="button"
+                        onClick={() => void hideWidget(`${widgetPrefix}stat_${card.key}`)}
+                        className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                        aria-label={`Hide ${card.title} stat widget`}
+                      >
+                        ×
+                      </button>
+                    </WidgetCloseGate>
+                    <div className={`inline-flex items-center gap-2 ${card.toneClass}`}>
+                      <card.icon className="h-5 w-5" />
+                      <p className="text-xs font-bold uppercase tracking-wide">{card.title}</p>
+                    </div>
+                    <p className="mt-2 text-2xl font-extrabold text-slate-900">{card.value}</p>
+                    <p className="text-xs text-slate-500">{card.subtitle}</p>
+                  </div>
+                ))}
               </div>
-              <p className="mt-3 text-sm font-semibold text-slate-800">No pending finance approvals.</p>
-              <p className="text-xs text-slate-500 mt-1">New applications sent for approval will appear here.</p>
+            ) : (
+              <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+                All stats widgets are hidden.
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {showQueueWidget ? (
+          <div className="relative bg-white/90 rounded-3xl border border-cyan-100 p-5 shadow-[0_24px_50px_-28px_rgba(8,145,178,0.35)]">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}queue`)}
+                className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                aria-label="Hide pending queue widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+              <div className="inline-flex items-center gap-2 text-cyan-800">
+                <ClipboardCheck className="h-5 w-5" />
+                <p className="font-bold">Pending Approval Queue</p>
+              </div>
+              <span className="inline-flex rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-bold text-cyan-700">{rows.length} records</span>
             </div>
-          ) : (
-            <div className="overflow-x-auto rounded-xl border border-cyan-100">
-              <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70 text-slate-700">
-                  <tr>
-                    <th className="px-3 py-2 font-semibold">ID</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Type</th>
-                    <th className="px-3 py-2 font-semibold">Product</th>
-                    <th className="px-3 py-2 font-semibold">Financed</th>
-                    <th className="px-3 py-2 font-semibold">Terms</th>
-                    <th className="px-3 py-2 font-semibold">Review</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => {
-                    const customer = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim();
-                    return (
-                      <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                        <td className="px-3 py-2 font-semibold text-slate-900">#{row.id}</td>
-                        <td className="px-3 py-2">{customer || '-'}</td>
-                        <td className="px-3 py-2 capitalize">{row.finance_type || '-'}</td>
-                        <td className="px-3 py-2">{row.product_type || '-'}</td>
-                        <td className="px-3 py-2">{formatAmount(row.financed_amount)}</td>
-                        <td className="px-3 py-2">{Number.isFinite(toNumber(row.interest_rate)) ? `${toNumber(row.interest_rate).toFixed(2)}%` : '-'} / {row.tenure_months || '-'} mo</td>
-                        <td className="px-3 py-2">
-                          <button
-                            type="button"
-                            onClick={() => openDetails(row.id)}
-                            className="rounded-lg bg-cyan-100 hover:bg-cyan-200 border border-cyan-200 px-3 py-1.5 text-xs font-semibold text-cyan-800 inline-flex items-center gap-1.5"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            View Details
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+
+            {rows.length === 0 ? (
+              <div className="rounded-2xl border border-cyan-100 bg-cyan-50/40 p-6 text-center">
+                <div className="mx-auto h-10 w-10 rounded-full bg-white border border-cyan-100 flex items-center justify-center">
+                  <CheckCircle2 className="h-5 w-5 text-cyan-700" />
+                </div>
+                <p className="mt-3 text-sm font-semibold text-slate-800">No pending finance approvals.</p>
+                <p className="text-xs text-slate-500 mt-1">New applications sent for approval will appear here.</p>
+              </div>
+            ) : visibleTableColumns.length === 0 ? (
+              <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+                All queue table columns are hidden.
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-cyan-100">
+                <table className="min-w-full text-sm text-left text-slate-700 bg-white">
+                  <thead className="bg-cyan-50/70 text-slate-700">
+                    <tr>
+                      {visibleTableColumns.map((column) => (
+                        <th key={column.key} className={column.className}>
+                          <div className="inline-flex items-center gap-2">
+                            <span>{column.label}</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void hideWidget(`${widgetPrefix}col_${column.key}`);
+                                }}
+                                className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                                aria-label={`Hide ${column.label} column`}
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => {
+                      const customer = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim();
+                      return (
+                        <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
+                          {visibleTableColumns.map((column) => {
+                            if (column.key === 'id') {
+                              return <td key={column.key} className="px-3 py-2 font-semibold text-slate-900">#{row.id}</td>;
+                            }
+                            if (column.key === 'customer') {
+                              return <td key={column.key} className="px-3 py-2">{customer || '-'}</td>;
+                            }
+                            if (column.key === 'type') {
+                              return <td key={column.key} className="px-3 py-2 capitalize">{row.finance_type || '-'}</td>;
+                            }
+                            if (column.key === 'product') {
+                              return <td key={column.key} className="px-3 py-2">{row.product_type || '-'}</td>;
+                            }
+                            if (column.key === 'financed') {
+                              return <td key={column.key} className="px-3 py-2">{formatAmount(row.financed_amount)}</td>;
+                            }
+                            if (column.key === 'terms') {
+                              return (
+                                <td key={column.key} className="px-3 py-2">
+                                  {Number.isFinite(toNumber(row.interest_rate)) ? `${toNumber(row.interest_rate).toFixed(2)}%` : '-'} / {row.tenure_months || '-'} mo
+                                </td>
+                              );
+                            }
+                            return (
+                              <td key={column.key} className="px-3 py-2">
+                                <button
+                                  type="button"
+                                  onClick={() => openDetails(row.id)}
+                                  className="rounded-lg bg-cyan-100 hover:bg-cyan-200 border border-cyan-200 px-3 py-1.5 text-xs font-semibold text-cyan-800 inline-flex items-center gap-1.5"
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                  View Details
+                                </button>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {detailOpen && (

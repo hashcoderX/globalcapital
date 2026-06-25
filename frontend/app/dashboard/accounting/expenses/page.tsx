@@ -1,7 +1,7 @@
 'use client';
 
 import axios from 'axios';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -13,6 +13,8 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
+import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   accountingInputClass,
   accountingLabelClass,
@@ -100,6 +102,7 @@ function formatDate(value: string): string {
 
 export default function AccountingExpensesPage() {
   const router = useRouter();
+  const widgetPrefix = 'accounting_expenses_widget_';
 
   const [token, setToken] = useState('');
   const [loadingCompanies, setLoadingCompanies] = useState(true);
@@ -118,6 +121,8 @@ export default function AccountingExpensesPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(15);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState('');
 
   const selectedCompany = useMemo(
     () => companies.find((company) => company.id === selectedCompanyId) || null,
@@ -216,6 +221,73 @@ export default function AccountingExpensesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, selectedCompanyId, loadingCompanies]);
 
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const widgets = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data?.widgets)
+          ? response.data.widgets
+          : [];
+      const hidden = widgets
+        .filter(
+          (item: { widget_key?: unknown; is_visible?: unknown }) =>
+            typeof item.widget_key === 'string' &&
+            item.widget_key.startsWith(widgetPrefix) &&
+            (item.is_visible === false || Number(item.is_visible) === 0)
+        )
+        .map((item: { widget_key: string }) => item.widget_key);
+      setHiddenWidgetKeys(hidden);
+    } catch {
+      setWidgetNotice('Failed to load widget preferences.');
+    }
+  }, []);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return;
+      const normalizedKey = String(widgetKey || '').trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Failed to save widget preference.');
+        return;
+      }
+      try {
+        await axios.patch(
+          `${getApiBaseUrl()}/dashboard/widgets`,
+          { widget_key: normalizedKey, is_visible: Boolean(isVisible) },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice('');
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+      }
+    },
+    [token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+      await saveWidgetPreference(widgetKey, false);
+    },
+    [saveWidgetPreference]
+  );
+
+  useEffect(() => {
+    if (!token) return;
+    void fetchWidgetPreferences(token);
+  }, [token, fetchWidgetPreferences]);
+
   useEffect(() => {
     setCurrentPage(1);
   }, [expenses, pageSize, selectedCompanyId, fromDate, toDate, categoryFilter, search]);
@@ -227,6 +299,49 @@ export default function AccountingExpensesPage() {
   }, [expenses, currentPage, pageSize]);
   const paginationStart = expenses.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const paginationEnd = Math.min(currentPage * pageSize, expenses.length);
+  const statCards = [
+    {
+      key: 'total_expenses',
+      label: 'Total Expenses',
+      value: formatMoney(totalAmount, currency),
+      icon: Wallet,
+      accent: 'from-rose-500 to-red-600',
+      valueClass: 'text-rose-700',
+    },
+    {
+      key: 'records',
+      label: 'Records',
+      value: String(expenses.length),
+      icon: Building2,
+      accent: 'from-violet-500 to-purple-600',
+      valueClass: 'text-black',
+    },
+    {
+      key: 'period',
+      label: 'Period',
+      value: `${formatDate(fromDate)} – ${formatDate(toDate)}`,
+      icon: Wallet,
+      accent: 'from-cyan-500 to-blue-600',
+      valueClass: 'text-black text-xs',
+    },
+  ];
+  const tableColumns = [
+    { key: 'date', label: 'Date' },
+    { key: 'category', label: 'Category' },
+    { key: 'title', label: 'Title' },
+    { key: 'amount', label: 'Amount' },
+    { key: 'payment', label: 'Payment' },
+    { key: 'reference', label: 'Reference' },
+    { key: 'action', label: 'Action' },
+  ];
+  const showHeroWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}hero`);
+  const showNoticeWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}notice`);
+  const showStatsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}stats`);
+  const showFiltersWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}filters`);
+  const showRecordsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}records`);
+  const visibleStatCards = statCards.filter((card) => !hiddenWidgetKeys.includes(`${widgetPrefix}stat_${card.key}`));
+  const visibleTableColumns = tableColumns.filter((column) => !hiddenWidgetKeys.includes(`${widgetPrefix}col_${column.key}`));
+  const showAnyWidget = showHeroWidget || showNoticeWidget || showStatsWidget || showFiltersWidget || showRecordsWidget;
 
   const openAddModal = () => {
     setForm(emptyForm());
@@ -323,7 +438,30 @@ export default function AccountingExpensesPage() {
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="rounded-3xl border border-violet-100 bg-gradient-to-r from-violet-700 via-purple-700 to-indigo-700 p-6 text-white shadow-lg">
+        {widgetNotice ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-5 text-sm font-semibold text-violet-900">
+            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
+          </div>
+        ) : null}
+
+        {showHeroWidget ? (
+        <div className="relative rounded-3xl border border-violet-100 bg-gradient-to-r from-violet-700 via-purple-700 to-indigo-700 p-6 text-white shadow-lg">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-white/10 text-white hover:bg-white/20"
+              aria-label="Hide expenses hero widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
               <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-violet-100">Accounting</p>
@@ -368,15 +506,26 @@ export default function AccountingExpensesPage() {
             </div>
           </div>
         </div>
+        ) : null}
 
-        {notice ? (
+        {notice && showNoticeWidget ? (
           <div
-            className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${
+            className={`relative rounded-2xl border px-4 py-3 text-sm font-semibold ${
               notice.type === 'success'
                 ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
                 : 'border-rose-200 bg-rose-50 text-rose-800'
             }`}
           >
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}notice`)}
+                className="absolute right-3 top-3 inline-flex h-6 w-6 items-center justify-center rounded-full border border-current/20 bg-white/70 text-current hover:bg-white"
+                aria-label="Hide expenses notice widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <span className="inline-flex items-center gap-2">
               {notice.type === 'success' ? <CheckCircle2 className="h-4 w-4" /> : null}
               {notice.text}
@@ -384,48 +533,67 @@ export default function AccountingExpensesPage() {
           </div>
         ) : null}
 
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          {[
-            {
-              label: 'Total Expenses',
-              value: formatMoney(totalAmount, currency),
-              icon: Wallet,
-              accent: 'from-rose-500 to-red-600',
-              valueClass: 'text-rose-700',
-            },
-            {
-              label: 'Records',
-              value: String(expenses.length),
-              icon: Building2,
-              accent: 'from-violet-500 to-purple-600',
-              valueClass: 'text-black',
-            },
-            {
-              label: 'Period',
-              value: `${formatDate(fromDate)} – ${formatDate(toDate)}`,
-              icon: Wallet,
-              accent: 'from-cyan-500 to-blue-600',
-              valueClass: 'text-black text-xs',
-            },
-          ].map((item) => {
-            const Icon = item.icon;
-            return (
-              <div key={item.label} className="rounded-2xl border border-violet-100 bg-white/90 p-3.5 shadow-sm">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
-                    <p className={`mt-1 text-sm font-bold truncate tabular-nums leading-snug ${item.valueClass}`}>{item.value}</p>
-                  </div>
-                  <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${item.accent} text-white`}>
-                    <Icon className="h-3.5 w-3.5" />
-                  </div>
-                </div>
+        {showStatsWidget ? (
+          <div className="relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}stats`)}
+                className="absolute right-2 -top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+                aria-label="Hide expense stats widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            {visibleStatCards.length > 0 ? (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {visibleStatCards.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <div key={item.key} className="relative rounded-2xl border border-violet-100 bg-white/90 p-3.5 shadow-sm">
+                      <WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={() => void hideWidget(`${widgetPrefix}stat_${item.key}`)}
+                          className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+                          aria-label={`Hide ${item.label} stat widget`}
+                        >
+                          ×
+                        </button>
+                      </WidgetCloseGate>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
+                          <p className={`mt-1 text-sm font-bold truncate tabular-nums leading-snug ${item.valueClass}`}>{item.value}</p>
+                        </div>
+                        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${item.accent} text-white`}>
+                          <Icon className="h-3.5 w-3.5" />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
+            ) : (
+              <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-4 text-sm font-medium text-violet-900">
+                All expense stat cards are hidden.
+              </div>
+            )}
+          </div>
+        ) : null}
 
-        <div className="rounded-3xl border border-violet-100 bg-white/90 p-5 shadow-sm space-y-4">
+        {showFiltersWidget ? (
+        <div className="relative rounded-3xl border border-violet-100 bg-white/90 p-5 shadow-sm space-y-4">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+              className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+              aria-label="Hide expense filters widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
             <div>
               <label className={accountingLabelClass}>Company / Branch *</label>
@@ -500,8 +668,20 @@ export default function AccountingExpensesPage() {
             </button>
           </div>
         </div>
+        ) : null}
 
-        <div className="rounded-3xl border border-violet-100 bg-white/90 p-5 shadow-sm">
+        {showRecordsWidget ? (
+        <div className="relative rounded-3xl border border-violet-100 bg-white/90 p-5 shadow-sm">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}records`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+              aria-label="Hide expense records widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
             <div>
               <h2 className="text-lg font-bold text-black">Expense Records</h2>
@@ -526,45 +706,85 @@ export default function AccountingExpensesPage() {
               <p className="text-sm font-semibold text-amber-900">No expenses found</p>
               <p className="text-xs text-amber-800 mt-1">Use Add Expense to record the first expense for this branch.</p>
             </div>
+          ) : visibleTableColumns.length === 0 ? (
+            <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-8 text-center">
+              <p className="text-sm font-semibold text-violet-900">All expense table columns are hidden.</p>
+            </div>
           ) : (
             <>
               <div className="overflow-x-auto rounded-xl border border-violet-100">
                 <table className="min-w-full text-xs text-black">
                   <thead className="bg-violet-50/70 text-[10px] font-bold uppercase tracking-wider text-black">
                     <tr>
-                      <th className="px-3 py-3 text-left">Date</th>
-                      <th className="px-3 py-3 text-left">Category</th>
-                      <th className="px-3 py-3 text-left">Title</th>
-                      <th className="px-3 py-3 text-right">Amount</th>
-                      <th className="px-3 py-3 text-left">Payment</th>
-                      <th className="px-3 py-3 text-left">Reference</th>
-                      <th className="px-3 py-3 text-right">Action</th>
+                      {visibleTableColumns.map((column) => (
+                        <th
+                          key={column.key}
+                          className={`px-3 py-3 ${column.key === 'amount' || column.key === 'action' ? 'text-right' : 'text-left'}`}
+                        >
+                          <div className={`inline-flex items-center gap-2 ${column.key === 'amount' || column.key === 'action' ? 'justify-end w-full' : ''}`}>
+                            <span>{column.label}</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void hideWidget(`${widgetPrefix}col_${column.key}`);
+                                }}
+                                className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+                                aria-label={`Hide ${column.label} column`}
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-violet-50 bg-white">
                     {paginatedRows.map((row) => (
                       <tr key={row.id} className="hover:bg-violet-50/40">
-                        <td className="px-3 py-2.5 whitespace-nowrap font-semibold">{formatDate(row.expense_date)}</td>
-                        <td className="px-3 py-2.5">{categoryLabel(row.category)}</td>
-                        <td className="px-3 py-2.5">
-                          <p className="font-semibold">{row.title}</p>
-                          {row.notes ? <p className="text-[10px] text-slate-500 mt-0.5">{row.notes}</p> : null}
-                        </td>
-                        <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-rose-700">
-                          {formatMoney(row.amount, currency)}
-                        </td>
-                        <td className="px-3 py-2.5">{paymentLabel(row.payment_method)}</td>
-                        <td className="px-3 py-2.5">{row.reference_no || '—'}</td>
-                        <td className="px-3 py-2.5 text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(row.id)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-bold text-rose-700 hover:bg-rose-100"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Delete
-                          </button>
-                        </td>
+                        {visibleTableColumns.map((column) => {
+                          if (column.key === 'date') {
+                            return <td key={column.key} className="px-3 py-2.5 whitespace-nowrap font-semibold">{formatDate(row.expense_date)}</td>;
+                          }
+                          if (column.key === 'category') {
+                            return <td key={column.key} className="px-3 py-2.5">{categoryLabel(row.category)}</td>;
+                          }
+                          if (column.key === 'title') {
+                            return (
+                              <td key={column.key} className="px-3 py-2.5">
+                                <p className="font-semibold">{row.title}</p>
+                                {row.notes ? <p className="text-[10px] text-slate-500 mt-0.5">{row.notes}</p> : null}
+                              </td>
+                            );
+                          }
+                          if (column.key === 'amount') {
+                            return (
+                              <td key={column.key} className="px-3 py-2.5 text-right tabular-nums font-semibold text-rose-700">
+                                {formatMoney(row.amount, currency)}
+                              </td>
+                            );
+                          }
+                          if (column.key === 'payment') {
+                            return <td key={column.key} className="px-3 py-2.5">{paymentLabel(row.payment_method)}</td>;
+                          }
+                          if (column.key === 'reference') {
+                            return <td key={column.key} className="px-3 py-2.5">{row.reference_no || '—'}</td>;
+                          }
+                          return (
+                            <td key={column.key} className="px-3 py-2.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(row.id)}
+                                className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-bold text-rose-700 hover:bg-rose-100"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                Delete
+                              </button>
+                            </td>
+                          );
+                        })}
                       </tr>
                     ))}
                   </tbody>
@@ -614,6 +834,7 @@ export default function AccountingExpensesPage() {
             </>
           )}
         </div>
+        ) : null}
       </div>
 
       {showAddModal ? (

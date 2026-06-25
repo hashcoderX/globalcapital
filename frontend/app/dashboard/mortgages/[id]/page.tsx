@@ -7,6 +7,7 @@ import Badge from '../_components/Badge';
 import ActionButton from '../_components/ActionButton';
 import ClientMountGate from '@/app/components/ClientMountGate';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   ArrowLeft,
   Banknote,
@@ -89,6 +90,9 @@ export default function MortgageDetails() {
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<StatusAction | null>(null);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
+  const widgetPrefix = 'mortgages_details_widget_';
 
   const openToast = (kind: 'success' | 'error', message: string) => {
     setToast({ kind, message });
@@ -122,7 +126,53 @@ export default function MortgageDetails() {
     }
     setToken(t);
     fetchMortgage(t);
+    void fetchWidgetPreferences(t);
   }, [router, fetchMortgage]);
+
+  async function fetchWidgetPreferences(authToken: string) {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  }
+
+  const saveWidgetPreference = useCallback(async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${getApiBaseUrl()}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, [token]);
+
+  const hideWidget = useCallback(async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
+  }, [hiddenWidgetKeys, saveWidgetPreference]);
 
   const handleStatus = async (action: StatusAction) => {
     if (!token || !id) return;
@@ -173,6 +223,44 @@ export default function MortgageDetails() {
 
   const typeMeta = mortgageTypeMeta(String(mortgage?.mortgage_type || 'other'));
   const TypeIcon = typeMeta.icon;
+  const statCards = [
+    { key: 'stat_requested', icon: Banknote, label: 'Requested', value: formatAmount(mortgage.requested_amount), tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
+    { key: 'stat_approved', icon: CheckCircle2, label: 'Approved', value: formatAmount(mortgage.approved_amount), tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
+    { key: 'stat_installment', icon: Wallet, label: 'Installment', value: formatAmount(mortgage.installment_amount ?? monthlyFigures.monthlyInstallment), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
+    { key: 'stat_total_interest', icon: PercentCircle, label: 'Total Interest', value: formatAmount(monthlyFigures.totalInterest), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
+    { key: 'stat_due_principal', icon: Landmark, label: 'Due Principal', value: formatAmount(mortgage.due_amount), tone: 'text-slate-800', bg: 'from-slate-400/10 to-zinc-500/5' },
+    { key: 'stat_due_interest', icon: PercentCircle, label: 'Due Interest', value: formatAmount(mortgage.due_interest_amount), tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
+    { key: 'stat_total_paid', icon: Banknote, label: 'Total Paid', value: formatAmount(mortgage.total_paid_amount), tone: 'text-violet-700', bg: 'from-violet-500/10 to-purple-500/5' },
+    { key: 'stat_tenure', icon: CalendarDays, label: 'Tenure', value: `${mortgage.tenure_months || '—'} mo`, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
+  ];
+  const visibleStatCards = statCards.filter((item) => !hiddenWidgetKeys.has(`${widgetPrefix}${item.key}`));
+
+  const guarantorColumns = [
+    { key: 'name', label: 'Name', render: (g: any) => g.name || g.full_name || '—', className: 'font-semibold text-slate-900' },
+    { key: 'nic', label: 'NIC', render: (g: any) => g.nic || '—', className: 'text-black' },
+    { key: 'relationship', label: 'Relationship', render: (g: any) => g.relationship || '—', className: 'text-black' },
+    { key: 'income', label: 'Income', render: (g: any) => formatAmount(g.income ?? g.monthly_income), className: 'text-black' },
+    { key: 'contact', label: 'Contact', render: (g: any) => g.contact_number || '—', className: 'text-black' },
+  ];
+  const visibleGuarantorColumns = guarantorColumns.filter((column) => !hiddenWidgetKeys.has(`${widgetPrefix}guarantor_column_${column.key}`));
+
+  const showHeroWidget = !hiddenWidgetKeys.has(`${widgetPrefix}hero`);
+  const showStatsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}stats_section`);
+  const showFinancialWidget = !hiddenWidgetKeys.has(`${widgetPrefix}financial_details`);
+  const showWorkflowWidget = !hiddenWidgetKeys.has(`${widgetPrefix}workflow`);
+  const showRepaymentWidget = !hiddenWidgetKeys.has(`${widgetPrefix}repayment_terms`);
+  const showCollateralWidget = !hiddenWidgetKeys.has(`${widgetPrefix}collateral`);
+  const showValuationWidget = !hiddenWidgetKeys.has(`${widgetPrefix}valuation`);
+  const showGuarantorsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}guarantors`);
+  const showAnyWidget =
+    showHeroWidget ||
+    (showStatsWidget && visibleStatCards.length > 0) ||
+    showFinancialWidget ||
+    showWorkflowWidget ||
+    showRepaymentWidget ||
+    showCollateralWidget ||
+    showValuationWidget ||
+    showGuarantorsWidget;
 
   const pageFallback = (
     <div className="flex min-h-screen items-center justify-center bg-[#071a22]">
@@ -227,9 +315,32 @@ export default function MortgageDetails() {
         </div>
 
         <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+          {widgetNotice ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+              {widgetNotice}
+            </div>
+          ) : null}
+
+          {!showAnyWidget ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+              All widgets are hidden. Use Restore Hidden Widgets from the dashboard to bring them back.
+            </div>
+          ) : null}
+
+          {showHeroWidget ? (
           <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#0a1a24] via-[#0f3a52] to-[#0c5a7a] text-white shadow-[0_30px_80px_-24px_rgba(14,116,144,0.8)]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.25),transparent_42%)]" />
             <div className="relative p-6 md:p-8">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+                  className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/60 bg-white/85 text-sm font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide mortgage hero widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex items-start gap-4">
                   <div className={`flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br ${typeMeta.color} text-white shadow-lg`}>
@@ -309,22 +420,25 @@ export default function MortgageDetails() {
               </div>
             </div>
           </section>
+          ) : null}
 
+          {showStatsWidget ? (
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
-            {[
-              { icon: Banknote, label: 'Requested', value: formatAmount(mortgage.requested_amount), tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
-              { icon: CheckCircle2, label: 'Approved', value: formatAmount(mortgage.approved_amount), tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
-              { icon: Wallet, label: 'Installment', value: formatAmount(mortgage.installment_amount ?? monthlyFigures.monthlyInstallment), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
-              { icon: PercentCircle, label: 'Total Interest', value: formatAmount(monthlyFigures.totalInterest), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
-              { icon: Landmark, label: 'Due Principal', value: formatAmount(mortgage.due_amount), tone: 'text-slate-800', bg: 'from-slate-400/10 to-zinc-500/5' },
-              { icon: PercentCircle, label: 'Due Interest', value: formatAmount(mortgage.due_interest_amount), tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
-              { icon: Banknote, label: 'Total Paid', value: formatAmount(mortgage.total_paid_amount), tone: 'text-violet-700', bg: 'from-violet-500/10 to-purple-500/5' },
-              { icon: CalendarDays, label: 'Tenure', value: `${mortgage.tenure_months || '—'} mo`, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
-            ].map((item) => (
+            {visibleStatCards.map((item) => (
               <div
                 key={item.label}
-                className={`overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
+                className={`relative overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
               >
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}${item.key}`)}
+                    className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/70 bg-white/85 text-xs font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${item.label} widget`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
@@ -336,10 +450,28 @@ export default function MortgageDetails() {
                 </div>
               </div>
             ))}
+            {visibleStatCards.length === 0 ? (
+              <div className="sm:col-span-2 xl:col-span-4 2xl:col-span-8 rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+                All summary cards are hidden.
+              </div>
+            ) : null}
           </section>
+          ) : null}
 
+          {showFinancialWidget || showWorkflowWidget || showRepaymentWidget ? (
           <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <div className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl lg:col-span-2">
+            {showFinancialWidget ? (
+            <div className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl lg:col-span-2">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}financial_details`)}
+                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide financial details widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="border-b border-slate-100 bg-gradient-to-r from-cyan-50/80 to-blue-50/50 px-5 py-4">
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Financial Details</p>
                 <h2 className="mt-1 text-lg font-extrabold text-slate-900">Core finance snapshot</h2>
@@ -365,9 +497,22 @@ export default function MortgageDetails() {
                 ))}
               </div>
             </div>
+            ) : null}
 
+            {showWorkflowWidget || showRepaymentWidget ? (
             <div className="space-y-6">
-              <div className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-sm backdrop-blur-xl">
+              {showWorkflowWidget ? (
+              <div className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-sm backdrop-blur-xl">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}workflow`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide workflow widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="border-b border-slate-100 px-5 py-4">
                   <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Workflow</p>
                   <h2 className="mt-1 text-lg font-extrabold text-slate-900">Status actions</h2>
@@ -413,8 +558,20 @@ export default function MortgageDetails() {
                   </div>
                 </div>
               </div>
+              ) : null}
 
-              <div className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-sm backdrop-blur-xl">
+              {showRepaymentWidget ? (
+              <div className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-sm backdrop-blur-xl">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}repayment_terms`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide repayment terms widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="border-b border-slate-100 px-5 py-4">
                   <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Structure</p>
                   <h2 className="mt-1 text-lg font-extrabold text-slate-900">Repayment terms</h2>
@@ -433,11 +590,26 @@ export default function MortgageDetails() {
                   ))}
                 </div>
               </div>
+              ) : null}
             </div>
+            ) : null}
           </section>
+          ) : null}
 
+          {showCollateralWidget || showValuationWidget ? (
           <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <div className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-sm backdrop-blur-xl">
+            {showCollateralWidget ? (
+            <div className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-sm backdrop-blur-xl">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}collateral`)}
+                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide collateral widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="border-b border-slate-100 px-5 py-4">
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Collateral</p>
                 <h2 className="mt-1 text-lg font-extrabold text-slate-900">Asset details</h2>
@@ -471,8 +643,20 @@ export default function MortgageDetails() {
                 )}
               </div>
             </div>
+            ) : null}
 
-            <div className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-sm backdrop-blur-xl">
+            {showValuationWidget ? (
+            <div className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-sm backdrop-blur-xl">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}valuation`)}
+                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide valuation widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="border-b border-slate-100 px-5 py-4">
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Valuation</p>
                 <h2 className="mt-1 text-lg font-extrabold text-slate-900">Market values</h2>
@@ -506,9 +690,22 @@ export default function MortgageDetails() {
                 )}
               </div>
             </div>
+            ) : null}
           </section>
+          ) : null}
 
-          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+          {showGuarantorsWidget ? (
+          <section className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}guarantors`)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide guarantors widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="border-b border-slate-100 px-5 py-4">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Guarantors</p>
               <h2 className="mt-1 text-lg font-extrabold text-slate-900">People backing this mortgage</h2>
@@ -516,28 +713,46 @@ export default function MortgageDetails() {
             <div className="p-5">
               {Array.isArray(mortgage.guarantors) && mortgage.guarantors.length > 0 ? (
                 <div className="overflow-x-auto rounded-2xl border border-cyan-100">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
-                        <th className="px-4 py-3 text-black">Name</th>
-                        <th className="px-4 py-3 text-black">NIC</th>
-                        <th className="px-4 py-3 text-black">Relationship</th>
-                        <th className="px-4 py-3 text-black">Income</th>
-                        <th className="px-4 py-3 text-black">Contact</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {mortgage.guarantors.map((g: any, idx: number) => (
-                        <tr key={idx} className="hover:bg-cyan-50/40">
-                          <td className="px-4 py-2.5 font-semibold text-slate-900">{g.name || g.full_name || '—'}</td>
-                          <td className="px-4 py-2.5 text-black">{g.nic || '—'}</td>
-                          <td className="px-4 py-2.5 text-black">{g.relationship || '—'}</td>
-                          <td className="px-4 py-2.5 text-black">{formatAmount(g.income ?? g.monthly_income)}</td>
-                          <td className="px-4 py-2.5 text-black">{g.contact_number || '—'}</td>
+                  {visibleGuarantorColumns.length > 0 ? (
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
+                          {visibleGuarantorColumns.map((column) => (
+                            <th key={column.key} className="px-4 py-3 text-black">
+                              <div className="flex items-center justify-between gap-2">
+                                <span>{column.label}</span>
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => void hideWidget(`${widgetPrefix}guarantor_column_${column.key}`)}
+                                    className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                                    aria-label={`Hide guarantor ${column.label} column`}
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                              </div>
+                            </th>
+                          ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {mortgage.guarantors.map((g: any, idx: number) => (
+                          <tr key={idx} className="hover:bg-cyan-50/40">
+                            {visibleGuarantorColumns.map((column) => (
+                              <td key={column.key} className={`px-4 py-2.5 ${column.className}`}>
+                                {column.render(g)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="p-4 text-sm text-slate-600">
+                      All guarantor columns are hidden.
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="flex items-center gap-2 rounded-xl border border-cyan-100 bg-cyan-50/60 p-4 text-sm text-slate-600">
@@ -547,6 +762,7 @@ export default function MortgageDetails() {
               )}
             </div>
           </section>
+          ) : null}
         </div>
 
         {toast && (

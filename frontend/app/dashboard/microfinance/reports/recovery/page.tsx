@@ -2,10 +2,11 @@
 
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type LoanRow = {
   id: number;
@@ -52,8 +53,68 @@ export default function RecoveryReportPage() {
   const [rows, setRows] = useState<RecoveryRow[]>([]);
   const [officerFilter, setOfficerFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState<'all' | 'urgent' | 'high' | 'medium' | 'low'>('all');
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
 
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
+  const widgetPrefix = 'mf_recovery_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this widget. Please try again.',
+      });
+    }
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -63,6 +124,7 @@ export default function RecoveryReportPage() {
     }
 
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -225,6 +287,58 @@ export default function RecoveryReportPage() {
   }, [summary.count, summary.urgent, summary.high]);
 
   const formatMoney = (value: number) => Number(value || 0).toFixed(2);
+  const summaryCards = [
+    {
+      key: `${widgetPrefix}summary_accounts`,
+      label: 'Recovery Accounts',
+      value: String(summary.count),
+      valueClass: 'text-white',
+      boxClass: 'border-white/20 bg-white/10 backdrop-blur',
+      labelClass: 'text-cyan-100',
+    },
+    {
+      key: `${widgetPrefix}summary_pending`,
+      label: 'Pending',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending),
+      valueClass: 'text-rose-700',
+      boxClass: 'border-rose-200/70 bg-white shadow-sm',
+      labelClass: 'text-rose-500',
+    },
+    {
+      key: `${widgetPrefix}summary_arrears`,
+      label: 'Arrears',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.arrears),
+      valueClass: 'text-orange-700',
+      boxClass: 'border-orange-200/70 bg-white shadow-sm',
+      labelClass: 'text-orange-500',
+    },
+    {
+      key: `${widgetPrefix}summary_urgent_high`,
+      label: 'Urgent / High',
+      value: `${summary.urgent} / ${summary.high}`,
+      valueClass: 'text-red-700',
+      boxClass: 'border-red-200/70 bg-white shadow-sm',
+      labelClass: 'text-red-500',
+    },
+    {
+      key: `${widgetPrefix}summary_medium_low`,
+      label: 'Medium / Low',
+      value: `${summary.medium} / ${summary.low}`,
+      valueClass: 'text-cyan-700',
+      boxClass: 'border-cyan-200/70 bg-white shadow-sm',
+      labelClass: 'text-cyan-500',
+    },
+    {
+      key: `${widgetPrefix}summary_collected`,
+      label: 'Collected',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected),
+      valueClass: 'text-emerald-700',
+      boxClass: 'border-emerald-200/70 bg-white shadow-sm',
+      labelClass: 'text-emerald-500',
+    },
+  ];
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+  const showRecoveryPortfolioSection = !hiddenWidgetKeys.has(`${widgetPrefix}portfolio_section`);
 
   const formatDate = (value: string) => {
     if (!value || value === '-') return '-';
@@ -237,6 +351,47 @@ export default function RecoveryReportPage() {
       day: '2-digit',
     }).format(parsed);
   };
+
+  const tableColumns: Array<{
+    key: string;
+    label: string;
+    render: (row: RecoveryRow) => ReactNode;
+    thClassName?: string;
+    tdClassName?: string;
+  }> = [
+    { key: 'loan_id', label: 'Loan ID', render: (row) => row.loanId },
+    { key: 'customer_no', label: 'Customer No', render: (row) => row.customerNo, tdClassName: 'font-semibold text-slate-900' },
+    { key: 'customer_name', label: 'Customer', render: (row) => row.customerName },
+    { key: 'field_officer', label: 'Field Officer', render: (row) => row.fieldOfficer },
+    { key: 'loan_status', label: 'Loan Status', render: (row) => row.loanStatus, tdClassName: 'capitalize' },
+    { key: 'pending', label: 'Pending', render: (row) => formatMoney(row.pendingAmount), tdClassName: 'font-semibold text-rose-700' },
+    { key: 'arrears', label: 'Arrears', render: (row) => formatMoney(row.arrearsAmount), tdClassName: 'font-semibold text-orange-700' },
+    { key: 'due_date', label: 'Due Date', render: (row) => formatDate(row.dueDate) },
+    { key: 'next_payment', label: 'Next Payment', render: (row) => formatDate(row.nextPaymentDate) },
+    { key: 'overdue_days', label: 'Overdue Days', render: (row) => row.overdueDays },
+    {
+      key: 'priority',
+      label: 'Priority',
+      render: (row) => (
+        <span
+          className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${
+            row.recoveryPriority === 'urgent'
+              ? 'border-red-200 bg-red-50 text-red-800'
+              : row.recoveryPriority === 'high'
+              ? 'border-orange-200 bg-orange-50 text-orange-800'
+              : row.recoveryPriority === 'medium'
+              ? 'border-amber-200 bg-amber-50 text-amber-800'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+          }`}
+        >
+          {row.recoveryPriority}
+        </span>
+      ),
+    },
+  ];
+  const visibleTableColumns = tableColumns.filter(
+    (column) => !hiddenWidgetKeys.has(`${widgetPrefix}table_col_${column.key}`)
+  );
 
   const getReportFileDate = () => new Date().toISOString().slice(0, 10);
 
@@ -352,7 +507,7 @@ export default function RecoveryReportPage() {
     doc.save(`recovery-report-${getReportFileDate()}.pdf`);
   };
 
-  if (!token || loading) {
+  if (!token || loading || loadingWidgets) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#e6f7ff] via-[#eefcf7] to-[#f0f9ff] flex items-center justify-center">
         <div className="h-14 w-14 animate-spin rounded-full border-4 border-cyan-100 border-t-cyan-600" />
@@ -399,40 +554,42 @@ export default function RecoveryReportPage() {
           </div>
 
           <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <div className="rounded-2xl border border-white/20 bg-white/10 p-4 backdrop-blur">
-              <p className="text-[10px] uppercase tracking-wide text-cyan-100">Recovery Accounts</p>
-              <p className="mt-1 text-lg font-black text-white">{summary.count}</p>
-            </div>
-            <div className="rounded-2xl border border-rose-200/70 bg-white p-4 shadow-sm">
-              <p className="text-[10px] uppercase tracking-wide text-rose-500">Pending</p>
-              <p className="mt-1 text-lg font-black text-rose-700">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending)}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-orange-200/70 bg-white p-4 shadow-sm">
-              <p className="text-[10px] uppercase tracking-wide text-orange-500">Arrears</p>
-              <p className="mt-1 text-lg font-black text-orange-700">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.arrears)}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-red-200/70 bg-white p-4 shadow-sm">
-              <p className="text-[10px] uppercase tracking-wide text-red-500">Urgent / High</p>
-              <p className="mt-1 text-lg font-black text-red-700">{summary.urgent} / {summary.high}</p>
-            </div>
-            <div className="rounded-2xl border border-cyan-200/70 bg-white p-4 shadow-sm">
-              <p className="text-[10px] uppercase tracking-wide text-cyan-500">Medium / Low</p>
-              <p className="mt-1 text-lg font-black text-cyan-700">{summary.medium} / {summary.low}</p>
-            </div>
-            <div className="rounded-2xl border border-emerald-200/70 bg-white p-4 shadow-sm">
-              <p className="text-[10px] uppercase tracking-wide text-emerald-500">Collected</p>
-              <p className="mt-1 text-lg font-black text-emerald-700">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected)}
-              </p>
-            </div>
+            {visibleSummaryCards.map((card) => (
+              <div key={card.key} className={`relative rounded-2xl border p-4 ${card.boxClass}`}>
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(card.key)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${card.label} summary card`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <p className={`text-[10px] uppercase tracking-wide ${card.labelClass}`}>{card.label}</p>
+                <p className={`mt-1 text-lg font-black ${card.valueClass}`}>{card.value}</p>
+              </div>
+            ))}
           </div>
+          {visibleSummaryCards.length === 0 && (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              All summary widgets are hidden. Restore from dashboard with admin approval.
+            </div>
+          )}
         </div>
 
-        <div className="rounded-3xl border border-cyan-100 bg-white/90 p-4 shadow-[0_20px_45px_-24px_rgba(14,116,144,0.45)] backdrop-blur-xl md:p-5">
+        {showRecoveryPortfolioSection && (
+        <div className="relative rounded-3xl border border-cyan-100 bg-white/90 p-4 shadow-[0_20px_45px_-24px_rgba(14,116,144,0.45)] backdrop-blur-xl md:p-5">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}portfolio_section`)}
+              className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide recovery portfolio widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 flex-wrap border-b border-cyan-100/80 pb-4">
             <div>
               <h2 className="text-xl font-black text-slate-900">Recovery Portfolio</h2>
@@ -520,50 +677,40 @@ export default function RecoveryReportPage() {
             <div className="mt-4 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-100/60 to-teal-100/40 p-8 text-center text-sm text-slate-700">
               No recovery data found for selected filters.
             </div>
+          ) : visibleTableColumns.length === 0 ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-8 text-center text-sm text-amber-800">
+              All table columns are hidden. Restore from dashboard with admin approval.
+            </div>
           ) : (
             <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 bg-white">
               <table className="min-w-full text-left text-sm text-slate-700">
                 <thead className="bg-cyan-50/80 text-slate-700">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Loan ID</th>
-                    <th className="px-3 py-2 font-semibold">Customer No</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Field Officer</th>
-                    <th className="px-3 py-2 font-semibold">Loan Status</th>
-                    <th className="px-3 py-2 font-semibold">Pending</th>
-                    <th className="px-3 py-2 font-semibold">Arrears</th>
-                    <th className="px-3 py-2 font-semibold">Due Date</th>
-                    <th className="px-3 py-2 font-semibold">Next Payment</th>
-                    <th className="px-3 py-2 font-semibold">Overdue Days</th>
-                    <th className="px-3 py-2 font-semibold">Priority</th>
+                    {visibleTableColumns.map((column) => (
+                      <th key={column.key} className={`relative px-3 py-2 font-semibold ${column.thClassName || ''}`}>
+                        {column.label}
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => void hideWidget(`${widgetPrefix}table_col_${column.key}`)}
+                            className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                            aria-label={`Hide ${column.label} column`}
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredRows.map((row) => (
                     <tr key={row.loanId} className="border-b border-cyan-100 transition-colors hover:bg-cyan-50/40 last:border-b-0">
-                      <td className="px-3 py-2">{row.loanId}</td>
-                      <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
-                      <td className="px-3 py-2">{row.customerName}</td>
-                      <td className="px-3 py-2">{row.fieldOfficer}</td>
-                      <td className="px-3 py-2 capitalize">{row.loanStatus}</td>
-                      <td className="px-3 py-2 font-semibold text-rose-700">{formatMoney(row.pendingAmount)}</td>
-                      <td className="px-3 py-2 font-semibold text-orange-700">{formatMoney(row.arrearsAmount)}</td>
-                      <td className="px-3 py-2">{formatDate(row.dueDate)}</td>
-                      <td className="px-3 py-2">{formatDate(row.nextPaymentDate)}</td>
-                      <td className="px-3 py-2">{row.overdueDays}</td>
-                      <td className="px-3 py-2">
-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${
-                          row.recoveryPriority === 'urgent'
-                            ? 'border-red-200 bg-red-50 text-red-800'
-                            : row.recoveryPriority === 'high'
-                            ? 'border-orange-200 bg-orange-50 text-orange-800'
-                            : row.recoveryPriority === 'medium'
-                            ? 'border-amber-200 bg-amber-50 text-amber-800'
-                            : 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                        }`}>
-                          {row.recoveryPriority}
-                        </span>
-                      </td>
+                      {visibleTableColumns.map((column) => (
+                        <td key={`${row.loanId}-${column.key}`} className={`px-3 py-2 ${column.tdClassName || ''}`}>
+                          {column.render(row)}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
@@ -571,7 +718,31 @@ export default function RecoveryReportPage() {
             </div>
           )}
         </div>
+        )}
+        {!showRecoveryPortfolioSection && visibleSummaryCards.length === 0 && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            All widgets on this page are hidden. Use "Restore Hidden Widgets" on dashboard to show them again.
+          </div>
+        )}
       </div>
+      {widgetNotice.open && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={() => setWidgetNotice({ open: false, title: '', message: '' })} />
+          <div className="relative w-full max-w-sm rounded-2xl border border-cyan-100 bg-white p-5 shadow-xl">
+            <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
+            <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
+                className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

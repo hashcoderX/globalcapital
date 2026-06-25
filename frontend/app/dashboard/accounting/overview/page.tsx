@@ -1,7 +1,7 @@
 'use client';
 
 import axios from 'axios';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -11,6 +11,8 @@ import {
   TrendingUp,
   Wallet,
 } from 'lucide-react';
+import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   accountingInputClass,
   accountingLabelClass,
@@ -134,6 +136,7 @@ function formatDateLabel(value?: string): string {
 
 export default function AccountingOverviewPage() {
   const router = useRouter();
+  const widgetPrefix = 'accounting_overview_widget_';
 
   const [token, setToken] = useState('');
   const [loadingCompanies, setLoadingCompanies] = useState(true);
@@ -144,6 +147,8 @@ export default function AccountingOverviewPage() {
   const [toDate, setToDate] = useState(todayIso());
   const [overview, setOverview] = useState<OverviewPayload | null>(null);
   const [error, setError] = useState('');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState('');
 
   const selectedCompany = useMemo(
     () => companies.find((company) => company.id === selectedCompanyId) || null,
@@ -237,6 +242,73 @@ export default function AccountingOverviewPage() {
     fetchOverview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, selectedCompanyId, loadingCompanies]);
+
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const widgets = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data?.widgets)
+          ? response.data.widgets
+          : [];
+      const hidden = widgets
+        .filter(
+          (item: { widget_key?: unknown; is_visible?: unknown }) =>
+            typeof item.widget_key === 'string' &&
+            item.widget_key.startsWith(widgetPrefix) &&
+            (item.is_visible === false || Number(item.is_visible) === 0)
+        )
+        .map((item: { widget_key: string }) => item.widget_key);
+      setHiddenWidgetKeys(hidden);
+    } catch {
+      setWidgetNotice('Failed to load widget preferences.');
+    }
+  }, []);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return;
+      const normalizedKey = String(widgetKey || '').trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Failed to save widget preference.');
+        return;
+      }
+      try {
+        await axios.patch(
+          `${getApiBaseUrl()}/dashboard/widgets`,
+          { widget_key: normalizedKey, is_visible: Boolean(isVisible) },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice('');
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+      }
+    },
+    [token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+      await saveWidgetPreference(widgetKey, false);
+    },
+    [saveWidgetPreference]
+  );
+
+  useEffect(() => {
+    if (!token) return;
+    void fetchWidgetPreferences(token);
+  }, [token, fetchWidgetPreferences]);
 
   const getValue = (sectionKey: keyof OverviewPayload, lineKey: string): number => {
     const section = overview?.[sectionKey];
@@ -340,6 +412,25 @@ export default function AccountingOverviewPage() {
     return { assets, liabilities, income, expenses, profitBars, loanReceivable };
   }, [overview]);
 
+  const showHeroWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}hero`);
+  const showErrorWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}error`);
+  const showFiltersWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}filters`);
+  const showChartsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}charts`);
+  const showSectionsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}sections`);
+  const showBreakdownWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}breakdown`);
+  const visibleSections = SECTIONS.filter((section) => !hiddenWidgetKeys.includes(`${widgetPrefix}section_${section.dataKey}`));
+  const breakdownItems = [
+    { key: 'finance', label: 'Finance' },
+    { key: 'microfinance', label: 'Microfinance' },
+    { key: 'instant_loans', label: 'Instant Loans' },
+    { key: 'mortgages', label: 'Mortgages' },
+  ];
+  const visibleBreakdownItems = breakdownItems.filter(
+    (item) => !hiddenWidgetKeys.includes(`${widgetPrefix}breakdown_${item.key}`)
+  );
+  const showAnyWidget =
+    showHeroWidget || showErrorWidget || showFiltersWidget || showChartsWidget || showSectionsWidget || showBreakdownWidget;
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-violet-50 via-purple-50 to-indigo-50 flex items-center justify-center">
@@ -356,7 +447,30 @@ export default function AccountingOverviewPage() {
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="rounded-3xl border border-violet-100 bg-gradient-to-r from-violet-700 via-purple-700 to-indigo-700 p-6 text-white shadow-lg">
+        {widgetNotice ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-5 text-sm font-semibold text-violet-900">
+            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
+          </div>
+        ) : null}
+
+        {showHeroWidget ? (
+        <div className="relative rounded-3xl border border-violet-100 bg-gradient-to-r from-violet-700 via-purple-700 to-indigo-700 p-6 text-white shadow-lg">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-white/10 text-white hover:bg-white/20"
+              aria-label="Hide accounting overview hero widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
               <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-violet-100">Accounting</p>
@@ -392,14 +506,36 @@ export default function AccountingOverviewPage() {
             </div>
           </div>
         </div>
+        ) : null}
 
-        {error ? (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+        {error && showErrorWidget ? (
+          <div className="relative rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}error`)}
+                className="absolute right-3 top-3 inline-flex h-6 w-6 items-center justify-center rounded-full border border-rose-200 bg-white text-rose-700 hover:bg-rose-100"
+                aria-label="Hide overview error widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             {error}
           </div>
         ) : null}
 
-        <div className="rounded-3xl border border-violet-100 bg-white/90 p-5 shadow-sm space-y-4">
+        {showFiltersWidget ? (
+        <div className="relative rounded-3xl border border-violet-100 bg-white/90 p-5 shadow-sm space-y-4">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+              className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+              aria-label="Hide overview filters widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
             <div>
               <label className={accountingLabelClass}>Company / Branch *</label>
@@ -447,6 +583,7 @@ export default function AccountingOverviewPage() {
             . Wallet preview lines show approved collector deposits and handovers/transfers for super admin visibility; they do not replace core `total_income`. Monthly and yearly profit use the calendar month and year.
           </p>
         </div>
+        ) : null}
 
         {loading ? (
           <div className="py-16 flex justify-center">
@@ -458,21 +595,56 @@ export default function AccountingOverviewPage() {
           </div>
         ) : (
           <>
-            <OverviewCharts
-              currency={currency}
-              assets={chartData.assets}
-              liabilities={chartData.liabilities}
-              income={chartData.income}
-              expenses={chartData.expenses}
-              profitBars={chartData.profitBars}
-              loanReceivable={chartData.loanReceivable}
-            />
+            {showChartsWidget ? (
+              <div className="relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}charts`)}
+                    className="absolute right-2 -top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+                    aria-label="Hide overview charts widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <OverviewCharts
+                  currency={currency}
+                  assets={chartData.assets}
+                  liabilities={chartData.liabilities}
+                  income={chartData.income}
+                  expenses={chartData.expenses}
+                  profitBars={chartData.profitBars}
+                  loanReceivable={chartData.loanReceivable}
+                />
+              </div>
+            ) : null}
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              {SECTIONS.map((section) => {
+            {showSectionsWidget ? (
+            <div className="relative grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}sections`)}
+                  className="absolute right-0 -top-4 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+                  aria-label="Hide overview section cards widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
+              {visibleSections.map((section) => {
                 const Icon = section.icon;
                 return (
-                  <div key={section.title} className="rounded-3xl border border-violet-100 bg-white/90 shadow-sm overflow-hidden">
+                  <div key={section.title} className="relative rounded-3xl border border-violet-100 bg-white/90 shadow-sm overflow-hidden">
+                    <WidgetCloseGate>
+                      <button
+                        type="button"
+                        onClick={() => void hideWidget(`${widgetPrefix}section_${section.dataKey}`)}
+                        className="absolute right-3 top-3 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+                        aria-label={`Hide ${section.title} section widget`}
+                      >
+                        ×
+                      </button>
+                    </WidgetCloseGate>
                     <div className={`bg-gradient-to-r ${section.headerClass} px-5 py-3 flex items-center gap-2`}>
                       <Icon className="h-4 w-4 text-white" />
                       <h2 className="text-sm font-extrabold text-white">{section.title}</h2>
@@ -502,24 +674,46 @@ export default function AccountingOverviewPage() {
                 );
               })}
             </div>
+            ) : null}
 
-            {overview?.breakdown?.loan_receivable ? (
-              <div className="rounded-3xl border border-violet-100 bg-white/90 p-5 shadow-sm">
+            {overview?.breakdown?.loan_receivable && showBreakdownWidget ? (
+              <div className="relative rounded-3xl border border-violet-100 bg-white/90 p-5 shadow-sm">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}breakdown`)}
+                    className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+                    aria-label="Hide loan receivable breakdown widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <h3 className="text-sm font-bold text-black mb-3">Loan Receivable Breakdown</h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {[
-                    { key: 'finance', label: 'Finance' },
-                    { key: 'microfinance', label: 'Microfinance' },
-                    { key: 'instant_loans', label: 'Instant Loans' },
-                    { key: 'mortgages', label: 'Mortgages' },
-                  ].map((item) => (
-                    <div key={item.key} className="rounded-2xl border border-violet-100 bg-violet-50/40 p-3.5">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
-                      <p className="mt-1 text-sm font-bold tabular-nums text-black">
-                        {formatMoney(overview.breakdown?.loan_receivable?.[item.key] || 0, currency)}
-                      </p>
+                  {visibleBreakdownItems.length > 0 ? (
+                    visibleBreakdownItems.map((item) => (
+                      <div key={item.key} className="relative rounded-2xl border border-violet-100 bg-violet-50/40 p-3.5">
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => void hideWidget(`${widgetPrefix}breakdown_${item.key}`)}
+                            className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+                            aria-label={`Hide ${item.label} breakdown widget`}
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
+                        <p className="mt-1 text-sm font-bold tabular-nums text-black">
+                          {formatMoney(overview.breakdown?.loan_receivable?.[item.key] || 0, currency)}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="col-span-full rounded-2xl border border-violet-200 bg-violet-50 px-4 py-4 text-sm font-medium text-violet-900">
+                      All breakdown cards are hidden.
                     </div>
-                  ))}
+                  )}
                 </div>
               </div>
             ) : null}

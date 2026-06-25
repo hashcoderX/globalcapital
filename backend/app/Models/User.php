@@ -84,6 +84,16 @@ class User extends Authenticatable
         return $this->belongsToMany(Role::class, 'user_roles');
     }
 
+    public function dashboardWidgets()
+    {
+        return $this->hasMany(UserDashboardWidget::class);
+    }
+
+    public function notifications()
+    {
+        return $this->hasMany(UserNotification::class);
+    }
+
     public function hasRole($role)
     {
         return $this->roles()->where('name', $role)->exists();

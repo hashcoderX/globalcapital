@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 import ClientMountGate from "@/app/components/ClientMountGate";
 import { getApiBaseUrl } from "@/lib/api";
+import { WidgetCloseGate } from "@/lib/useWidgetsFixed";
 import {
   ArrowLeft,
   Building2,
@@ -82,6 +83,9 @@ export default function CreateMortgage() {
   const [modalKind, setModalKind] = useState<"confirm" | "error" | "info">("info");
   const [modalTitle, setModalTitle] = useState("");
   const [modalMessage, setModalMessage] = useState("");
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState("");
+  const widgetPrefix = "mortgages_create_widget_";
   const router = useRouter();
 
   // Customer details
@@ -178,8 +182,54 @@ export default function CreateMortgage() {
     } else {
       setToken(t);
       setFileCode((prev) => prev || generateFileCode());
+      void fetchWidgetPreferences(t);
     }
   }, [router]);
+
+  async function fetchWidgetPreferences(authToken: string) {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || "").trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  }
+
+  const saveWidgetPreference = useCallback(async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${getApiBaseUrl()}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, [token]);
+
+  const hideWidget = useCallback(async (widgetKey: string) => {
+    setWidgetNotice("");
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice("Failed to hide widget. Please try again.");
+    }
+  }, [hiddenWidgetKeys, saveWidgetPreference]);
 
   const nextStep = () => {
     const idx = STEP_ORDER.indexOf(step);
@@ -551,6 +601,29 @@ export default function CreateMortgage() {
     legalDocuments.length,
   ]);
 
+  const statsCards = [
+    { key: "stat_current_step", label: "Current Step", value: STEP_LABELS[step], tone: "text-cyan-700", bg: "from-cyan-500/10 to-blue-500/5" },
+    { key: "stat_steps_complete", label: "Steps Complete", value: `${progressStats.completedSteps}/${progressStats.totalSteps}`, tone: "text-emerald-700", bg: "from-emerald-500/10 to-green-500/5" },
+    { key: "stat_progress", label: "Progress", value: `${progressStats.progressPercent}%`, tone: "text-indigo-700", bg: "from-indigo-500/10 to-violet-500/5" },
+    { key: "stat_docs_added", label: "Documents Added", value: progressStats.totalDocs, tone: "text-amber-700", bg: "from-amber-500/10 to-orange-500/5" },
+  ];
+  const visibleStatsCards = statsCards.filter((item) => !hiddenWidgetKeys.has(`${widgetPrefix}${item.key}`));
+
+  const currentStepWidgetKey = `${widgetPrefix}step_${step}`;
+  const isActiveStepWidgetVisible = !hiddenWidgetKeys.has(currentStepWidgetKey);
+
+  const showHeroWidget = !hiddenWidgetKeys.has(`${widgetPrefix}hero`);
+  const showStatsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}stats`);
+  const showStepNavigatorWidget = !hiddenWidgetKeys.has(`${widgetPrefix}step_navigator`);
+  const showStepContentWidget = !hiddenWidgetKeys.has(`${widgetPrefix}step_content`);
+  const showActionBarWidget = !hiddenWidgetKeys.has(`${widgetPrefix}actions`);
+  const showAnyWidget =
+    showHeroWidget ||
+    (showStatsWidget && visibleStatsCards.length > 0) ||
+    showStepNavigatorWidget ||
+    (showStepContentWidget && isActiveStepWidgetVisible) ||
+    showActionBarWidget;
+
   const pageFallback = (
     <div className="flex min-h-screen items-center justify-center bg-[#071a22]">
       <div className="flex flex-col items-center gap-4">
@@ -581,9 +654,32 @@ export default function CreateMortgage() {
         </div>
 
         <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+          {widgetNotice ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+              {widgetNotice}
+            </div>
+          ) : null}
+
+          {!showAnyWidget ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+              All widgets are hidden. Use Restore Hidden Widgets from the dashboard to bring them back.
+            </div>
+          ) : null}
+
+          {showHeroWidget ? (
           <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#0a1a24] via-[#0f3a52] to-[#0c5a7a] text-white shadow-[0_30px_80px_-24px_rgba(14,116,144,0.8)]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.25),transparent_42%)]" />
             <div className="relative p-6 md:p-8">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+                  className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/60 bg-white/85 text-sm font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide create mortgage hero widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                 <div className="max-w-2xl">
                   <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-100">
@@ -621,25 +717,49 @@ export default function CreateMortgage() {
               </div>
             </div>
           </section>
+          ) : null}
 
+          {showStatsWidget ? (
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {[
-              { label: "Current Step", value: STEP_LABELS[step], tone: "text-cyan-700", bg: "from-cyan-500/10 to-blue-500/5" },
-              { label: "Steps Complete", value: `${progressStats.completedSteps}/${progressStats.totalSteps}`, tone: "text-emerald-700", bg: "from-emerald-500/10 to-green-500/5" },
-              { label: "Progress", value: `${progressStats.progressPercent}%`, tone: "text-indigo-700", bg: "from-indigo-500/10 to-violet-500/5" },
-              { label: "Documents Added", value: progressStats.totalDocs, tone: "text-amber-700", bg: "from-amber-500/10 to-orange-500/5" },
-            ].map((item) => (
+            {visibleStatsCards.map((item) => (
               <div
                 key={item.label}
-                className={`overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
+                className={`relative overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
               >
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}${item.key}`)}
+                    className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/70 bg-white/85 text-xs font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${item.label} widget`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
                 <p className={`mt-2 text-xl font-black capitalize ${item.tone}`}>{item.value}</p>
               </div>
             ))}
+            {visibleStatsCards.length === 0 ? (
+              <div className="sm:col-span-2 xl:col-span-4 rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+                All progress cards are hidden.
+              </div>
+            ) : null}
           </section>
+          ) : null}
 
-          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 p-4 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl sm:p-5">
+          {showStepNavigatorWidget ? (
+          <section className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 p-4 shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur-xl sm:p-5">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}step_navigator`)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide step navigator widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Application Steps</p>
@@ -703,8 +823,20 @@ export default function CreateMortgage() {
               })}
             </div>
           </section>
+          ) : null}
 
-          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+          {showStepContentWidget ? (
+          <section className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(14,116,144,0.5)] backdrop-blur-xl">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}step_content`)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide step content widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="border-b border-slate-100 bg-gradient-to-r from-cyan-50/80 to-blue-50/50 px-5 py-4 md:px-6">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Step {currentStepIndex + 1} of {STEP_ORDER.length}</p>
               <h2 className="mt-1 text-xl font-extrabold text-slate-900">{stepTitle}</h2>
@@ -715,9 +847,24 @@ export default function CreateMortgage() {
                   Required fields incomplete
                 </p>
               )}
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(currentStepWidgetKey)}
+                  className="mt-3 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                  aria-label={`Hide ${STEP_LABELS[step]} step widget`}
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
             </div>
             <div className="space-y-6 p-5 md:p-6">
-          {step === "profile" && (
+          {!isActiveStepWidgetVisible ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+              Current step widget is hidden. Move to another step or restore hidden widgets.
+            </div>
+          ) : null}
+          {step === "profile" && isActiveStepWidgetVisible && (
             <>
             <div>
               <p className={sectionTitleClass}>Customer</p>
@@ -856,7 +1003,7 @@ export default function CreateMortgage() {
             </>
           )}
 
-          {step === "financial" && (
+          {step === "financial" && isActiveStepWidgetVisible && (
             <>
             <div>
               <p className={sectionTitleClass}>Employment & Income</p>
@@ -965,7 +1112,7 @@ export default function CreateMortgage() {
             </>
           )}
 
-          {step === "coBorrower" && (
+          {step === "coBorrower" && isActiveStepWidgetVisible && (
             <>
             <div className="rounded-2xl border border-cyan-100 bg-cyan-50/60 px-4 py-3 text-sm text-slate-600">
               Guarantor details are optional. Leave blank to skip this step, or complete all fields if adding a co-borrower.
@@ -1035,7 +1182,7 @@ export default function CreateMortgage() {
             </>
           )}
 
-          {step === "loanCollateral" && (
+          {step === "loanCollateral" && isActiveStepWidgetVisible && (
             <>
             <div>
               <p className={sectionTitleClass}>Loan Terms & Repayment</p>
@@ -1389,7 +1536,7 @@ export default function CreateMortgage() {
             </>
           )}
 
-          {step === "documentsReview" && (
+          {step === "documentsReview" && isActiveStepWidgetVisible && (
             <div className="space-y-6">
               <p className={sectionTitleClass}>Customer Documents</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1585,8 +1732,20 @@ export default function CreateMortgage() {
           )}
             </div>
           </section>
+          ) : null}
 
-          <section className="flex flex-col gap-3 rounded-3xl border border-white/90 bg-white/95 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:p-5">
+          {showActionBarWidget ? (
+          <section className="relative flex flex-col gap-3 rounded-3xl border border-white/90 bg-white/95 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:p-5">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}actions`)}
+                className="absolute right-3 top-3 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide step action bar widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <button
               type="button"
               onClick={prevStep}
@@ -1618,6 +1777,7 @@ export default function CreateMortgage() {
               </button>
             )}
           </section>
+          ) : null}
         </div>
 
         {modalOpen && (

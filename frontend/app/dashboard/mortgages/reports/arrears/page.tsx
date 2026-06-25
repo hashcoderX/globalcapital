@@ -1,9 +1,11 @@
 'use client';
 
 import axios from 'axios';
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertTriangle, ArrowLeft, Download, Filter, ShieldAlert } from 'lucide-react';
+import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type ArrearsRow = {
   id: number;
@@ -121,6 +123,9 @@ function MortgageArrearsReportContent() {
     per_page: 20,
     total: 0,
   });
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
+  const widgetPrefix = 'mortgages_arrears_report_widget_';
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -129,7 +134,53 @@ function MortgageArrearsReportContent() {
       return;
     }
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
+
+  async function fetchWidgetPreferences(authToken: string) {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  }
+
+  const saveWidgetPreference = useCallback(async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${getApiBaseUrl()}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, [token]);
+
+  const hideWidget = useCallback(async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
+  }, [hiddenWidgetKeys, saveWidgetPreference]);
 
   const fetchReport = async () => {
     if (!token) return;
@@ -261,6 +312,65 @@ function MortgageArrearsReportContent() {
 
   const hasRows = useMemo(() => rows.length > 0, [rows]);
 
+  const summaryCards = [
+    { key: 'summary_arrears_accounts', label: 'Arrears Accounts', value: summary.arrears_accounts, tone: 'text-slate-900' },
+    { key: 'summary_overdue_accounts', label: 'Overdue Accounts', value: summary.overdue_accounts, tone: 'text-amber-700' },
+    { key: 'summary_high_risk', label: 'High Risk (50K+)', value: summary.high_risk_accounts, tone: 'text-rose-700' },
+    { key: 'summary_total_arrears', label: 'Total Arrears', value: formatAmount(summary.total_arrears), tone: 'text-rose-700' },
+    { key: 'summary_due_principal', label: 'Due Principal', value: formatAmount(summary.total_due_principal), tone: 'text-cyan-700' },
+    { key: 'summary_due_interest', label: 'Due Interest', value: formatAmount(summary.total_due_interest), tone: 'text-violet-700' },
+  ];
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(`${widgetPrefix}${card.key}`));
+
+  const arrearsColumns = [
+    { key: 'mortgage', label: 'Mortgage', render: (row: ArrearsRow) => <span className="font-semibold text-slate-900">#{row.id}</span> },
+    {
+      key: 'customer',
+      label: 'Customer',
+      render: (row: ArrearsRow) => {
+        const customerName = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim();
+        return (
+          <div className="min-w-[180px]">
+            <p className="font-semibold text-slate-900">{customerName || '-'}</p>
+            <p className="text-xs text-slate-500">{row.customer?.customer_code || '-'}</p>
+          </div>
+        );
+      },
+    },
+    { key: 'type', label: 'Type', render: (row: ArrearsRow) => <span className="capitalize">{row.mortgage_type || '-'}</span> },
+    { key: 'status', label: 'Status', render: (row: ArrearsRow) => <span className="capitalize">{row.status || '-'}</span> },
+    { key: 'due_date', label: 'Due Date', render: (row: ArrearsRow) => <span className="whitespace-nowrap">{formatDate(row.due_date)}</span> },
+    { key: 'days_overdue', label: 'Days Overdue', render: (row: ArrearsRow) => <span className="font-semibold text-amber-700">{row.days_overdue || 0} days</span> },
+    {
+      key: 'arrears',
+      label: 'Arrears',
+      render: (row: ArrearsRow) => {
+        const arrearsAmount = toNumber(row.arrears_amount);
+        return (
+          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${arrearsBadgeClass(arrearsAmount)}`}>
+            {formatAmount(arrearsAmount)}
+          </span>
+        );
+      },
+    },
+    { key: 'due_principal', label: 'Due Principal', render: (row: ArrearsRow) => formatAmount(row.due_amount) },
+    { key: 'due_interest', label: 'Due Interest', render: (row: ArrearsRow) => formatAmount(row.due_interest_amount) },
+    { key: 'reference', label: 'Reference', render: (row: ArrearsRow) => row.asset?.deed_number || row.asset?.vehicle_reg_no || '-' },
+  ];
+  const visibleArrearsColumns = arrearsColumns.filter((column) => !hiddenWidgetKeys.has(`${widgetPrefix}table_col_${column.key}`));
+
+  const showHeaderWidget = !hiddenWidgetKeys.has(`${widgetPrefix}header`);
+  const showSummaryWidget = !hiddenWidgetKeys.has(`${widgetPrefix}summary`);
+  const showFiltersWidget = !hiddenWidgetKeys.has(`${widgetPrefix}filters`);
+  const showTableWidget = !hiddenWidgetKeys.has(`${widgetPrefix}table`);
+  const showInsightWidget = !hiddenWidgetKeys.has(`${widgetPrefix}insights`);
+  const showAnyWidget =
+    showHeaderWidget ||
+    (showSummaryWidget && visibleSummaryCards.length > 0) ||
+    showFiltersWidget ||
+    showTableWidget ||
+    showInsightWidget;
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
@@ -278,7 +388,30 @@ function MortgageArrearsReportContent() {
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
+        {widgetNotice ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+            {widgetNotice}
+          </div>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+            All widgets are hidden. Use Restore Hidden Widgets from the dashboard to bring them back.
+          </div>
+        ) : null}
+
+        {showHeaderWidget ? (
+        <div className="relative bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide arrears report header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
               <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
@@ -312,34 +445,47 @@ function MortgageArrearsReportContent() {
           </div>
 
           <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Arrears Accounts</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.arrears_accounts}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Overdue Accounts</p>
-              <p className="text-2xl font-extrabold text-amber-700 mt-1">{summary.overdue_accounts}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">{'High Risk (50K+)'} </p>
-              <p className="text-2xl font-extrabold text-rose-700 mt-1">{summary.high_risk_accounts}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Total Arrears</p>
-              <p className="text-2xl font-extrabold text-rose-700 mt-1">{formatAmount(summary.total_arrears)}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Due Principal</p>
-              <p className="text-2xl font-extrabold text-cyan-700 mt-1">{formatAmount(summary.total_due_principal)}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Due Interest</p>
-              <p className="text-2xl font-extrabold text-violet-700 mt-1">{formatAmount(summary.total_due_interest)}</p>
-            </div>
+            {showSummaryWidget ? (
+              <>
+                {visibleSummaryCards.map((card) => (
+                  <div key={card.key} className="relative rounded-xl bg-white/90 border border-white shadow-sm p-4">
+                    <WidgetCloseGate>
+                      <button
+                        type="button"
+                        onClick={() => void hideWidget(`${widgetPrefix}${card.key}`)}
+                        className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white text-[10px] font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                        aria-label={`Hide ${card.label} widget`}
+                      >
+                        ×
+                      </button>
+                    </WidgetCloseGate>
+                    <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
+                    <p className={`text-2xl font-extrabold mt-1 ${card.tone}`}>{card.value}</p>
+                  </div>
+                ))}
+                {visibleSummaryCards.length === 0 ? (
+                  <div className="xl:col-span-6 rounded-xl border border-dashed border-slate-300 bg-white/80 p-4 text-sm text-slate-600">
+                    All summary widgets are hidden.
+                  </div>
+                ) : null}
+              </>
+            ) : null}
           </div>
         </div>
+        ) : null}
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-5">
+        {showFiltersWidget ? (
+        <div className="relative bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-5">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+              className="absolute right-3 top-3 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide arrears filters widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
             <div className="flex items-center gap-2">
               <Filter className="h-4 w-4 text-cyan-700" />
@@ -415,8 +561,20 @@ function MortgageArrearsReportContent() {
             />
           </div>
         </div>
+        ) : null}
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-5">
+        {showTableWidget ? (
+        <div className="relative bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-5">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}table`)}
+              className="absolute right-3 top-3 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide arrears table widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
               <h2 className="text-lg font-bold text-slate-900">Arrears Accounts</h2>
@@ -436,51 +594,44 @@ function MortgageArrearsReportContent() {
           ) : (
             <>
               <div className="overflow-x-auto rounded-xl border border-cyan-100">
-                <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                  <thead className="bg-cyan-50/70 text-slate-700">
-                    <tr>
-                      <th className="px-3 py-2 font-semibold">Mortgage</th>
-                      <th className="px-3 py-2 font-semibold">Customer</th>
-                      <th className="px-3 py-2 font-semibold">Type</th>
-                      <th className="px-3 py-2 font-semibold">Status</th>
-                      <th className="px-3 py-2 font-semibold">Due Date</th>
-                      <th className="px-3 py-2 font-semibold">Days Overdue</th>
-                      <th className="px-3 py-2 font-semibold">Arrears</th>
-                      <th className="px-3 py-2 font-semibold">Due Principal</th>
-                      <th className="px-3 py-2 font-semibold">Due Interest</th>
-                      <th className="px-3 py-2 font-semibold">Reference</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row) => {
-                      const customerName = `${row.customer?.first_name || ''} ${row.customer?.last_name || ''}`.trim();
-                      const arrearsAmount = toNumber(row.arrears_amount);
-                      return (
-                        <tr key={row.id} className="border-b border-cyan-100 last:border-b-0">
-                          <td className="px-3 py-2 font-semibold text-slate-900">#{row.id}</td>
-                          <td className="px-3 py-2">
-                            <div className="min-w-[180px]">
-                              <p className="font-semibold text-slate-900">{customerName || '-'}</p>
-                              <p className="text-xs text-slate-500">{row.customer?.customer_code || '-'}</p>
+                {visibleArrearsColumns.length > 0 ? (
+                  <table className="min-w-full text-sm text-left text-slate-700 bg-white">
+                    <thead className="bg-cyan-50/70 text-slate-700">
+                      <tr>
+                        {visibleArrearsColumns.map((column) => (
+                          <th key={column.key} className="px-3 py-2 font-semibold">
+                            <div className="flex items-center justify-between gap-2">
+                              <span>{column.label}</span>
+                              <WidgetCloseGate>
+                                <button
+                                  type="button"
+                                  onClick={() => void hideWidget(`${widgetPrefix}table_col_${column.key}`)}
+                                  className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                                  aria-label={`Hide ${column.label} column`}
+                                >
+                                  ×
+                                </button>
+                              </WidgetCloseGate>
                             </div>
-                          </td>
-                          <td className="px-3 py-2 capitalize">{row.mortgage_type || '-'}</td>
-                          <td className="px-3 py-2 capitalize">{row.status || '-'}</td>
-                          <td className="px-3 py-2 whitespace-nowrap">{formatDate(row.due_date)}</td>
-                          <td className="px-3 py-2 font-semibold text-amber-700">{row.days_overdue || 0} days</td>
-                          <td className="px-3 py-2">
-                            <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${arrearsBadgeClass(arrearsAmount)}`}>
-                              {formatAmount(arrearsAmount)}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2">{formatAmount(row.due_amount)}</td>
-                          <td className="px-3 py-2">{formatAmount(row.due_interest_amount)}</td>
-                          <td className="px-3 py-2">{row.asset?.deed_number || row.asset?.vehicle_reg_no || '-'}</td>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row) => (
+                        <tr key={row.id} className="border-b border-cyan-100 last:border-b-0">
+                          {visibleArrearsColumns.map((column) => (
+                            <td key={column.key} className="px-3 py-2">
+                              {column.render(row)}
+                            </td>
+                          ))}
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="py-8 text-center text-sm text-slate-600">All arrears table columns are hidden.</div>
+                )}
               </div>
 
               <div className="mt-3 flex items-center justify-between">
@@ -507,8 +658,20 @@ function MortgageArrearsReportContent() {
             </>
           )}
         </div>
+        ) : null}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {showInsightWidget ? (
+        <div className="relative grid grid-cols-1 md:grid-cols-3 gap-4">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}insights`)}
+              className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide arrears insights widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="rounded-2xl border border-cyan-100 bg-white/86 backdrop-blur-xl p-4">
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-amber-700" />
@@ -531,6 +694,7 @@ function MortgageArrearsReportContent() {
             <p className="text-sm text-slate-600 mt-2">Slice arrears by date, type, status, and threshold for focused recovery work.</p>
           </div>
         </div>
+        ) : null}
       </div>
     </div>
   );

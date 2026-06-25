@@ -2,6 +2,7 @@
 
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
@@ -41,16 +42,83 @@ type ArrearsRow = {
 
 const API_BASE = getApiBaseUrl();
 
-export default function ArrearsReportPage() {
+export default function MicrofinanceArrearsReportPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const branchId = searchParams.get('branch_id') || '';
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ArrearsRow[]>([]);
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
   const [officerFilter, setOfficerFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'overdue' | 'arrears'>('all');
 
-  const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const list = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of list) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith('mf_arrears_widget_')) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+        }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this item. Please try again.',
+      });
+    }
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -60,6 +128,7 @@ export default function ArrearsReportPage() {
     }
 
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -206,6 +275,59 @@ export default function ArrearsReportPage() {
     };
   }, [filteredRows]);
 
+  const summaryCards = [
+    {
+      key: 'mf_arrears_widget_summary_accounts',
+      label: 'Accounts',
+      value: String(summary.accountCount),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: 'mf_arrears_widget_summary_overdue_arrears',
+      label: 'Overdue / Arrears',
+      value: `${summary.overdueCount} / ${summary.arrearsCount}`,
+      valueClass: 'text-amber-700',
+    },
+    {
+      key: 'mf_arrears_widget_summary_pending',
+      label: 'Pending Amount',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending),
+      valueClass: 'text-rose-700',
+    },
+    {
+      key: 'mf_arrears_widget_summary_arrears_amount',
+      label: 'Arrears Amount',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.arrears),
+      valueClass: 'text-orange-700',
+    },
+    {
+      key: 'mf_arrears_widget_summary_paid_amount',
+      label: 'Paid Amount',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.paid),
+      valueClass: 'text-emerald-700',
+    },
+  ];
+
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+  const showActionToolbar = !hiddenWidgetKeys.has('mf_arrears_widget_action_toolbar');
+
+  const tableColumns = [
+    { key: 'loanId', label: 'Loan ID' },
+    { key: 'loanCode', label: 'Loan Code' },
+    { key: 'customer', label: 'Customer' },
+    { key: 'fieldOfficer', label: 'Field Officer' },
+    { key: 'dueDate', label: 'Due Date' },
+    { key: 'overdueDays', label: 'Overdue Days' },
+    { key: 'totalPayable', label: 'Total Payable' },
+    { key: 'paid', label: 'Paid' },
+    { key: 'pending', label: 'Pending' },
+    { key: 'arrears', label: 'Arrears' },
+    { key: 'status', label: 'Status' },
+  ];
+  const visibleTableColumns = tableColumns.filter(
+    (column) => !hiddenWidgetKeys.has(`mf_arrears_widget_col_${column.key}`)
+  );
+
   const formatDate = (value: string) => {
     if (!value || value === '-') return '-';
     const parsed = new Date(`${value}T00:00:00`);
@@ -334,7 +456,7 @@ export default function ArrearsReportPage() {
     doc.save(`arrears-report-${getReportFileDate()}.pdf`);
   };
 
-  if (!token || loading) {
+  if (!token || loading || loadingWidgets) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
@@ -369,39 +491,45 @@ export default function ArrearsReportPage() {
           </div>
 
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Accounts</p>
-              <p className="text-xs font-extrabold text-slate-900 mt-1">{summary.accountCount}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Overdue / Arrears</p>
-              <p className="text-xs font-extrabold text-amber-700 mt-1">{summary.overdueCount} / {summary.arrearsCount}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Pending Amount</p>
-              <p className="text-2xl font-extrabold text-rose-700 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Arrears Amount</p>
-              <p className="text-2xl font-extrabold text-orange-700 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.arrears)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Paid Amount</p>
-              <p className="text-2xl font-extrabold text-emerald-700 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.paid)}
-              </p>
-            </div>
+            {visibleSummaryCards.map((card) => (
+              <div key={card.key} className="relative rounded-xl bg-white/90 border border-white shadow-sm p-4">
+                <WidgetCloseGate>
+<button
+                  type="button"
+                  onClick={() => void hideWidget(card.key)}
+                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                  aria-label={`Hide ${card.label} card`}
+                >
+                  ×
+                </button>
+</WidgetCloseGate>
+                <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
+                <p className={`text-2xl font-extrabold mt-1 ${card.valueClass}`}>{card.value}</p>
+              </div>
+            ))}
           </div>
+          {visibleSummaryCards.length === 0 && (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              All summary cards are hidden. Restore from dashboard with admin approval.
+            </div>
+          )}
         </div>
 
         <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">Arrears Accounts</h2>
-            <div className="flex items-end gap-2 flex-wrap">
+            {showActionToolbar && (
+              <div className="relative flex items-end gap-2 flex-wrap">
+              <WidgetCloseGate>
+<button
+                type="button"
+                onClick={() => void hideWidget('mf_arrears_widget_action_toolbar')}
+                className="absolute -top-2 -left-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide action toolbar"
+              >
+                ×
+              </button>
+</WidgetCloseGate>
               <button
                 type="button"
                 onClick={handleDownloadCsv}
@@ -453,8 +581,14 @@ export default function ArrearsReportPage() {
               >
                 Reset
               </button>
-            </div>
+              </div>
+            )}
           </div>
+          {!showActionToolbar && (
+            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              Toolbar controls are hidden. Restore from dashboard with admin approval.
+            </div>
+          )}
 
           {filteredRows.length === 0 ? (
             <div className="mt-4 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-100/60 to-teal-100/40 p-8 text-sm text-slate-700 text-center">
@@ -465,43 +599,63 @@ export default function ArrearsReportPage() {
               <table className="min-w-full text-sm text-left text-slate-700 bg-white">
                 <thead className="bg-cyan-50/70 text-slate-700">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Loan ID</th>
-                    <th className="px-3 py-2 font-semibold">Loan Code</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Field Officer</th>
-                    <th className="px-3 py-2 font-semibold">Due Date</th>
-                    <th className="px-3 py-2 font-semibold">Overdue Days</th>
-                    <th className="px-3 py-2 font-semibold">Total Payable</th>
-                    <th className="px-3 py-2 font-semibold">Paid</th>
-                    <th className="px-3 py-2 font-semibold">Pending</th>
-                    <th className="px-3 py-2 font-semibold">Arrears</th>
-                    <th className="px-3 py-2 font-semibold">Status</th>
+                    {visibleTableColumns.map((column) => (
+                      <th key={column.key} className="px-3 py-2 font-semibold">
+                        <div className="flex items-center gap-2">
+                          <span>{column.label}</span>
+                          <WidgetCloseGate>
+<button
+                            type="button"
+                            onClick={() => void hideWidget(`mf_arrears_widget_col_${column.key}`)}
+                            className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 transition hover:bg-rose-50 hover:text-rose-700"
+                            aria-label={`Hide ${column.label} column`}
+                          >
+                            ×
+                          </button>
+</WidgetCloseGate>
+                        </div>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
+                  {visibleTableColumns.length === 0 && (
+                    <tr>
+                      <td className="px-3 py-4 text-center text-amber-700" colSpan={1}>
+                        All table columns are hidden. Restore from dashboard with admin approval.
+                      </td>
+                    </tr>
+                  )}
                   {filteredRows.map((row) => (
                     <tr key={row.loanId} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                      <td className="px-3 py-2">{row.loanId || '-'}</td>
-                      <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
-                      <td className="px-3 py-2">{row.customerName}</td>
-                      <td className="px-3 py-2">{row.fieldOfficer}</td>
-                      <td className="px-3 py-2">{formatDate(row.dueDate)}</td>
-                      <td className="px-3 py-2 font-semibold text-amber-700">{row.overdueDays}</td>
-                      <td className="px-3 py-2">{formatMoney(row.totalPayable)}</td>
-                      <td className="px-3 py-2 text-emerald-700">{formatMoney(row.paidAmount)}</td>
-                      <td className="px-3 py-2 font-semibold text-rose-700">{formatMoney(row.pendingAmount)}</td>
-                      <td className="px-3 py-2 font-semibold text-orange-700">{formatMoney(row.arrearsAmount)}</td>
-                      <td className="px-3 py-2">
-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${
-                          row.status === 'Arrears'
-                            ? 'border-orange-200 bg-orange-50 text-orange-800'
-                            : row.status === 'Overdue'
-                            ? 'border-amber-200 bg-amber-50 text-amber-800'
-                            : 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                        }`}>
-                          {row.status}
-                        </span>
-                      </td>
+                      {visibleTableColumns.map((column) => {
+                        if (column.key === 'loanId') return <td key={column.key} className="px-3 py-2">{row.loanId || '-'}</td>;
+                        if (column.key === 'loanCode') return <td key={column.key} className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>;
+                        if (column.key === 'customer') return <td key={column.key} className="px-3 py-2">{row.customerName}</td>;
+                        if (column.key === 'fieldOfficer') return <td key={column.key} className="px-3 py-2">{row.fieldOfficer}</td>;
+                        if (column.key === 'dueDate') return <td key={column.key} className="px-3 py-2">{formatDate(row.dueDate)}</td>;
+                        if (column.key === 'overdueDays') return <td key={column.key} className="px-3 py-2 font-semibold text-amber-700">{row.overdueDays}</td>;
+                        if (column.key === 'totalPayable') return <td key={column.key} className="px-3 py-2">{formatMoney(row.totalPayable)}</td>;
+                        if (column.key === 'paid') return <td key={column.key} className="px-3 py-2 text-emerald-700">{formatMoney(row.paidAmount)}</td>;
+                        if (column.key === 'pending') return <td key={column.key} className="px-3 py-2 font-semibold text-rose-700">{formatMoney(row.pendingAmount)}</td>;
+                        if (column.key === 'arrears') return <td key={column.key} className="px-3 py-2 font-semibold text-orange-700">{formatMoney(row.arrearsAmount)}</td>;
+                        if (column.key === 'status') {
+                          return (
+                            <td key={column.key} className="px-3 py-2">
+                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                                row.status === 'Arrears'
+                                  ? 'border-orange-200 bg-orange-50 text-orange-800'
+                                  : row.status === 'Overdue'
+                                  ? 'border-amber-200 bg-amber-50 text-amber-800'
+                                  : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                              }`}>
+                                {row.status}
+                              </span>
+                            </td>
+                          );
+                        }
+                        return null;
+                      })}
                     </tr>
                   ))}
                 </tbody>

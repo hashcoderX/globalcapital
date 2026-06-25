@@ -2,6 +2,7 @@
 
 import axios from "axios";
 import { getApiBaseUrl } from "@/lib/api";
+import { WidgetCloseGate } from "@/lib/useWidgetsFixed";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -130,6 +131,7 @@ function buildCustomerNumber(branchName: string, loanProductKey: string, loanPro
 
 export default function NewLoanRequestPage() {
   const apiBase = getApiBaseUrl();
+  const widgetPrefix = "loan_create_widget_";
   const [token, setToken] = useState("");
   const router = useRouter();
   const [loanProducts, setLoanProducts] = useState<LoanProduct[]>(DEFAULT_LOAN_PRODUCTS);
@@ -171,6 +173,8 @@ export default function NewLoanRequestPage() {
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [documents, setDocuments] = useState<File[]>([]);
   const [branchName, setBranchName] = useState("");
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState("");
 
   const generateCustomerNumber = useCallback(() => {
     const product = loanProducts.find((item) => item.key === loanProduct) || loanProducts[0];
@@ -187,6 +191,62 @@ export default function NewLoanRequestPage() {
       customerNo: generateCustomerNumber(),
     }));
   }, [generateCustomerNumber]);
+
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: "application/json",
+        },
+      });
+
+      const widgets = Array.isArray(response.data?.data) ? response.data.data : [];
+      const hidden = widgets
+        .filter(
+          (item: { widget_key?: unknown; is_visible?: unknown }) =>
+            typeof item.widget_key === "string" &&
+            item.widget_key.startsWith(widgetPrefix) &&
+            Number(item.is_visible) === 0
+        )
+        .map((item: { widget_key: string }) => item.widget_key);
+
+      setHiddenWidgetKeys(hidden);
+    } catch {
+      setWidgetNotice("Failed to load widget preferences.");
+    }
+  }, [apiBase]);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return;
+
+      try {
+        await axios.post(
+          `${apiBase}/dashboard/widgets`,
+          { widget_key: widgetKey, is_visible: isVisible ? 1 : 0 },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/json",
+            },
+          }
+        );
+        setWidgetNotice("");
+      } catch {
+        setWidgetNotice("Failed to save widget preference.");
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+      await saveWidgetPreference(widgetKey, false);
+    },
+    [saveWidgetPreference]
+  );
 
   useEffect(() => {
     const storedToken = localStorage.getItem("token");
@@ -235,6 +295,11 @@ export default function NewLoanRequestPage() {
 
     loadUser();
   }, [token, apiBase]);
+
+  useEffect(() => {
+    if (!token) return;
+    fetchWidgetPreferences(token);
+  }, [token, fetchWidgetPreferences]);
 
   useEffect(() => {
     if (activeStep !== 2) return;
@@ -595,6 +660,16 @@ export default function NewLoanRequestPage() {
     }
   };
 
+  const showHeaderWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}header`);
+  const showStepNavigatorWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}step_navigator`);
+  const showStepContentWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}step_content`);
+  const showActionBarWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}action_bar`);
+  const showPreviewWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}preview`);
+  const activeStepWidgetKey = `${widgetPrefix}step_content_${activeStep}`;
+  const isActiveStepWidgetVisible = !hiddenWidgetKeys.includes(activeStepWidgetKey);
+  const showAnyWidget =
+    showHeaderWidget || showStepNavigatorWidget || showStepContentWidget || showActionBarWidget || showPreviewWidget;
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
@@ -612,48 +687,114 @@ export default function NewLoanRequestPage() {
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/90 rounded-3xl border border-cyan-100 p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700">Credit Module</p>
-            <h1 className="text-3xl font-extrabold text-slate-900 mt-1">New Loan Request</h1>
-            <p className="text-sm text-slate-600 mt-1">Step-by-step process to capture a new loan request.</p>
+        {widgetNotice ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+            {widgetNotice}
           </div>
-          <button
-            type="button"
-            onClick={() => router.push("/dashboard/loan")}
-            className="px-4 py-2 rounded-xl bg-white border border-cyan-200 text-cyan-800 text-sm font-semibold hover:bg-cyan-50"
-          >
-            Back to Loan Dashboard
-          </button>
-        </div>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-5 text-sm font-semibold text-cyan-900">
+            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
+          </div>
+        ) : null}
+
+        {showHeaderWidget ? (
+          <div className="bg-white/90 rounded-3xl border border-cyan-100 p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}header`)}
+                className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                aria-label="Hide page header widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700">Credit Module</p>
+              <h1 className="text-3xl font-extrabold text-slate-900 mt-1">New Loan Request</h1>
+              <p className="text-sm text-slate-600 mt-1">Step-by-step process to capture a new loan request.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard/loan")}
+              className="px-4 py-2 rounded-xl bg-white border border-cyan-200 text-cyan-800 text-sm font-semibold hover:bg-cyan-50"
+            >
+              Back to Loan Dashboard
+            </button>
+          </div>
+        ) : null}
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           <div className="xl:col-span-2 rounded-2xl border border-cyan-100 bg-white/90 p-6">
-            <div className="rounded-xl border border-cyan-100 bg-white p-4">
-              <div className="h-2 rounded-full bg-cyan-100 overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-300" style={{ width: `${progressPercent}%` }}></div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-6 gap-2">
-                {steps.map((step) => (
+            {showStepNavigatorWidget ? (
+              <div className="rounded-xl border border-cyan-100 bg-white p-4 relative">
+                <WidgetCloseGate>
                   <button
-                    key={step.id}
                     type="button"
-                    onClick={() => handleStepClick(step.id)}
-                    className={`rounded-xl border px-3 py-2 text-left transition-all ${
-                      activeStep === step.id
-                        ? "border-cyan-300 bg-cyan-50"
-                        : step.id < activeStep
-                        ? "border-emerald-200 bg-emerald-50/70"
-                        : "border-cyan-100 bg-white"
-                    }`}
+                    onClick={() => hideWidget(`${widgetPrefix}step_navigator`)}
+                    className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                    aria-label="Hide step navigator widget"
                   >
-                    <p className="text-xs font-bold text-slate-800">Step {step.id}</p>
-                    <p className="text-xs font-semibold text-slate-700">{step.title}</p>
+                    ×
                   </button>
-                ))}
+                </WidgetCloseGate>
+                <div className="h-2 rounded-full bg-cyan-100 overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-300" style={{ width: `${progressPercent}%` }}></div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-6 gap-2">
+                  {steps.map((step) => (
+                    <button
+                      key={step.id}
+                      type="button"
+                      onClick={() => handleStepClick(step.id)}
+                      className={`rounded-xl border px-3 py-2 text-left transition-all ${
+                        activeStep === step.id
+                          ? "border-cyan-300 bg-cyan-50"
+                          : step.id < activeStep
+                          ? "border-emerald-200 bg-emerald-50/70"
+                          : "border-cyan-100 bg-white"
+                      }`}
+                    >
+                      <p className="text-xs font-bold text-slate-800">Step {step.id}</p>
+                      <p className="text-xs font-semibold text-slate-700">{step.title}</p>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+                Step navigator widget is hidden.
+              </div>
+            )}
+
+            {showStepContentWidget ? (
+              isActiveStepWidgetVisible ? (
+                <div className="relative">
+                  <WidgetCloseGate>
+                    <div className="absolute right-0 top-4 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => hideWidget(`${widgetPrefix}step_content`)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                        aria-label="Hide step content section widget"
+                        title="Hide step content section"
+                      >
+                        ×
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => hideWidget(activeStepWidgetKey)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                        aria-label="Hide current step widget"
+                        title="Hide current step only"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </WidgetCloseGate>
 
             {activeStep === 1 && (
               <>
@@ -1224,95 +1365,134 @@ export default function NewLoanRequestPage() {
                 {submitError}
               </div>
             )}
-
-            <div className="mt-6 flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveStep((prev) => Math.max(prev - 1, 1));
-                  setStepNotice("");
-                }}
-                disabled={activeStep === 1}
-                className="px-4 py-2 rounded-lg border border-cyan-200 bg-white text-cyan-800 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Back Step
-              </button>
-
-              {activeStep < steps.length ? (
-                <button
-                  type="button"
-                  onClick={handleNextStep}
-                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 text-white text-sm font-semibold hover:from-cyan-700 hover:to-blue-700"
-                >
-                  Next Step
-                </button>
-              ) : isSubmitted ? (
-                <div className="px-4 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-semibold">
-                  Loan Request Already Submitted
                 </div>
               ) : (
+                <div className="mt-6 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+                  Current step content widget is hidden.
+                </div>
+              )
+            ) : null}
+
+            {showActionBarWidget ? (
+              <div className="mt-6 flex items-center justify-between gap-3 relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}action_bar`)}
+                    className="absolute right-0 -top-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                    aria-label="Hide action bar widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <button
                   type="button"
-                  onClick={handleSubmitLoanRequest}
-                  disabled={submitLoading}
-                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-sm font-semibold hover:from-emerald-700 hover:to-teal-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                  onClick={() => {
+                    setActiveStep((prev) => Math.max(prev - 1, 1));
+                    setStepNotice("");
+                  }}
+                  disabled={activeStep === 1}
+                  className="px-4 py-2 rounded-lg border border-cyan-200 bg-white text-cyan-800 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {submitLoading ? "Submitting..." : "Submit Loan Request"}
+                  Back Step
                 </button>
-              )}
-            </div>
+
+                {activeStep < steps.length ? (
+                  <button
+                    type="button"
+                    onClick={handleNextStep}
+                    className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 text-white text-sm font-semibold hover:from-cyan-700 hover:to-blue-700"
+                  >
+                    Next Step
+                  </button>
+                ) : isSubmitted ? (
+                  <div className="px-4 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-semibold">
+                    Loan Request Already Submitted
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSubmitLoanRequest}
+                    disabled={submitLoading}
+                    className="px-4 py-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-sm font-semibold hover:from-emerald-700 hover:to-teal-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {submitLoading ? "Submitting..." : "Submit Loan Request"}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="mt-6 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+                Action bar widget is hidden.
+              </div>
+            )}
           </div>
 
-          <div className="rounded-2xl border border-cyan-100 bg-white/90 p-6">
-            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700">Calculation Preview</p>
-            <h3 className="mt-1 text-xl font-extrabold text-slate-900">Shared Formula</h3>
-            <p className="text-sm text-slate-600 mt-1">All selected loan products use this same calculation.</p>
+          {showPreviewWidget ? (
+            <div className="rounded-2xl border border-cyan-100 bg-white/90 p-6 relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => hideWidget(`${widgetPrefix}preview`)}
+                  className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                  aria-label="Hide calculation preview widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700">Calculation Preview</p>
+              <h3 className="mt-1 text-xl font-extrabold text-slate-900">Shared Formula</h3>
+              <p className="text-sm text-slate-600 mt-1">All selected loan products use this same calculation.</p>
 
-            <div className="mt-4 space-y-3 text-sm">
-              <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
-                <p className="text-slate-500">Installments</p>
-                <p className="text-lg font-bold text-slate-900">{calculation.installments}</p>
-              </div>
-              <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
-                <p className="text-slate-500">Installment Amount</p>
-                <p className="text-lg font-bold text-slate-900">{formatAmount(calculation.installmentAmount)}</p>
-              </div>
-              <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
-                <p className="text-slate-500">Total Payable</p>
-                <p className="text-lg font-bold text-slate-900">{formatAmount(calculation.totalPayable)}</p>
-              </div>
-              <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
-                <p className="text-slate-500">Customer Details</p>
-                <p
-                  className={`text-sm font-bold ${
-                    customerInfoComplete ? "text-emerald-700" : "text-amber-700"
-                  }`}
-                >
-                  {customerInfoComplete ? "Completed" : "Missing required fields"}
-                </p>
-              </div>
-              <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
-                <p className="text-slate-500">Guarantor Details</p>
-                <p
-                  className={`text-sm font-bold ${
-                    guarantorInfoComplete ? "text-emerald-700" : "text-amber-700"
-                  }`}
-                >
-                  {guarantorInfoComplete
-                    ? guarantorHasAnyData
-                      ? `Completed (${guarantors.length})`
-                      : "Optional (Not provided)"
-                    : "Missing required guarantor fields"}
-                </p>
-              </div>
-              <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
-                <p className="text-slate-500">Documents</p>
-                <p className={`text-sm font-bold ${documents.length > 0 ? "text-emerald-700" : "text-amber-700"}`}>
-                  {documents.length > 0 ? `Uploaded (${documents.length})` : "Upload required"}
-                </p>
+              <div className="mt-4 space-y-3 text-sm">
+                <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
+                  <p className="text-slate-500">Installments</p>
+                  <p className="text-lg font-bold text-slate-900">{calculation.installments}</p>
+                </div>
+                <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
+                  <p className="text-slate-500">Installment Amount</p>
+                  <p className="text-lg font-bold text-slate-900">{formatAmount(calculation.installmentAmount)}</p>
+                </div>
+                <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
+                  <p className="text-slate-500">Total Payable</p>
+                  <p className="text-lg font-bold text-slate-900">{formatAmount(calculation.totalPayable)}</p>
+                </div>
+                <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
+                  <p className="text-slate-500">Customer Details</p>
+                  <p
+                    className={`text-sm font-bold ${
+                      customerInfoComplete ? "text-emerald-700" : "text-amber-700"
+                    }`}
+                  >
+                    {customerInfoComplete ? "Completed" : "Missing required fields"}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
+                  <p className="text-slate-500">Guarantor Details</p>
+                  <p
+                    className={`text-sm font-bold ${
+                      guarantorInfoComplete ? "text-emerald-700" : "text-amber-700"
+                    }`}
+                  >
+                    {guarantorInfoComplete
+                      ? guarantorHasAnyData
+                        ? `Completed (${guarantors.length})`
+                        : "Optional (Not provided)"
+                      : "Missing required guarantor fields"}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
+                  <p className="text-slate-500">Documents</p>
+                  <p className={`text-sm font-bold ${documents.length > 0 ? "text-emerald-700" : "text-amber-700"}`}>
+                    {documents.length > 0 ? `Uploaded (${documents.length})` : "Upload required"}
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+              Calculation preview widget is hidden.
+            </div>
+          )}
         </div>
       </div>
     </div>

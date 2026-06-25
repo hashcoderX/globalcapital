@@ -2,6 +2,7 @@
 
 import axios from 'axios';
 import { getApiBaseUrl, resolveStorageAssetUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -171,6 +172,8 @@ export default function LoanApprovalsPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
   const [requests, setRequests] = useState<LoanRequest[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [approvingId, setApprovingId] = useState<number | null>(null);
@@ -222,6 +225,52 @@ export default function LoanApprovalsPage() {
 
   const closePhotoViewer = () => {
     setPhotoViewer({ open: false, title: '', imageUrl: '' });
+  };
+  const widgetPrefix = 'mf_loan_approvals_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
   };
 
   const headers = useMemo(
@@ -311,6 +360,7 @@ export default function LoanApprovalsPage() {
       return;
     }
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
 
     const storedUser = localStorage.getItem('auth_user');
     if (storedUser) {
@@ -597,6 +647,14 @@ export default function LoanApprovalsPage() {
     }
   };
 
+  const showHeaderWidget = !hiddenWidgetKeys.has(`${widgetPrefix}header`);
+  const showFiltersWidget = !hiddenWidgetKeys.has(`${widgetPrefix}filters`);
+  const showResultsMetaWidget = !hiddenWidgetKeys.has(`${widgetPrefix}results_meta`);
+  const showPaginationWidget = !hiddenWidgetKeys.has(`${widgetPrefix}pagination`);
+  const visiblePaginatedRequests = paginatedRequests.filter(
+    (loan) => !hiddenWidgetKeys.has(`${widgetPrefix}loan_card_${loan.id}`)
+  );
+
   if (!token || pageLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-100 p-6 flex items-center justify-center">
@@ -608,7 +666,23 @@ export default function LoanApprovalsPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-100 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-lg border border-white/20 p-6 flex items-center justify-between">
+        {widgetNotice && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {widgetNotice}
+          </div>
+        )}
+        {showHeaderWidget && (
+        <div className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-lg border border-white/20 p-6 flex items-center justify-between relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div>
             <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Loan Approvals</h1>
             <p className="text-sm text-gray-600 mt-1">
@@ -625,8 +699,20 @@ export default function LoanApprovalsPage() {
             Back
           </button>
         </div>
+        )}
 
-        <div className="bg-white/90 rounded-2xl shadow-lg border border-orange-100 p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 text-black">
+        {showFiltersWidget && (
+        <div className="bg-white/90 rounded-2xl shadow-lg border border-orange-100 p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 text-black relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide filter widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <input
             className="px-3 py-2 rounded-lg border border-orange-100 text-sm text-black"
             placeholder="Search customer / loan code"
@@ -648,8 +734,20 @@ export default function LoanApprovalsPage() {
           <input className="px-3 py-2 rounded-lg border border-orange-100 text-sm text-black" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
           <input className="px-3 py-2 rounded-lg border border-orange-100 text-sm text-black" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
         </div>
+        )}
 
-        <div className="flex items-center justify-between gap-3">
+        {showResultsMetaWidget && (
+        <div className="flex items-center justify-between gap-3 relative rounded-xl p-2">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}results_meta`)}
+              className="absolute -right-1 -top-1 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide result meta widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <p className="text-sm text-gray-600">
             Showing {filteredRequests.length === 0 ? 0 : startIndex + 1}-{Math.min(startIndex + pageSize, filteredRequests.length)} of {filteredRequests.length}
           </p>
@@ -667,14 +765,19 @@ export default function LoanApprovalsPage() {
             </select>
           </div>
         </div>
+        )}
 
         {filteredRequests.length === 0 ? (
           <div className="bg-white rounded-2xl shadow-lg p-8 text-center text-gray-600">
             No requested loans found for selected filters.
           </div>
+        ) : visiblePaginatedRequests.length === 0 ? (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl shadow-lg p-8 text-center text-amber-800">
+            All widgets on this page are hidden for the current results. Restore hidden widgets from dashboard to show them again.
+          </div>
         ) : (
           <div className="space-y-4">
-            {paginatedRequests.map((loan) => {
+            {visiblePaginatedRequests.map((loan) => {
               const schedule = getLoanSchedule(loan);
               const customerPhotoUrl = resolveLoanCustomerPhotoUrl(loan);
               const documentCharges = Number(loan.document_charges || 0);
@@ -685,7 +788,17 @@ export default function LoanApprovalsPage() {
               const chargesCollectionStatus = String(loan.charges_collection_status || 'pending').replaceAll('_', ' ');
 
               return (
-              <div key={loan.id} className="bg-white/90 rounded-2xl shadow-lg border border-orange-100 p-5">
+              <div key={loan.id} className="bg-white/90 rounded-2xl shadow-lg border border-orange-100 p-5 relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}loan_card_${loan.id}`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide loan widget ${loan.customer_no}`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="flex items-start gap-4 min-w-0">
                     <button
@@ -899,7 +1012,18 @@ export default function LoanApprovalsPage() {
             );
             })}
 
-            <div className="flex items-center justify-center gap-2 pt-2">
+            {showPaginationWidget && (
+            <div className="flex items-center justify-center gap-2 pt-2 relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}pagination`)}
+                  className="absolute -right-1 -top-1 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide pagination widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <button
                 onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
                 disabled={safePage === 1}
@@ -920,6 +1044,7 @@ export default function LoanApprovalsPage() {
                 Next
               </button>
             </div>
+            )}
           </div>
         )}
       </div>

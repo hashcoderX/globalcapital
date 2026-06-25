@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { ArrowLeft, Search, UserPlus, Users } from 'lucide-react';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type CustomerRow = {
   id: number;
@@ -21,6 +22,8 @@ type CustomerRow = {
 export default function SavingsCustomerRegistrationPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
   const [savingCustomer, setSavingCustomer] = useState(false);
   const [loadingCustomers, setLoadingCustomers] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -42,6 +45,52 @@ export default function SavingsCustomerRegistrationPage() {
   const [genderFilter, setGenderFilter] = useState<'all' | 'male' | 'female' | 'other'>('all');
   const [employmentFilter, setEmploymentFilter] = useState<'all' | 'salaried' | 'self_employed' | 'business'>('all');
   const [sortBy, setSortBy] = useState<'newest' | 'name' | 'customer_code'>('newest');
+  const widgetPrefix = 'savings_customers_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    try {
+      const response = await axios.get('/api/dashboard/widgets', {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        '/api/dashboard/widgets',
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
+  };
 
   useEffect(() => {
     const t = localStorage.getItem('token');
@@ -51,6 +100,7 @@ export default function SavingsCustomerRegistrationPage() {
     }
 
     setToken(t);
+    void fetchWidgetPreferences(t);
   }, [router]);
 
   const fetchCustomers = async (authToken: string) => {
@@ -206,6 +256,27 @@ export default function SavingsCustomerRegistrationPage() {
     () => customers.filter((row) => String(row.status || '').toLowerCase() === 'active').length,
     [customers],
   );
+  const showHeaderWidget = !hiddenWidgetKeys.has(`${widgetPrefix}header`);
+  const statsCards = [
+    { key: 'stat_total_customers', label: 'Total Customers', value: customers.length, valueClass: 'text-2xl font-extrabold text-slate-900 mt-1' },
+    { key: 'stat_active_customers', label: 'Active Customers', value: activeCustomerCount, valueClass: 'text-2xl font-extrabold text-emerald-700 mt-1' },
+    { key: 'stat_filtered_results', label: 'Filtered Results', value: filteredCustomers.length, valueClass: 'text-2xl font-extrabold text-orange-700 mt-1' },
+  ];
+  const visibleStatsCards = statsCards.filter((card) => !hiddenWidgetKeys.has(`${widgetPrefix}${card.key}`));
+  const showRegisterWidget = !hiddenWidgetKeys.has(`${widgetPrefix}register_form`);
+  const showFindWidget = !hiddenWidgetKeys.has(`${widgetPrefix}find_customers`);
+  const tableColumns = [
+    { key: 'customer_code', label: 'Customer No' },
+    { key: 'name', label: 'Name' },
+    { key: 'phone', label: 'Phone' },
+    { key: 'nic', label: 'NIC / Passport' },
+    { key: 'gender', label: 'Gender' },
+    { key: 'employment', label: 'Employment' },
+    { key: 'status', label: 'Status' },
+  ] as const;
+  const visibleTableColumns = tableColumns.filter((col) => !hiddenWidgetKeys.has(`${widgetPrefix}col_${col.key}`));
+  const isAnyWidgetVisible =
+    showHeaderWidget || visibleStatsCards.length > 0 || showRegisterWidget || showFindWidget;
 
   if (!token) {
     return (
@@ -224,7 +295,29 @@ export default function SavingsCustomerRegistrationPage() {
       </div>
 
       <div className="relative z-10 max-w-5xl mx-auto space-y-6">
-        <div className="bg-white/90 rounded-3xl border border-orange-100 p-6 flex items-start justify-between gap-3 flex-wrap">
+        {widgetNotice ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+        {!isAnyWidgetVisible ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            All widgets are hidden on this page. Restore hidden widgets from dashboard.
+          </div>
+        ) : null}
+
+        {showHeaderWidget ? (
+        <div className="bg-white/90 rounded-3xl border border-orange-100 p-6 flex items-start justify-between gap-3 flex-wrap relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div>
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-orange-700">Savings & Deposits</p>
             <h1 className="text-2xl font-extrabold text-slate-900 mt-1">Register Customer</h1>
@@ -241,26 +334,44 @@ export default function SavingsCustomerRegistrationPage() {
             </button>
           </div>
         </div>
+        ) : null}
 
         {errorMessage && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{errorMessage}</div>}
         {successMessage && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{successMessage}</div>}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white/90 rounded-2xl border border-orange-100 p-4">
-            <p className="text-[11px] uppercase tracking-wide text-slate-500">Total Customers</p>
-            <p className="text-2xl font-extrabold text-slate-900 mt-1">{customers.length}</p>
+        {visibleStatsCards.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {visibleStatsCards.map((card) => (
+              <div key={card.key} className="bg-white/90 rounded-2xl border border-orange-100 p-4 relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}${card.key}`)}
+                    className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${card.label} widget`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <p className="text-[11px] uppercase tracking-wide text-slate-500">{card.label}</p>
+                <p className={card.valueClass}>{card.value}</p>
+              </div>
+            ))}
           </div>
-          <div className="bg-white/90 rounded-2xl border border-orange-100 p-4">
-            <p className="text-[11px] uppercase tracking-wide text-slate-500">Active Customers</p>
-            <p className="text-2xl font-extrabold text-emerald-700 mt-1">{activeCustomerCount}</p>
-          </div>
-          <div className="bg-white/90 rounded-2xl border border-orange-100 p-4">
-            <p className="text-[11px] uppercase tracking-wide text-slate-500">Filtered Results</p>
-            <p className="text-2xl font-extrabold text-orange-700 mt-1">{filteredCustomers.length}</p>
-          </div>
-        </div>
+        ) : null}
 
-        <div className="bg-white/90 rounded-3xl border border-orange-100 p-6 space-y-4">
+        {showRegisterWidget ? (
+        <div className="bg-white/90 rounded-3xl border border-orange-100 p-6 space-y-4 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}register_form`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide register form widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center gap-2">
             <UserPlus className="h-5 w-5 text-orange-700" />
             <h2 className="text-lg font-bold text-slate-900">Register New Customer</h2>
@@ -321,8 +432,20 @@ export default function SavingsCustomerRegistrationPage() {
             {savingCustomer ? 'Registering...' : 'Register Customer'}
           </button>
         </div>
+        ) : null}
 
-        <div className="bg-white/90 rounded-3xl border border-orange-100 p-6 space-y-4">
+        {showFindWidget ? (
+        <div className="bg-white/90 rounded-3xl border border-orange-100 p-6 space-y-4 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}find_customers`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide find customers widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center gap-2">
             <Users className="h-5 w-5 text-orange-700" />
             <h2 className="text-lg font-bold text-slate-900">Find Customers</h2>
@@ -395,30 +518,58 @@ export default function SavingsCustomerRegistrationPage() {
             <div className="py-8 text-sm text-slate-500">Loading customers...</div>
           ) : filteredCustomers.length === 0 ? (
             <div className="py-8 text-sm text-slate-500">No customers found with selected filters.</div>
+          ) : visibleTableColumns.length === 0 ? (
+            <div className="py-8 text-sm text-amber-800">All table columns are hidden. Restore hidden widgets from dashboard.</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-orange-100">
-                    <th className="py-2 pr-3">Customer No</th>
-                    <th className="py-2 pr-3">Name</th>
-                    <th className="py-2 pr-3">Phone</th>
-                    <th className="py-2 pr-3">NIC</th>
-                    <th className="py-2 pr-3">Gender</th>
-                    <th className="py-2 pr-3">Employment</th>
-                    <th className="py-2 pr-3">Status</th>
+                    {visibleTableColumns.map((column) => (
+                      <th key={column.key} className="py-2 pr-3 relative">
+                        {column.label}
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void hideWidget(`${widgetPrefix}col_${column.key}`);
+                            }}
+                            className="absolute right-0 top-0 inline-flex h-4 w-4 items-center justify-center rounded-full border border-orange-200 bg-white text-[10px] font-bold text-orange-700 hover:bg-rose-50 hover:text-rose-700"
+                            aria-label={`Hide ${column.label} column`}
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredCustomers.slice(0, 300).map((row) => (
                     <tr key={row.id} className="border-b border-orange-50 text-slate-700">
-                      <td className="py-2 pr-3 font-semibold">{row.customer_code || '-'}</td>
-                      <td className="py-2 pr-3">{row.first_name || ''} {row.last_name || ''}</td>
-                      <td className="py-2 pr-3">{row.phone || '-'}</td>
-                      <td className="py-2 pr-3">{row.nic_passport || '-'}</td>
-                      <td className="py-2 pr-3 capitalize">{row.gender || '-'}</td>
-                      <td className="py-2 pr-3 capitalize">{String(row.employment_type || '-').replace('_', ' ')}</td>
-                      <td className="py-2 pr-3 capitalize">{row.status || '-'}</td>
+                      {visibleTableColumns.map((column) => {
+                        if (column.key === 'customer_code') {
+                          return <td key={column.key} className="py-2 pr-3 font-semibold">{row.customer_code || '-'}</td>;
+                        }
+                        if (column.key === 'name') {
+                          return <td key={column.key} className="py-2 pr-3">{row.first_name || ''} {row.last_name || ''}</td>;
+                        }
+                        if (column.key === 'phone') {
+                          return <td key={column.key} className="py-2 pr-3">{row.phone || '-'}</td>;
+                        }
+                        if (column.key === 'nic') {
+                          return <td key={column.key} className="py-2 pr-3">{row.nic_passport || '-'}</td>;
+                        }
+                        if (column.key === 'gender') {
+                          return <td key={column.key} className="py-2 pr-3 capitalize">{row.gender || '-'}</td>;
+                        }
+                        if (column.key === 'employment') {
+                          return <td key={column.key} className="py-2 pr-3 capitalize">{String(row.employment_type || '-').replace('_', ' ')}</td>;
+                        }
+                        return <td key={column.key} className="py-2 pr-3 capitalize">{row.status || '-'}</td>;
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -426,6 +577,7 @@ export default function SavingsCustomerRegistrationPage() {
             </div>
           )}
         </div>
+        ) : null}
       </div>
     </div>
   );

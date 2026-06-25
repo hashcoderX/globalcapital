@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 interface Designation {
   id: number;
@@ -16,6 +17,7 @@ interface Designation {
 export default function Designations() {
   const [token, setToken] = useState('');
   const apiBase = getApiBaseUrl();
+  const widgetPrefix = 'hrm_designations_widget_';
   const [designations, setDesignations] = useState<Designation[]>([]);
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -27,11 +29,84 @@ export default function Designations() {
   const [messageModalTitle, setMessageModalTitle] = useState('');
   const [messageModalBody, setMessageModalBody] = useState('');
   const [messageModalType, setMessageModalType] = useState<'error' | 'success'>('error');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
   const router = useRouter();
 
   // Form fields
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+
+  const fetchWidgetPreferences = useCallback(
+    async (authToken?: string) => {
+      const tokenToUse = authToken || token;
+      if (!tokenToUse) return;
+
+      try {
+        const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+          headers: {
+            Authorization: `Bearer ${tokenToUse}`,
+            Accept: 'application/json',
+          },
+        });
+
+        const widgets = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+        const hiddenKeys = widgets
+          .filter((item: { widget_key?: string; is_visible?: boolean | number | null }) => !item?.is_visible)
+          .map((item: { widget_key?: string }) => item.widget_key)
+          .filter((key: unknown): key is string => typeof key === 'string' && key.startsWith(widgetPrefix));
+
+        setHiddenWidgetKeys(hiddenKeys);
+        setWidgetNotice(null);
+      } catch {
+        setWidgetNotice('Failed to load widget preferences.');
+      }
+    },
+    [apiBase, token, widgetPrefix]
+  );
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+
+      const normalizedKey = widgetKey.trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Invalid widget key. Please refresh and try again.');
+        return false;
+      }
+
+      try {
+        await axios.patch(
+          `${apiBase}/dashboard/widgets`,
+          {
+            widget_key: normalizedKey,
+            is_visible: Boolean(isVisible),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice(null);
+        return true;
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+        return false;
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) return;
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+    },
+    [saveWidgetPreference]
+  );
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -41,8 +116,9 @@ export default function Designations() {
       setToken(storedToken);
       setApiError(null);
       fetchDesignations(storedToken);
+      fetchWidgetPreferences(storedToken);
     }
-  }, [router]);
+  }, [router, fetchWidgetPreferences]);
 
   const fetchDesignations = async (authToken?: string) => {
     const tokenToUse = authToken || token;
@@ -145,6 +221,11 @@ export default function Designations() {
     return <div>Loading...</div>;
   }
 
+  const showNameColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_name`);
+  const showDescriptionColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_description`);
+  const showCreatedColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_created`);
+  const showAnyColumn = showNameColumn || showDescriptionColumn || showCreatedColumn;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 relative overflow-hidden">
       {/* Background Pattern */}
@@ -154,8 +235,26 @@ export default function Designations() {
         <div className="absolute -bottom-8 left-40 w-72 h-72 bg-teal-200 rounded-full mix-blend-multiply filter blur-xl animate-pulse animation-delay-4000"></div>
       </div>
 
+      {widgetNotice && (
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{widgetNotice}</div>
+        </div>
+      )}
+
       {/* Modern Navigation */}
+      {!hiddenWidgetKeys.includes(`${widgetPrefix}top_nav`) && (
       <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
+        <WidgetCloseGate>
+          <button
+            type="button"
+            onClick={() => hideWidget(`${widgetPrefix}top_nav`)}
+            className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-20"
+            aria-label="Hide designation top navigation widget"
+            title="Hide widget"
+          >
+            ×
+          </button>
+        </WidgetCloseGate>
         <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row justify-between sm:items-center h-auto sm:h-16 py-3 gap-3">
             <div className="flex items-center justify-between sm:justify-start gap-3">
@@ -188,6 +287,7 @@ export default function Designations() {
           </div>
         </div>
       </nav>
+      )}
 
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         {apiError && (
@@ -195,7 +295,19 @@ export default function Designations() {
             {apiError}
           </div>
         )}
-        <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}hero`) && (
+        <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}hero`)}
+              className="absolute -top-2 right-0 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide designation hero widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div>
             <div className="flex items-center space-x-3 mb-4">
               <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center text-2xl shadow-lg">
@@ -214,6 +326,7 @@ export default function Designations() {
             </div>
           </div>
         </div>
+        )}
 
         {showForm && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -282,7 +395,19 @@ export default function Designations() {
           </div>
         )}
 
-        <div className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-xl border border-white/20 overflow-hidden">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}designation_list`) && (
+        <div className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-xl border border-white/20 overflow-hidden relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}designation_list`)}
+              className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide designation list widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-cyan-50">
             <h3 className="text-lg font-semibold text-gray-900 flex items-center space-x-2">
               <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -291,39 +416,65 @@ export default function Designations() {
               <span>Designation List</span>
             </h3>
           </div>
+          {showAnyColumn ? (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gradient-to-r from-gray-50 to-gray-100">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
-                    Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
-                    Description
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
-                    Created
-                  </th>
+                  {showNameColumn && (
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Name</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_name`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showDescriptionColumn && (
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Description</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_description`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showCreatedColumn && (
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Created</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_created`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {designations.map((designation) => (
                   <tr key={designation.id} className="hover:bg-gray-50 transition-colors duration-200">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
-                      {designation.name}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {designation.description || 'No description'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {new Date(designation.created_at).toLocaleDateString()}
-                    </td>
+                    {showNameColumn && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
+                        {designation.name}
+                      </td>
+                    )}
+                    {showDescriptionColumn && (
+                      <td className="px-6 py-4 text-sm text-gray-900">
+                        {designation.description || 'No description'}
+                      </td>
+                    )}
+                    {showCreatedColumn && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {new Date(designation.created_at).toLocaleDateString()}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          ) : (
+            <div className="text-center py-12 text-gray-500">All designation table columns are hidden.</div>
+          )}
         </div>
+        )}
 
         {showDeleteModal && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">

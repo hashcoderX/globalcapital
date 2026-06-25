@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { Banknote, Car, FileText, PieChart, TrendingUp, Users, ClipboardCheck, HandCoins, UserCog, FileBarChart2, LayoutDashboard } from 'lucide-react';
 
 type FinanceRow = {
@@ -64,10 +66,13 @@ function formatDate(v: unknown): string {
 
 export default function FinanceManagementPage() {
   const router = useRouter();
+  const widgetPrefix = 'finance_dashboard_widget_';
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<FinanceRow[]>([]);
   const [productTypes, setProductTypes] = useState<ProductTypeRow[]>([]);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState('');
 
   const [registerOpen, setRegisterOpen] = useState(false);
   const [registerStep, setRegisterStep] = useState(1);
@@ -173,6 +178,68 @@ export default function FinanceManagementPage() {
     if (!token) return;
     fetchProductTypes(token);
   }, [token]);
+
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const rows = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data?.widgets)
+          ? response.data.widgets
+          : [];
+      const hidden = rows
+        .filter(
+          (item: { widget_key?: unknown; is_visible?: unknown }) =>
+            typeof item.widget_key === 'string' &&
+            item.widget_key.startsWith(widgetPrefix) &&
+            (item.is_visible === false || Number(item.is_visible) === 0)
+        )
+        .map((item: { widget_key: string }) => item.widget_key);
+      setHiddenWidgetKeys(hidden);
+    } catch {
+      setWidgetNotice('Failed to load widget preferences.');
+    }
+  }, []);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return;
+      try {
+        await axios.post(
+          `${getApiBaseUrl()}/dashboard/widgets`,
+          { widget_key: widgetKey, is_visible: isVisible ? 1 : 0 },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice('');
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+      }
+    },
+    [token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+      await saveWidgetPreference(widgetKey, false);
+    },
+    [saveWidgetPreference]
+  );
+
+  useEffect(() => {
+    if (!token) return;
+    void fetchWidgetPreferences(token);
+  }, [token, fetchWidgetPreferences]);
 
   const metrics = useMemo(() => {
     const totalAccounts = rows.length;
@@ -415,6 +482,82 @@ export default function FinanceManagementPage() {
     }
   };
 
+  const operationItems = [
+    {
+      key: 'issue_finance',
+      title: 'Issue Finance',
+      description: 'Create and onboard a new finance agreement.',
+      onClick: openIssueFinance,
+      icon: Banknote,
+      iconClass: 'h-5 w-5 text-cyan-700',
+    },
+    {
+      key: 'approvals',
+      title: 'Approvals',
+      description: 'Review, approve, or reject finance applications.',
+      onClick: () => router.push('/dashboard/finance/approvals'),
+      icon: ClipboardCheck,
+      iconClass: 'h-5 w-5 text-emerald-700',
+    },
+    {
+      key: 'customer_handling',
+      title: 'Finance Customer Handling',
+      description: 'Manage finance-linked customer workflows.',
+      onClick: () => router.push('/dashboard/finance/customers'),
+      icon: UserCog,
+      iconClass: 'h-5 w-5 text-indigo-700',
+    },
+    {
+      key: 'finance_reports',
+      title: 'Finance Reports',
+      description: 'Track portfolio, quality, and performance trends.',
+      onClick: () => router.push('/dashboard/finance/reports'),
+      icon: FileBarChart2,
+      iconClass: 'h-5 w-5 text-violet-700',
+    },
+    {
+      key: 'finance_collection',
+      title: 'Finance Collection',
+      description: 'Post and monitor repayments and dues.',
+      onClick: () => router.push('/dashboard/finance/collections'),
+      icon: HandCoins,
+      iconClass: 'h-5 w-5 text-amber-700',
+    },
+  ];
+  const insightCards = [
+    {
+      key: 'customer_centric_view',
+      title: 'Customer Centric View',
+      description: 'Focus on vehicle customers with quick insight into active, arrears, and settled positions.',
+      icon: Users,
+      iconClass: 'h-5 w-5 text-cyan-700',
+    },
+    {
+      key: 'cash_flow_planning',
+      title: 'Cash Flow Planning',
+      description: 'Use the running installment book and arrears exposure to plan daily and monthly collections.',
+      icon: Banknote,
+      iconClass: 'h-5 w-5 text-emerald-700',
+    },
+    {
+      key: 'portfolio_quality',
+      title: 'Portfolio Quality',
+      description: 'Track portfolio mix between vehicle and other mortgage products.',
+      icon: PieChart,
+      iconClass: 'h-5 w-5 text-indigo-700',
+    },
+  ];
+  const showHeaderWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}header`);
+  const showOperationsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}operations`);
+  const showInsightsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}insights`);
+  const visibleOperationItems = operationItems.filter(
+    (item) => !hiddenWidgetKeys.includes(`${widgetPrefix}operation_${item.key}`)
+  );
+  const visibleInsightCards = insightCards.filter(
+    (item) => !hiddenWidgetKeys.includes(`${widgetPrefix}insight_${item.key}`)
+  );
+  const showAnyWidget = showHeaderWidget || showOperationsWidget || showInsightsWidget;
+
   if (!token || loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
@@ -432,7 +575,30 @@ export default function FinanceManagementPage() {
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7 flex items-start justify-between gap-4 flex-wrap">
+        {widgetNotice ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-5 text-sm font-semibold text-cyan-900">
+            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
+          </div>
+        ) : null}
+
+        {showHeaderWidget ? (
+        <div className="relative bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7 flex items-start justify-between gap-4 flex-wrap">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+              aria-label="Hide finance header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div>
             <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
               Finance Management
@@ -469,8 +635,20 @@ export default function FinanceManagementPage() {
             </button>
           </div>
         </div>
+        ) : null}
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-5">
+        {showOperationsWidget ? (
+        <div className="relative bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-5">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}operations`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+              aria-label="Hide finance operations widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
               <h2 className="text-lg font-bold text-slate-900">Finance Operations</h2>
@@ -478,88 +656,91 @@ export default function FinanceManagementPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-            <button
-              type="button"
-              onClick={openIssueFinance}
-              className="rounded-2xl border border-cyan-200 bg-white hover:bg-cyan-50 text-left p-4 transition-colors"
-            >
-              <Banknote className="h-5 w-5 text-cyan-700" />
-              <p className="mt-2 text-sm font-bold text-slate-900">Issue Finance</p>
-              <p className="mt-1 text-xs text-slate-600">Create and onboard a new finance agreement.</p>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => router.push('/dashboard/finance/approvals')}
-              className="rounded-2xl border border-cyan-200 bg-white hover:bg-cyan-50 text-left p-4 transition-colors"
-            >
-              <ClipboardCheck className="h-5 w-5 text-emerald-700" />
-              <p className="mt-2 text-sm font-bold text-slate-900">Approvals</p>
-              <p className="mt-1 text-xs text-slate-600">Review, approve, or reject finance applications.</p>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => router.push('/dashboard/finance/customers')}
-              className="rounded-2xl border border-cyan-200 bg-white hover:bg-cyan-50 text-left p-4 transition-colors"
-            >
-              <UserCog className="h-5 w-5 text-indigo-700" />
-              <p className="mt-2 text-sm font-bold text-slate-900">Finance Customer Handling</p>
-              <p className="mt-1 text-xs text-slate-600">Manage finance-linked customer workflows.</p>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => router.push('/dashboard/finance/reports')}
-              className="rounded-2xl border border-cyan-200 bg-white hover:bg-cyan-50 text-left p-4 transition-colors"
-            >
-              <FileBarChart2 className="h-5 w-5 text-violet-700" />
-              <p className="mt-2 text-sm font-bold text-slate-900">Finance Reports</p>
-              <p className="mt-1 text-xs text-slate-600">Track portfolio, quality, and performance trends.</p>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => router.push('/dashboard/finance/collections')}
-              className="rounded-2xl border border-cyan-200 bg-white hover:bg-cyan-50 text-left p-4 transition-colors"
-            >
-              <HandCoins className="h-5 w-5 text-amber-700" />
-              <p className="mt-2 text-sm font-bold text-slate-900">Finance Collection</p>
-              <p className="mt-1 text-xs text-slate-600">Post and monitor repayments and dues.</p>
-            </button>
-          </div>
+          {visibleOperationItems.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+              {visibleOperationItems.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={item.onClick}
+                  className="relative rounded-2xl border border-cyan-200 bg-white hover:bg-cyan-50 text-left p-4 transition-colors"
+                >
+                  <WidgetCloseGate>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void hideWidget(`${widgetPrefix}operation_${item.key}`);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void hideWidget(`${widgetPrefix}operation_${item.key}`);
+                        }
+                      }}
+                      className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                      aria-label={`Hide ${item.title} widget`}
+                    >
+                      ×
+                    </span>
+                  </WidgetCloseGate>
+                  <item.icon className={item.iconClass} />
+                  <p className="mt-2 text-sm font-bold text-slate-900">{item.title}</p>
+                  <p className="mt-1 text-xs text-slate-600">{item.description}</p>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+              All finance operation widgets are hidden.
+            </div>
+          )}
         </div>
+        ) : null}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="rounded-2xl border border-cyan-100 bg-white/86 backdrop-blur-xl p-4">
-            <div className="flex items-center gap-2">
-              <Users className="h-5 w-5 text-cyan-700" />
-              <p className="font-bold text-slate-900">Customer Centric View</p>
-            </div>
-            <p className="text-sm text-slate-600 mt-2">
-              Focus on vehicle customers with quick insight into active, arrears, and settled positions.
-            </p>
+        {showInsightsWidget ? (
+          <div className="relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}insights`)}
+                className="absolute right-2 -top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                aria-label="Hide finance insights widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            {visibleInsightCards.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {visibleInsightCards.map((item) => (
+                  <div key={item.key} className="relative rounded-2xl border border-cyan-100 bg-white/86 backdrop-blur-xl p-4">
+                    <WidgetCloseGate>
+                      <button
+                        type="button"
+                        onClick={() => void hideWidget(`${widgetPrefix}insight_${item.key}`)}
+                        className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                        aria-label={`Hide ${item.title} widget`}
+                      >
+                        ×
+                      </button>
+                    </WidgetCloseGate>
+                    <div className="flex items-center gap-2">
+                      <item.icon className={item.iconClass} />
+                      <p className="font-bold text-slate-900">{item.title}</p>
+                    </div>
+                    <p className="text-sm text-slate-600 mt-2">{item.description}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+                All finance insight widgets are hidden.
+              </div>
+            )}
           </div>
-          <div className="rounded-2xl border border-cyan-100 bg-white/86 backdrop-blur-xl p-4">
-            <div className="flex items-center gap-2">
-              <Banknote className="h-5 w-5 text-emerald-700" />
-              <p className="font-bold text-slate-900">Cash Flow Planning</p>
-            </div>
-            <p className="text-sm text-slate-600 mt-2">
-              Use the running installment book and arrears exposure to plan daily and monthly collections.
-            </p>
-          </div>
-          <div className="rounded-2xl border border-cyan-100 bg-white/86 backdrop-blur-xl p-4">
-            <div className="flex items-center gap-2">
-              <PieChart className="h-5 w-5 text-indigo-700" />
-              <p className="font-bold text-slate-900">Portfolio Quality</p>
-            </div>
-            <p className="text-sm text-slate-600 mt-2">
-              Track portfolio mix between vehicle and other mortgage products.
-            </p>
-          </div>
-        </div>
+        ) : null}
       </div>
 
       {registerOpen && (

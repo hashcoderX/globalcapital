@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 interface Employee {
   id: number;
@@ -65,6 +66,7 @@ const DEFAULT_LEAVE_TYPES: LeaveType[] = [
 
 export default function Leaves() {
   const apiBase = getApiBaseUrl();
+  const widgetPrefix = 'hrm_leaves_widget_';
   const [token, setToken] = useState('');
   const [leaves, setLeaves] = useState<Leave[]>([]);
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
@@ -103,6 +105,80 @@ export default function Leaves() {
   const [confirmTitle, setConfirmTitle] = useState('');
   const [confirmMessage, setConfirmMessage] = useState('');
   const [confirmAction, setConfirmAction] = useState<(() => Promise<void> | void) | null>(null);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
+
+  const fetchWidgetPreferences = useCallback(
+    async (authToken?: string) => {
+      const tokenToUse = authToken || token;
+      if (!tokenToUse) return;
+
+      try {
+        const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+          headers: {
+            Authorization: `Bearer ${tokenToUse}`,
+            Accept: 'application/json',
+          },
+        });
+
+        const widgets = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+        const hiddenKeys = widgets
+          .filter((item: { widget_key?: string; is_visible?: boolean | number | null }) => !item?.is_visible)
+          .map((item: { widget_key?: string }) => item.widget_key)
+          .filter((key: unknown): key is string => typeof key === 'string' && key.startsWith(widgetPrefix));
+
+        setHiddenWidgetKeys(hiddenKeys);
+        setWidgetNotice(null);
+      } catch {
+        setWidgetNotice('Failed to load widget preferences.');
+      }
+    },
+    [apiBase, token, widgetPrefix]
+  );
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+
+      const normalizedKey = widgetKey.trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Invalid widget key. Please refresh the page and try again.');
+        return false;
+      }
+
+      try {
+        await axios.patch(
+          `${apiBase}/dashboard/widgets`,
+          {
+            widget_key: normalizedKey,
+            is_visible: Boolean(isVisible),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice(null);
+        return true;
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+        return false;
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) return;
+
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+    },
+    [saveWidgetPreference]
+  );
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -113,8 +189,9 @@ export default function Leaves() {
       fetchLeaves(storedToken);
       fetchLeaveTypes(storedToken);
       fetchEmployees(storedToken);
+      fetchWidgetPreferences(storedToken);
     }
-  }, [router]);
+  }, [router, fetchWidgetPreferences]);
 
   const fetchLeaves = async (authToken?: string) => {
     const tokenToUse = authToken || token;
@@ -398,6 +475,22 @@ export default function Leaves() {
     router.push('/');
   };
 
+  const showEmployeeColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_employee`);
+  const showLeaveTypeColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_leave_type`);
+  const showDurationColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_duration`);
+  const showStatusColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_status`);
+  const showSectionHeadColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_section_head`);
+  const showHrApprovalColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_hr_approval`);
+  const showActionsColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_actions`);
+  const showAnyLeaveColumn =
+    showEmployeeColumn ||
+    showLeaveTypeColumn ||
+    showDurationColumn ||
+    showStatusColumn ||
+    showSectionHeadColumn ||
+    showHrApprovalColumn ||
+    showActionsColumn;
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
@@ -415,8 +508,28 @@ export default function Leaves() {
         <div className="absolute -bottom-8 left-40 w-72 h-72 bg-teal-200 rounded-full mix-blend-multiply filter blur-xl animate-pulse animation-delay-4000"></div>
       </div>
 
+      {widgetNotice && (
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {widgetNotice}
+          </div>
+        </div>
+      )}
+
       {/* Modern Navigation */}
+      {!hiddenWidgetKeys.includes(`${widgetPrefix}top_nav`) && (
       <nav className="relative z-10 bg-white/80 backdrop-blur-lg shadow-lg border-b border-white/20">
+        <WidgetCloseGate>
+          <button
+            type="button"
+            onClick={() => hideWidget(`${widgetPrefix}top_nav`)}
+            className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+            aria-label="Hide leaves top navigation widget"
+            title="Hide widget"
+          >
+            ×
+          </button>
+        </WidgetCloseGate>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row justify-between sm:items-center h-auto sm:h-16 py-3 gap-3">
             <div className="flex items-center justify-between sm:justify-start gap-3">
@@ -448,10 +561,23 @@ export default function Leaves() {
           </div>
         </div>
       </nav>
+      )}
 
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         {/* Hero Section */}
-        <div className="text-center mb-12">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}hero`) && (
+        <div className="text-center mb-12 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}hero`)}
+              className="absolute -top-2 right-0 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide leaves hero widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="inline-block p-1 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full mb-6">
             <div className="bg-white rounded-full p-4">
               <span className="text-4xl">🏖️</span>
@@ -465,178 +591,391 @@ export default function Leaves() {
             From request submission to final HR approval, handle everything efficiently.
           </p>
           <div className="flex flex-col sm:flex-row justify-center gap-4 sm:space-x-6 sm:gap-0">
-            <div className="text-center">
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}stat_pending`) && <div className="text-center relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => hideWidget(`${widgetPrefix}stat_pending`)}
+                  className="absolute -top-3 -right-6 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                  aria-label="Hide pending requests stat widget"
+                  title="Hide widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="text-xl sm:text-2xl font-bold text-blue-600">
                 {leaves.filter(l => l.status === 'pending').length}
               </div>
               <div className="text-sm text-gray-500">Pending Requests</div>
-            </div>
-            <div className="text-center">
+            </div>}
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}stat_approved`) && <div className="text-center relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => hideWidget(`${widgetPrefix}stat_approved`)}
+                  className="absolute -top-3 -right-6 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                  aria-label="Hide approved stat widget"
+                  title="Hide widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="text-xl sm:text-2xl font-bold text-green-600">
                 {leaves.filter(l => l.status === 'approved').length}
               </div>
               <div className="text-sm text-gray-500">Approved This Month</div>
-            </div>
-            <div className="text-center">
+            </div>}
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}stat_leave_types`) && <div className="text-center relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => hideWidget(`${widgetPrefix}stat_leave_types`)}
+                  className="absolute -top-3 -right-6 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                  aria-label="Hide leave types stat widget"
+                  title="Hide widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="text-xl sm:text-2xl font-bold text-purple-600">
                 {leaveTypes.length}
               </div>
               <div className="text-sm text-gray-500">Leave Types</div>
-            </div>
+            </div>}
           </div>
         </div>
+        )}
 
         {/* Action Buttons */}
-        <div className="flex flex-wrap gap-4 mb-8">
-          <button
-            onClick={() => setShowForm(true)}
-            className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-6 py-3 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center space-x-2"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-            <span>New Leave Request</span>
-          </button>
-          <button
-            onClick={() => setShowLeaveTypesModal(true)}
-            className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white px-6 py-3 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center space-x-2"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-            </svg>
-            <span>Manage Leave Types</span>
-          </button>
-        </div>
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}action_buttons`) && (
+          <div className="flex flex-wrap gap-4 mb-8 relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}action_buttons`)}
+                className="absolute -top-2 right-0 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                aria-label="Hide leave action buttons widget"
+                title="Hide widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}btn_new_leave`) && (
+              <div className="relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}btn_new_leave`)}
+                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                    aria-label="Hide new leave request button widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <button
+                  onClick={() => setShowForm(true)}
+                  className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-6 py-3 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center space-x-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  <span>New Leave Request</span>
+                </button>
+              </div>
+            )}
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}btn_manage_types`) && (
+              <div className="relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}btn_manage_types`)}
+                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                    aria-label="Hide manage leave types button widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <button
+                  onClick={() => setShowLeaveTypesModal(true)}
+                  className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white px-6 py-3 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl flex items-center space-x-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                  <span>Manage Leave Types</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Leave Requests List */}
-        <div className="bg-white/70 backdrop-blur-sm shadow-xl rounded-2xl border border-white/20 overflow-hidden">
-          <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-6">
-            <div className="flex items-center space-x-3">
-              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">
-                📋
-              </div>
-              <div>
-                <h3 className="text-xl font-bold text-white">Leave Requests</h3>
-                <p className="text-white/80">Manage and approve employee leave requests</p>
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}leave_requests`) && (
+          <div className="bg-white/70 backdrop-blur-sm shadow-xl rounded-2xl border border-white/20 overflow-hidden relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}leave_requests`)}
+                className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                aria-label="Hide leave requests widget"
+                title="Hide widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-6">
+              <div className="flex items-center space-x-3">
+                <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">
+                  📋
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-white">Leave Requests</h3>
+                  <p className="text-white/80">Manage and approve employee leave requests</p>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Employee
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Leave Type
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Duration
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Section Head
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    HR Approval
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {leaves.map((leave) => (
-                  <tr key={leave.id} className="hover:bg-gray-50 transition-colors duration-200">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-semibold text-gray-900">
-                        {leave.employee.first_name} {leave.employee.last_name}
-                      </div>
-                      <div className="text-sm text-gray-500">{leave.employee.employee_code}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {leave.leave_type}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <div>{new Date(leave.start_date).toLocaleDateString()}</div>
-                      <div className="text-gray-500">to {new Date(leave.end_date).toLocaleDateString()}</div>
-                      <div className="text-xs text-gray-500">{leave.days_requested} days</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full ${
-                        leave.status === 'approved'
-                          ? 'bg-green-100 text-green-800'
-                          : leave.status === 'rejected'
-                          ? 'bg-red-100 text-red-800'
-                          : leave.status === 'section_head_approved'
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : 'bg-gray-100 text-gray-800'
-                      }`}>
-                        {leave.status.replace('_', ' ').toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <div className={`w-3 h-3 rounded-full mx-auto ${
-                        leave.section_head_approved ? 'bg-green-500' : 'bg-gray-300'
-                      }`}></div>
-                      {leave.section_head_approved && leave.sectionHeadApprover && (
-                        <div className="text-xs text-gray-500 mt-1 text-center">
-                          {leave.sectionHeadApprover.first_name}
-                        </div>
+            {showAnyLeaveColumn ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      {showEmployeeColumn && (
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          <div className="flex items-center gap-2">
+                            <span>Employee</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_employee`)}
+                                className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide employee column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
                       )}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <div className={`w-3 h-3 rounded-full mx-auto ${
-                        leave.hr_approved ? 'bg-green-500' : 'bg-gray-300'
-                      }`}></div>
-                      {leave.hr_approved && leave.hrApprover && (
-                        <div className="text-xs text-gray-500 mt-1 text-center">
-                          {leave.hrApprover.first_name}
-                        </div>
+                      {showLeaveTypeColumn && (
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          <div className="flex items-center gap-2">
+                            <span>Leave Type</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_leave_type`)}
+                                className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide leave type column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
                       )}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <div className="flex space-x-2">
-                        {leave.status === 'pending' && (
-                          <button
-                            onClick={() => openApprovalModal(leave, 'section_head')}
-                            className="text-blue-600 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded text-xs"
-                          >
-                            Section Head
-                          </button>
+                      {showDurationColumn && (
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          <div className="flex items-center gap-2">
+                            <span>Duration</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_duration`)}
+                                className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide duration column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      )}
+                      {showStatusColumn && (
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          <div className="flex items-center gap-2">
+                            <span>Status</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_status`)}
+                                className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide status column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      )}
+                      {showSectionHeadColumn && (
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          <div className="flex items-center gap-2">
+                            <span>Section Head</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_section_head`)}
+                                className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide section head column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      )}
+                      {showHrApprovalColumn && (
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          <div className="flex items-center gap-2">
+                            <span>HR Approval</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_hr_approval`)}
+                                className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide HR approval column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      )}
+                      {showActionsColumn && (
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          <div className="flex items-center gap-2">
+                            <span>Actions</span>
+                            <WidgetCloseGate>
+                              <button
+                                type="button"
+                                onClick={() => hideWidget(`${widgetPrefix}col_actions`)}
+                                className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                                aria-label="Hide actions column"
+                                title="Hide column"
+                              >
+                                ×
+                              </button>
+                            </WidgetCloseGate>
+                          </div>
+                        </th>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {leaves.map((leave) => (
+                      <tr key={leave.id} className="hover:bg-gray-50 transition-colors duration-200">
+                        {showEmployeeColumn && (
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="text-sm font-semibold text-gray-900">
+                              {leave.employee.first_name} {leave.employee.last_name}
+                            </div>
+                            <div className="text-sm text-gray-500">{leave.employee.employee_code}</div>
+                          </td>
                         )}
-                        {leave.status === 'section_head_approved' && (
-                          <button
-                            onClick={() => openApprovalModal(leave, 'hr')}
-                            className="text-green-600 hover:text-green-900 bg-green-50 hover:bg-green-100 px-3 py-1 rounded text-xs"
-                          >
-                            HR Approve
-                          </button>
+                        {showLeaveTypeColumn && (
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {leave.leave_type}
+                          </td>
                         )}
-                        <button
-                          onClick={() => handleEdit(leave)}
-                          className="text-gray-600 hover:text-gray-900 bg-gray-50 hover:bg-gray-100 px-3 py-1 rounded text-xs"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => confirmDeleteLeave(leave)}
-                          className="text-red-600 hover:text-red-900 bg-red-50 hover:bg-red-100 px-3 py-1 rounded text-xs"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        {showDurationColumn && (
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <div>{new Date(leave.start_date).toLocaleDateString()}</div>
+                            <div className="text-gray-500">to {new Date(leave.end_date).toLocaleDateString()}</div>
+                            <div className="text-xs text-gray-500">{leave.days_requested} days</div>
+                          </td>
+                        )}
+                        {showStatusColumn && (
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full ${
+                              leave.status === 'approved'
+                                ? 'bg-green-100 text-green-800'
+                                : leave.status === 'rejected'
+                                ? 'bg-red-100 text-red-800'
+                                : leave.status === 'section_head_approved'
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-gray-100 text-gray-800'
+                            }`}>
+                              {leave.status.replace('_', ' ').toUpperCase()}
+                            </span>
+                          </td>
+                        )}
+                        {showSectionHeadColumn && (
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <div className={`w-3 h-3 rounded-full mx-auto ${
+                              leave.section_head_approved ? 'bg-green-500' : 'bg-gray-300'
+                            }`}></div>
+                            {leave.section_head_approved && leave.sectionHeadApprover && (
+                              <div className="text-xs text-gray-500 mt-1 text-center">
+                                {leave.sectionHeadApprover.first_name}
+                              </div>
+                            )}
+                          </td>
+                        )}
+                        {showHrApprovalColumn && (
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <div className={`w-3 h-3 rounded-full mx-auto ${
+                              leave.hr_approved ? 'bg-green-500' : 'bg-gray-300'
+                            }`}></div>
+                            {leave.hr_approved && leave.hrApprover && (
+                              <div className="text-xs text-gray-500 mt-1 text-center">
+                                {leave.hrApprover.first_name}
+                              </div>
+                            )}
+                          </td>
+                        )}
+                        {showActionsColumn && (
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <div className="flex space-x-2">
+                              {leave.status === 'pending' && (
+                                <button
+                                  onClick={() => openApprovalModal(leave, 'section_head')}
+                                  className="text-blue-600 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded text-xs"
+                                >
+                                  Section Head
+                                </button>
+                              )}
+                              {leave.status === 'section_head_approved' && (
+                                <button
+                                  onClick={() => openApprovalModal(leave, 'hr')}
+                                  className="text-green-600 hover:text-green-900 bg-green-50 hover:bg-green-100 px-3 py-1 rounded text-xs"
+                                >
+                                  HR Approve
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleEdit(leave)}
+                                className="text-gray-600 hover:text-gray-900 bg-gray-50 hover:bg-gray-100 px-3 py-1 rounded text-xs"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => confirmDeleteLeave(leave)}
+                                className="text-red-600 hover:text-red-900 bg-red-50 hover:bg-red-100 px-3 py-1 rounded text-xs"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-12 text-slate-500">All leave request table columns are hidden.</div>
+            )}
           </div>
-        </div>
+        )}
       </main>
 
       {/* Leave Request Form Modal */}

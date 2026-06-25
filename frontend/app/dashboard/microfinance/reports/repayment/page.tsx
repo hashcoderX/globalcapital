@@ -2,10 +2,11 @@
 
 import axios from 'axios';
 import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type LoanRow = {
   id: number;
@@ -51,8 +52,68 @@ export default function RepaymentReportPage() {
   const [rows, setRows] = useState<RepaymentRow[]>([]);
   const [officerFilter, setOfficerFilter] = useState('all');
   const [repaymentFilter, setRepaymentFilter] = useState<'all' | 'excellent' | 'good' | 'watch' | 'critical'>('all');
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
 
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
+  const widgetPrefix = 'mf_repayment_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this widget. Please try again.',
+      });
+    }
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -62,6 +123,7 @@ export default function RepaymentReportPage() {
     }
 
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -210,6 +272,46 @@ export default function RepaymentReportPage() {
   const averageRepaymentRate = summary.count > 0 ? summary.repaymentRate / summary.count : 0;
 
   const formatMoney = (value: number) => Number(value || 0).toFixed(2);
+  const summaryCards = [
+    {
+      key: `${widgetPrefix}summary_active_accounts`,
+      label: 'Active Accounts',
+      value: String(summary.count),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: `${widgetPrefix}summary_refundable`,
+      label: 'Refundable',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.refundable),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: `${widgetPrefix}summary_collected`,
+      label: 'Collected',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected),
+      valueClass: 'text-emerald-700',
+    },
+    {
+      key: `${widgetPrefix}summary_pending`,
+      label: 'Pending',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending),
+      valueClass: 'text-rose-700',
+    },
+    {
+      key: `${widgetPrefix}summary_avg_repayment`,
+      label: 'Avg Repayment %',
+      value: `${averageRepaymentRate.toFixed(2)}%`,
+      valueClass: 'text-indigo-700',
+    },
+    {
+      key: `${widgetPrefix}summary_excellent_critical`,
+      label: 'Excellent / Critical',
+      value: `${summary.excellent} / ${summary.critical}`,
+      valueClass: 'text-slate-900',
+    },
+  ];
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+  const showRepaymentAccountsSection = !hiddenWidgetKeys.has(`${widgetPrefix}accounts_section`);
 
   const formatDate = (value: string) => {
     if (!value || value === '-') return '-';
@@ -222,6 +324,46 @@ export default function RepaymentReportPage() {
       day: '2-digit',
     }).format(parsed);
   };
+
+  const tableColumns: Array<{
+    key: string;
+    label: string;
+    render: (row: RepaymentRow) => ReactNode;
+    tdClassName?: string;
+  }> = [
+    { key: 'loan_id', label: 'Loan ID', render: (row) => row.loanId },
+    { key: 'customer_no', label: 'Customer No', render: (row) => row.customerNo, tdClassName: 'font-semibold text-slate-900' },
+    { key: 'customer_name', label: 'Customer', render: (row) => row.customerName },
+    { key: 'field_officer', label: 'Field Officer', render: (row) => row.fieldOfficer },
+    { key: 'loan_status', label: 'Loan Status', render: (row) => row.loanStatus, tdClassName: 'capitalize' },
+    { key: 'refundable', label: 'Refundable', render: (row) => formatMoney(row.refundableAmount) },
+    { key: 'collected', label: 'Collected', render: (row) => formatMoney(row.collectedAmount), tdClassName: 'text-emerald-700 font-semibold' },
+    { key: 'pending', label: 'Pending', render: (row) => formatMoney(row.pendingAmount), tdClassName: 'text-rose-700 font-semibold' },
+    { key: 'repayment_rate', label: 'Repayment %', render: (row) => `${row.repaymentRate.toFixed(2)}%`, tdClassName: 'font-semibold text-indigo-700' },
+    { key: 'due_date', label: 'Due Date', render: (row) => formatDate(row.dueDate) },
+    { key: 'next_payment', label: 'Next Payment', render: (row) => formatDate(row.nextPaymentDate) },
+    { key: 'overdue_days', label: 'Overdue Days', render: (row) => row.overdueDays },
+    {
+      key: 'repayment_status',
+      label: 'Repayment Status',
+      render: (row) => (
+        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${
+          row.repaymentStatus === 'excellent'
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+            : row.repaymentStatus === 'good'
+            ? 'border-cyan-200 bg-cyan-50 text-cyan-800'
+            : row.repaymentStatus === 'watch'
+            ? 'border-amber-200 bg-amber-50 text-amber-800'
+            : 'border-rose-200 bg-rose-50 text-rose-800'
+        }`}>
+          {row.repaymentStatus}
+        </span>
+      ),
+    },
+  ];
+  const visibleTableColumns = tableColumns.filter(
+    (column) => !hiddenWidgetKeys.has(`${widgetPrefix}table_col_${column.key}`)
+  );
 
   const getReportFileDate = () => new Date().toISOString().slice(0, 10);
 
@@ -341,7 +483,7 @@ export default function RepaymentReportPage() {
     doc.save(`repayment-report-${getReportFileDate()}.pdf`);
   };
 
-  if (!token || loading) {
+  if (!token || loading || loadingWidgets) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
@@ -376,40 +518,42 @@ export default function RepaymentReportPage() {
           </div>
 
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Active Accounts</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.count}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Refundable</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.refundable)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Collected</p>
-              <p className="text-2xl font-extrabold text-emerald-700 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Pending</p>
-              <p className="text-2xl font-extrabold text-rose-700 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending)}
-              </p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Avg Repayment %</p>
-              <p className="text-2xl font-extrabold text-indigo-700 mt-1">{averageRepaymentRate.toFixed(2)}%</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Excellent / Critical</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.excellent} / {summary.critical}</p>
-            </div>
+            {visibleSummaryCards.map((card) => (
+              <div key={card.key} className="relative rounded-xl bg-white/90 border border-white shadow-sm p-4">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(card.key)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${card.label} summary card`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
+                <p className={`text-2xl font-extrabold mt-1 ${card.valueClass}`}>{card.value}</p>
+              </div>
+            ))}
           </div>
+          {visibleSummaryCards.length === 0 && (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              All summary widgets are hidden. Restore from dashboard with admin approval.
+            </div>
+          )}
         </div>
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+        {showRepaymentAccountsSection && (
+        <div className="relative bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}accounts_section`)}
+              className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide repayment accounts widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">Repayment Accounts</h2>
             <div className="flex items-end gap-2 flex-wrap">
@@ -473,54 +617,40 @@ export default function RepaymentReportPage() {
             <div className="mt-4 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-100/60 to-teal-100/40 p-8 text-sm text-slate-700 text-center">
               No repayment data found for selected filters.
             </div>
+          ) : visibleTableColumns.length === 0 ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-8 text-sm text-amber-800 text-center">
+              All table columns are hidden. Restore from dashboard with admin approval.
+            </div>
           ) : (
             <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
               <table className="min-w-full text-sm text-left text-slate-700 bg-white">
                 <thead className="bg-cyan-50/70 text-slate-700">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Loan ID</th>
-                    <th className="px-3 py-2 font-semibold">Customer No</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Field Officer</th>
-                    <th className="px-3 py-2 font-semibold">Loan Status</th>
-                    <th className="px-3 py-2 font-semibold">Refundable</th>
-                    <th className="px-3 py-2 font-semibold">Collected</th>
-                    <th className="px-3 py-2 font-semibold">Pending</th>
-                    <th className="px-3 py-2 font-semibold">Repayment %</th>
-                    <th className="px-3 py-2 font-semibold">Due Date</th>
-                    <th className="px-3 py-2 font-semibold">Next Payment</th>
-                    <th className="px-3 py-2 font-semibold">Overdue Days</th>
-                    <th className="px-3 py-2 font-semibold">Repayment Status</th>
+                    {visibleTableColumns.map((column) => (
+                      <th key={column.key} className="relative px-3 py-2 font-semibold">
+                        {column.label}
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={() => void hideWidget(`${widgetPrefix}table_col_${column.key}`)}
+                            className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                            aria-label={`Hide ${column.label} column`}
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredRows.map((row) => (
                     <tr key={row.loanId} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                      <td className="px-3 py-2">{row.loanId}</td>
-                      <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
-                      <td className="px-3 py-2">{row.customerName}</td>
-                      <td className="px-3 py-2">{row.fieldOfficer}</td>
-                      <td className="px-3 py-2 capitalize">{row.loanStatus}</td>
-                      <td className="px-3 py-2">{formatMoney(row.refundableAmount)}</td>
-                      <td className="px-3 py-2 text-emerald-700 font-semibold">{formatMoney(row.collectedAmount)}</td>
-                      <td className="px-3 py-2 text-rose-700 font-semibold">{formatMoney(row.pendingAmount)}</td>
-                      <td className="px-3 py-2 font-semibold text-indigo-700">{row.repaymentRate.toFixed(2)}%</td>
-                      <td className="px-3 py-2">{formatDate(row.dueDate)}</td>
-                      <td className="px-3 py-2">{formatDate(row.nextPaymentDate)}</td>
-                      <td className="px-3 py-2">{row.overdueDays}</td>
-                      <td className="px-3 py-2">
-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${
-                          row.repaymentStatus === 'excellent'
-                            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                            : row.repaymentStatus === 'good'
-                            ? 'border-cyan-200 bg-cyan-50 text-cyan-800'
-                            : row.repaymentStatus === 'watch'
-                            ? 'border-amber-200 bg-amber-50 text-amber-800'
-                            : 'border-rose-200 bg-rose-50 text-rose-800'
-                        }`}>
-                          {row.repaymentStatus}
-                        </span>
-                      </td>
+                      {visibleTableColumns.map((column) => (
+                        <td key={`${row.loanId}-${column.key}`} className={`px-3 py-2 ${column.tdClassName || ''}`}>
+                          {column.render(row)}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
@@ -528,7 +658,31 @@ export default function RepaymentReportPage() {
             </div>
           )}
         </div>
+        )}
+        {!showRepaymentAccountsSection && visibleSummaryCards.length === 0 && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            All widgets on this page are hidden. Use "Restore Hidden Widgets" on dashboard to show them again.
+          </div>
+        )}
       </div>
+      {widgetNotice.open && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={() => setWidgetNotice({ open: false, title: '', message: '' })} />
+          <div className="relative w-full max-w-sm rounded-2xl border border-cyan-100 bg-white p-5 shadow-xl">
+            <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
+            <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
+                className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

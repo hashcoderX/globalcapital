@@ -4,6 +4,7 @@ import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Download, Filter, LineChart, TrendingUp } from 'lucide-react';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type GrowthPeriod = {
   period: string;
@@ -60,6 +61,8 @@ export default function DepositGrowthReportPage() {
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
   const [token, setToken] = useState('');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
   const [loading, setLoading] = useState(true);
 
   const [fromDate, setFromDate] = useState('');
@@ -80,6 +83,52 @@ export default function DepositGrowthReportPage() {
     overall_growth_percent: null,
   });
   const [periods, setPeriods] = useState<GrowthPeriod[]>([]);
+  const widgetPrefix = 'savings_deposit_growth_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    try {
+      const response = await axios.get('/api/dashboard/widgets', {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        '/api/dashboard/widgets',
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -88,6 +137,7 @@ export default function DepositGrowthReportPage() {
       return;
     }
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   const fetchReport = async () => {
@@ -194,6 +244,36 @@ export default function DepositGrowthReportPage() {
     return periods.reduce((max, row) => (toNumber(row.deposit_amount) > toNumber(max.deposit_amount) ? row : max), periods[0]);
   }, [periods]);
 
+  const showHeaderWidget = !hiddenWidgetKeys.has(`${widgetPrefix}header`);
+  const statsCards = [
+    { key: 'stat_total_deposits', label: 'Total Deposits', value: amount(summary.total_deposit_amount), valueClass: 'text-2xl font-extrabold text-emerald-700 mt-1' },
+    { key: 'stat_transactions', label: 'Deposit Transactions', value: summary.total_deposit_transactions, valueClass: 'text-2xl font-extrabold text-slate-900 mt-1' },
+    { key: 'stat_average', label: 'Average Deposit', value: amount(summary.avg_deposit_amount), valueClass: 'text-2xl font-extrabold text-cyan-700 mt-1' },
+    { key: 'stat_unique_accounts', label: 'Unique Accounts', value: summary.unique_accounts, valueClass: 'text-2xl font-extrabold text-slate-900 mt-1' },
+    {
+      key: 'stat_overall_growth',
+      label: 'Overall Growth',
+      value: summary.overall_growth_percent === null ? '-' : `${summary.overall_growth_percent.toFixed(2)}%`,
+      valueClass: `text-2xl font-extrabold mt-1 ${(summary.overall_growth_percent ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'}`,
+    },
+  ];
+  const visibleStatsCards = statsCards.filter((card) => !hiddenWidgetKeys.has(`${widgetPrefix}${card.key}`));
+  const showFiltersWidget = !hiddenWidgetKeys.has(`${widgetPrefix}filters`);
+  const showTimelineWidget = !hiddenWidgetKeys.has(`${widgetPrefix}timeline`);
+  const timelineColumns = [
+    { key: 'period', label: 'Period' },
+    { key: 'deposit_amount', label: 'Deposit Amount' },
+    { key: 'transactions', label: 'Transactions' },
+    { key: 'accounts', label: 'Accounts' },
+    { key: 'previous_amount', label: 'Previous Amount' },
+    { key: 'growth', label: 'Growth' },
+  ] as const;
+  const visibleTimelineColumns = timelineColumns.filter(
+    (column) => !hiddenWidgetKeys.has(`${widgetPrefix}col_${column.key}`)
+  );
+  const isAnyWidgetVisible =
+    showHeaderWidget || visibleStatsCards.length > 0 || showFiltersWidget || showTimelineWidget;
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-yellow-50 via-orange-50 to-amber-50 flex items-center justify-center">
@@ -211,7 +291,29 @@ export default function DepositGrowthReportPage() {
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/85 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(146,64,14,0.45)] p-6 md:p-7">
+        {widgetNotice ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+        {!isAnyWidgetVisible ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            All widgets are hidden on this page. Restore hidden widgets from dashboard.
+          </div>
+        ) : null}
+
+        {showHeaderWidget ? (
+        <div className="bg-white/85 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(146,64,14,0.45)] p-6 md:p-7 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
               <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-orange-700 border border-orange-100">
@@ -242,33 +344,41 @@ export default function DepositGrowthReportPage() {
             </div>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-            <div className="rounded-xl bg-white/90 border border-orange-100 shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Total Deposits</p>
-              <p className="text-2xl font-extrabold text-emerald-700 mt-1">{amount(summary.total_deposit_amount)}</p>
+          {visibleStatsCards.length > 0 ? (
+            <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+              {visibleStatsCards.map((card) => (
+                <div key={card.key} className="rounded-xl bg-white/90 border border-orange-100 shadow-sm p-4 relative">
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => void hideWidget(`${widgetPrefix}${card.key}`)}
+                      className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                      aria-label={`Hide ${card.label} widget`}
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
+                  <p className={card.valueClass}>{card.value}</p>
+                </div>
+              ))}
             </div>
-            <div className="rounded-xl bg-white/90 border border-orange-100 shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Deposit Transactions</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.total_deposit_transactions}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-orange-100 shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Average Deposit</p>
-              <p className="text-2xl font-extrabold text-cyan-700 mt-1">{amount(summary.avg_deposit_amount)}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-orange-100 shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Unique Accounts</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.unique_accounts}</p>
-            </div>
-            <div className="rounded-xl bg-white/90 border border-orange-100 shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Overall Growth</p>
-              <p className={`text-2xl font-extrabold mt-1 ${(summary.overall_growth_percent ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                {summary.overall_growth_percent === null ? '-' : `${summary.overall_growth_percent.toFixed(2)}%`}
-              </p>
-            </div>
-          </div>
+          ) : null}
         </div>
+        ) : null}
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-orange-100 shadow-[0_18px_40px_-24px_rgba(146,64,14,0.45)] p-5">
+        {showFiltersWidget ? (
+        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-orange-100 shadow-[0_18px_40px_-24px_rgba(146,64,14,0.45)] p-5 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide filters widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
             <div className="flex items-center gap-2">
               <Filter className="h-4 w-4 text-orange-700" />
@@ -353,8 +463,20 @@ export default function DepositGrowthReportPage() {
             </div>
           </div>
         </div>
+        ) : null}
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-orange-100 shadow-[0_18px_40px_-24px_rgba(146,64,14,0.45)] p-5">
+        {showTimelineWidget ? (
+        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-orange-100 shadow-[0_18px_40px_-24px_rgba(146,64,14,0.45)] p-5 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}timeline`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide timeline widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
               <h2 className="text-lg font-bold text-slate-900">Growth Timeline</h2>
@@ -371,36 +493,65 @@ export default function DepositGrowthReportPage() {
             </div>
           ) : periods.length === 0 ? (
             <p className="text-sm text-slate-500">No deposit growth data found for the selected filters.</p>
+          ) : visibleTimelineColumns.length === 0 ? (
+            <p className="text-sm text-amber-800">All table columns are hidden. Restore hidden widgets from dashboard.</p>
           ) : (
             <div className="overflow-x-auto rounded-xl border border-orange-100">
               <table className="min-w-full text-sm text-left text-slate-700 bg-white">
                 <thead className="bg-orange-50/70 text-slate-700">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Period</th>
-                    <th className="px-3 py-2 font-semibold">Deposit Amount</th>
-                    <th className="px-3 py-2 font-semibold">Transactions</th>
-                    <th className="px-3 py-2 font-semibold">Accounts</th>
-                    <th className="px-3 py-2 font-semibold">Previous Amount</th>
-                    <th className="px-3 py-2 font-semibold">Growth</th>
+                    {visibleTimelineColumns.map((column) => (
+                      <th key={column.key} className="px-3 py-2 font-semibold relative">
+                        {column.label}
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void hideWidget(`${widgetPrefix}col_${column.key}`);
+                            }}
+                            className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-orange-200 bg-white text-[10px] font-bold text-orange-700 hover:bg-rose-50 hover:text-rose-700"
+                            aria-label={`Hide ${column.label} column`}
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {periods.map((row) => (
                     <tr key={row.period} className="border-b border-orange-100 last:border-b-0">
-                      <td className="px-3 py-2 font-semibold text-slate-900">{formatPeriod(row.period, groupBy)}</td>
-                      <td className="px-3 py-2 text-emerald-700 font-semibold">{amount(row.deposit_amount)}</td>
-                      <td className="px-3 py-2">{row.deposit_transactions}</td>
-                      <td className="px-3 py-2">{row.accounts_count}</td>
-                      <td className="px-3 py-2">{row.previous_amount === null ? '-' : amount(row.previous_amount)}</td>
-                      <td className="px-3 py-2">
-                        {row.growth_percent === null ? (
-                          '-'
-                        ) : (
-                          <span className={`font-semibold ${row.growth_percent >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                            {row.growth_percent.toFixed(2)}%
-                          </span>
-                        )}
-                      </td>
+                      {visibleTimelineColumns.map((column) => {
+                        if (column.key === 'period') {
+                          return <td key={column.key} className="px-3 py-2 font-semibold text-slate-900">{formatPeriod(row.period, groupBy)}</td>;
+                        }
+                        if (column.key === 'deposit_amount') {
+                          return <td key={column.key} className="px-3 py-2 text-emerald-700 font-semibold">{amount(row.deposit_amount)}</td>;
+                        }
+                        if (column.key === 'transactions') {
+                          return <td key={column.key} className="px-3 py-2">{row.deposit_transactions}</td>;
+                        }
+                        if (column.key === 'accounts') {
+                          return <td key={column.key} className="px-3 py-2">{row.accounts_count}</td>;
+                        }
+                        if (column.key === 'previous_amount') {
+                          return <td key={column.key} className="px-3 py-2">{row.previous_amount === null ? '-' : amount(row.previous_amount)}</td>;
+                        }
+                        return (
+                          <td key={column.key} className="px-3 py-2">
+                            {row.growth_percent === null ? (
+                              '-'
+                            ) : (
+                              <span className={`font-semibold ${row.growth_percent >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                {row.growth_percent.toFixed(2)}%
+                              </span>
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -408,6 +559,7 @@ export default function DepositGrowthReportPage() {
             </div>
           )}
         </div>
+        ) : null}
       </div>
     </div>
   );

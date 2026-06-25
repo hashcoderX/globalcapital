@@ -2,6 +2,7 @@
 
 import axios from "axios";
 import { getApiBaseUrl } from "@/lib/api";
+import { WidgetCloseGate } from "@/lib/useWidgetsFixed";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -119,6 +120,8 @@ export default function OfficeCollectionsPage() {
   const apiBase = getApiBaseUrl();
   const router = useRouter();
   const [token, setToken] = useState("");
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -164,6 +167,52 @@ export default function OfficeCollectionsPage() {
   const [chequeBank, setChequeBank] = useState("");
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [receiptData, setReceiptData] = useState<CollectionReceipt | null>(null);
+  const widgetPrefix = "office_collections_widget_";
+
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || "").trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  }, [apiBase]);
+
+  const saveWidgetPreference = useCallback(async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${apiBase}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, [apiBase, token]);
+
+  const hideWidget = useCallback(async (widgetKey: string) => {
+    setWidgetNotice("");
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice("Failed to hide widget. Please try again.");
+    }
+  }, [hiddenWidgetKeys, saveWidgetPreference]);
 
   useEffect(() => {
     const stored = localStorage.getItem("token");
@@ -172,7 +221,8 @@ export default function OfficeCollectionsPage() {
       return;
     }
     setToken(stored);
-  }, [router]);
+    void fetchWidgetPreferences(stored);
+  }, [router, fetchWidgetPreferences]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 350);
@@ -422,6 +472,40 @@ export default function OfficeCollectionsPage() {
     }
   };
 
+  const showHeaderWidget = !hiddenWidgetKeys.has(`${widgetPrefix}header`);
+  const summaryCards = [
+    { key: "summary_results", label: "Results", value: stats.total },
+    { key: "summary_loan", label: "Instant loan", value: stats.loan },
+    { key: "summary_finance", label: "Finance", value: stats.finance },
+    { key: "summary_micro", label: "Micro", value: stats.microfinance },
+    { key: "summary_mortgage", label: "Mortgage", value: stats.mortgage },
+  ];
+  const visibleSummaryCards = summaryCards.filter(
+    (card) => !hiddenWidgetKeys.has(`${widgetPrefix}${card.key}`)
+  );
+  const showFiltersWidget = !hiddenWidgetKeys.has(`${widgetPrefix}filters`);
+  const showPaginationWidget = !hiddenWidgetKeys.has(`${widgetPrefix}pagination`);
+  const tableColumns = [
+    { key: "product", label: "Product", className: "py-3 pr-4 pl-1 whitespace-nowrap" },
+    { key: "reference", label: "Reference", className: "py-3 pr-4 whitespace-nowrap" },
+    { key: "customer", label: "Customer", className: "py-3 pr-4 whitespace-nowrap" },
+    { key: "customer_no", label: "Customer no", className: "py-3 pr-4 whitespace-nowrap" },
+    { key: "loan_product", label: "Loan product", className: "py-3 pr-4 whitespace-nowrap" },
+    { key: "installment", label: "Installment", className: "py-3 pr-4 whitespace-nowrap text-right" },
+    { key: "due_amount", label: "Due amount", className: "py-3 pr-4 whitespace-nowrap text-right" },
+    { key: "paid_amount", label: "Paid amount", className: "py-3 pr-4 whitespace-nowrap text-right" },
+    { key: "balance", label: "Balance", className: "py-3 pr-4 whitespace-nowrap text-right" },
+    { key: "due_date", label: "Due date", className: "py-3 pr-4 whitespace-nowrap" },
+    { key: "next_payment", label: "Next payment", className: "py-3 pr-4 whitespace-nowrap" },
+    { key: "status", label: "Status", className: "py-3 pr-4 whitespace-nowrap" },
+    { key: "action", label: "Action", className: "py-3 pr-4 text-right whitespace-nowrap" },
+  ] as const;
+  const visibleTableColumns = tableColumns.filter(
+    (column) => !hiddenWidgetKeys.has(`${widgetPrefix}col_${column.key}`)
+  );
+  const isMainWidgetVisible =
+    showHeaderWidget || showFiltersWidget || visibleSummaryCards.length > 0 || showPaginationWidget;
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/40 to-cyan-50 flex items-center justify-center">
@@ -439,7 +523,30 @@ export default function OfficeCollectionsPage() {
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="overflow-hidden rounded-3xl border border-white/70 bg-white/85 shadow-xl backdrop-blur-xl">
+        {widgetNotice ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+
+        {!isMainWidgetVisible ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center text-sm font-medium text-amber-800">
+            All widgets on this page are hidden. Restore hidden widgets from dashboard.
+          </div>
+        ) : null}
+
+        {showHeaderWidget ? (
+        <div className="overflow-hidden rounded-3xl border border-white/70 bg-white/85 shadow-xl backdrop-blur-xl relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-3 top-3 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/70 bg-white/85 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="bg-gradient-to-r from-indigo-600 via-violet-600 to-cyan-600 px-6 py-6 sm:px-8">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex items-start gap-4">
@@ -476,23 +583,41 @@ export default function OfficeCollectionsPage() {
             </div>
           </div>
         </div>
+        ) : null}
 
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {[
-            { label: "Results", value: stats.total, color: "from-indigo-500 to-violet-600" },
-            { label: "Instant loan", value: stats.loan, color: "from-cyan-500 to-blue-600" },
-            { label: "Finance", value: stats.finance, color: "from-emerald-500 to-teal-600" },
-            { label: "Micro", value: stats.microfinance, color: "from-blue-500 to-indigo-600" },
-            { label: "Mortgage", value: stats.mortgage, color: "from-violet-500 to-purple-600" },
-          ].map((item) => (
-            <div key={item.label} className="rounded-2xl border border-white/80 bg-white/90 p-3 shadow-sm">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
-              <p className="mt-1 text-2xl font-extrabold text-slate-900 tabular-nums">{loading ? "—" : item.value}</p>
-            </div>
-          ))}
-        </div>
+        {visibleSummaryCards.length > 0 ? (
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            {visibleSummaryCards.map((item) => (
+              <div key={item.label} className="rounded-2xl border border-white/80 bg-white/90 p-3 shadow-sm relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}${item.key}`)}
+                    className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${item.label} widget`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{item.label}</p>
+                <p className="mt-1 text-2xl font-extrabold text-slate-900 tabular-nums">{loading ? "—" : item.value}</p>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
-        <div className="rounded-3xl border border-white/80 bg-white/90 shadow-lg overflow-hidden">
+        {showFiltersWidget ? (
+        <div className="rounded-3xl border border-white/80 bg-white/90 shadow-lg overflow-hidden relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+              className="absolute right-3 top-3 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide filters and table widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="border-b border-slate-100 px-4 sm:px-6 py-4 space-y-4">
             <div className="relative max-w-xl">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-indigo-500/70" />
@@ -636,24 +761,34 @@ export default function OfficeCollectionsPage() {
                     : "Try another search term or product filter."}
                 </p>
               </div>
+            ) : visibleTableColumns.length === 0 ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+                All table columns are hidden. Restore hidden widgets from dashboard.
+              </div>
             ) : (
               <div className="overflow-x-auto -mx-1">
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="text-left text-[10px] font-bold uppercase tracking-wider text-indigo-900 border-b-2 border-indigo-100">
-                      <th className="py-3 pr-4 pl-1 whitespace-nowrap">Product</th>
-                      <th className="py-3 pr-4 whitespace-nowrap">Reference</th>
-                      <th className="py-3 pr-4 whitespace-nowrap">Customer</th>
-                      <th className="py-3 pr-4 whitespace-nowrap">Customer no</th>
-                      <th className="py-3 pr-4 whitespace-nowrap">Loan product</th>
-                      <th className="py-3 pr-4 whitespace-nowrap text-right">Installment</th>
-                      <th className="py-3 pr-4 whitespace-nowrap text-right">Due amount</th>
-                      <th className="py-3 pr-4 whitespace-nowrap text-right">Paid amount</th>
-                      <th className="py-3 pr-4 whitespace-nowrap text-right">Balance</th>
-                      <th className="py-3 pr-4 whitespace-nowrap">Due date</th>
-                      <th className="py-3 pr-4 whitespace-nowrap">Next payment</th>
-                      <th className="py-3 pr-4 whitespace-nowrap">Status</th>
-                      <th className="py-3 pr-4 text-right whitespace-nowrap">Action</th>
+                      {visibleTableColumns.map((column) => (
+                        <th key={column.key} className={`${column.className} relative`}>
+                          {column.label}
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void hideWidget(`${widgetPrefix}col_${column.key}`);
+                              }}
+                              className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-indigo-300 bg-white text-[10px] font-bold text-indigo-700 hover:bg-rose-50 hover:text-rose-700"
+                              aria-label={`Hide ${column.label} column`}
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -664,54 +799,86 @@ export default function OfficeCollectionsPage() {
                           key={`${account.type}-${account.source_id}`}
                           className="hover:bg-indigo-50/50 transition-colors"
                         >
-                          <td className="py-3.5 pr-4 pl-1 whitespace-nowrap">
-                            <span
-                              className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase ${styles.chip}`}
-                            >
-                              {account.label}
-                            </span>
-                          </td>
-                          <td className="py-3.5 pr-4 font-mono text-xs font-bold text-slate-800 whitespace-nowrap">
-                            {account.reference}
-                          </td>
-                          <td className="py-3.5 pr-4 font-semibold text-slate-900 whitespace-nowrap">
-                            {account.customer_name || "—"}
-                          </td>
-                          <td className="py-3.5 pr-4 font-mono text-xs text-indigo-900 whitespace-nowrap">
-                            {account.customer_no || "—"}
-                          </td>
-                          <td className="py-3.5 pr-4 text-slate-800 max-w-[160px] truncate" title={account.product}>
-                            {account.product}
-                          </td>
-                          <td className="py-3.5 pr-4 text-right font-semibold text-slate-900 tabular-nums whitespace-nowrap">
-                            {formatAmount(account.installment_amount)}
-                          </td>
-                          <td className="py-3.5 pr-4 text-right font-semibold text-slate-900 tabular-nums whitespace-nowrap">
-                            {formatAmount(account.due_amount)}
-                          </td>
-                          <td className="py-3.5 pr-4 text-right font-semibold text-emerald-800 tabular-nums whitespace-nowrap">
-                            {formatAmount(account.paid_amount)}
-                          </td>
-                          <td className="py-3.5 pr-4 text-right font-bold text-slate-900 tabular-nums whitespace-nowrap">
-                            {formatAmount(account.balance)}
-                          </td>
-                          <td className="py-3.5 pr-4 text-slate-800 whitespace-nowrap">{formatDate(account.due_date)}</td>
-                          <td className="py-3.5 pr-4 text-slate-800 whitespace-nowrap">{formatDate(account.next_payment_date || null)}</td>
-                          <td className="py-3.5 pr-4 whitespace-nowrap">
-                            <span className="inline-flex rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800">
-                              {statusLabel(account.status)}
-                            </span>
-                          </td>
-                          <td className="py-3.5 pr-4 text-right whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={() => openCollectModal(account)}
-                              className={`inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r ${styles.gradient} px-3 py-2 text-xs font-bold text-white shadow-sm hover:opacity-95`}
-                            >
-                              <HandCoins className="h-3.5 w-3.5" />
-                              Collect
-                            </button>
-                          </td>
+                          {visibleTableColumns.map((column) => {
+                            if (column.key === "product") {
+                              return (
+                                <td key={column.key} className="py-3.5 pr-4 pl-1 whitespace-nowrap">
+                                  <span
+                                    className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase ${styles.chip}`}
+                                  >
+                                    {account.label}
+                                  </span>
+                                </td>
+                              );
+                            }
+                            if (column.key === "reference") {
+                              return (
+                                <td key={column.key} className="py-3.5 pr-4 font-mono text-xs font-bold text-slate-800 whitespace-nowrap">
+                                  {account.reference}
+                                </td>
+                              );
+                            }
+                            if (column.key === "customer") {
+                              return (
+                                <td key={column.key} className="py-3.5 pr-4 font-semibold text-slate-900 whitespace-nowrap">
+                                  {account.customer_name || "—"}
+                                </td>
+                              );
+                            }
+                            if (column.key === "customer_no") {
+                              return (
+                                <td key={column.key} className="py-3.5 pr-4 font-mono text-xs text-indigo-900 whitespace-nowrap">
+                                  {account.customer_no || "—"}
+                                </td>
+                              );
+                            }
+                            if (column.key === "loan_product") {
+                              return (
+                                <td key={column.key} className="py-3.5 pr-4 text-slate-800 max-w-[160px] truncate" title={account.product}>
+                                  {account.product}
+                                </td>
+                              );
+                            }
+                            if (column.key === "installment") {
+                              return <td key={column.key} className="py-3.5 pr-4 text-right font-semibold text-slate-900 tabular-nums whitespace-nowrap">{formatAmount(account.installment_amount)}</td>;
+                            }
+                            if (column.key === "due_amount") {
+                              return <td key={column.key} className="py-3.5 pr-4 text-right font-semibold text-slate-900 tabular-nums whitespace-nowrap">{formatAmount(account.due_amount)}</td>;
+                            }
+                            if (column.key === "paid_amount") {
+                              return <td key={column.key} className="py-3.5 pr-4 text-right font-semibold text-emerald-800 tabular-nums whitespace-nowrap">{formatAmount(account.paid_amount)}</td>;
+                            }
+                            if (column.key === "balance") {
+                              return <td key={column.key} className="py-3.5 pr-4 text-right font-bold text-slate-900 tabular-nums whitespace-nowrap">{formatAmount(account.balance)}</td>;
+                            }
+                            if (column.key === "due_date") {
+                              return <td key={column.key} className="py-3.5 pr-4 text-slate-800 whitespace-nowrap">{formatDate(account.due_date)}</td>;
+                            }
+                            if (column.key === "next_payment") {
+                              return <td key={column.key} className="py-3.5 pr-4 text-slate-800 whitespace-nowrap">{formatDate(account.next_payment_date || null)}</td>;
+                            }
+                            if (column.key === "status") {
+                              return (
+                                <td key={column.key} className="py-3.5 pr-4 whitespace-nowrap">
+                                  <span className="inline-flex rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800">
+                                    {statusLabel(account.status)}
+                                  </span>
+                                </td>
+                              );
+                            }
+                            return (
+                              <td key={column.key} className="py-3.5 pr-4 text-right whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => openCollectModal(account)}
+                                  className={`inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r ${styles.gradient} px-3 py-2 text-xs font-bold text-white shadow-sm hover:opacity-95`}
+                                >
+                                  <HandCoins className="h-3.5 w-3.5" />
+                                  Collect
+                                </button>
+                              </td>
+                            );
+                          })}
                         </tr>
                       );
                     })}
@@ -720,8 +887,18 @@ export default function OfficeCollectionsPage() {
               </div>
             )}
 
-            {!loading && filteredAccounts.length > 0 ? (
-              <div className="mt-5 flex flex-col gap-3 border-t border-indigo-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            {!loading && filteredAccounts.length > 0 && showPaginationWidget ? (
+              <div className="mt-5 flex flex-col gap-3 border-t border-indigo-100 pt-4 sm:flex-row sm:items-center sm:justify-between relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}pagination`)}
+                    className="absolute -right-1 -top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide pagination widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="flex flex-wrap items-center gap-3 text-xs text-slate-700">
                   <span className="font-semibold text-slate-900">
                     Showing {hasAdvancedFilters ? filteredAccounts.length : `${pagination.from ?? 0}–${pagination.to ?? 0}`} of {hasAdvancedFilters ? filteredAccounts.length : pagination.total}
@@ -771,6 +948,7 @@ export default function OfficeCollectionsPage() {
             ) : null}
           </div>
         </div>
+        ) : null}
       </div>
 
       <CollectionReceiptBill

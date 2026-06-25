@@ -2,6 +2,7 @@
 
 import axios from "axios";
 import { getApiBaseUrl, getBackendOrigin } from "@/lib/api";
+import { WidgetCloseGate } from "@/lib/useWidgetsFixed";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -97,6 +98,12 @@ type RequestStats = {
   rejected: number;
 };
 
+type RequestTableColumn = {
+  key: string;
+  label: string;
+  className: string;
+};
+
 const PER_PAGE_OPTIONS = [10, 15, 25, 50] as const;
 
 function mapRequestRow(item: Record<string, unknown>): LoanRequestSummary {
@@ -147,6 +154,7 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
 
 export default function LoanRequestsPage() {
   const apiBase = getApiBaseUrl();
+  const widgetPrefix = "loan_requests_widget_";
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -171,6 +179,8 @@ export default function LoanRequestsPage() {
     rejected: 0,
   });
   const [statsLoading, setStatsLoading] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState("");
   const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(false);
@@ -192,6 +202,62 @@ export default function LoanRequestsPage() {
   const closeAlertModal = () => {
     setAlertModal((prev) => ({ ...prev, open: false }));
   };
+
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: "application/json",
+        },
+      });
+
+      const widgets = Array.isArray(response.data?.data) ? response.data.data : [];
+      const hidden = widgets
+        .filter(
+          (item: { widget_key?: unknown; is_visible?: unknown }) =>
+            typeof item.widget_key === "string" &&
+            item.widget_key.startsWith(widgetPrefix) &&
+            Number(item.is_visible) === 0
+        )
+        .map((item: { widget_key: string }) => item.widget_key);
+
+      setHiddenWidgetKeys(hidden);
+    } catch {
+      setWidgetNotice("Failed to load widget preferences.");
+    }
+  }, [apiBase]);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return;
+
+      try {
+        await axios.post(
+          `${apiBase}/dashboard/widgets`,
+          { widget_key: widgetKey, is_visible: isVisible ? 1 : 0 },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/json",
+            },
+          }
+        );
+        setWidgetNotice("");
+      } catch {
+        setWidgetNotice("Failed to save widget preference.");
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+      await saveWidgetPreference(widgetKey, false);
+    },
+    [saveWidgetPreference]
+  );
 
   const formatAmount = (value: unknown): string => {
     const amount = Number(value);
@@ -312,7 +378,8 @@ export default function LoanRequestsPage() {
   useEffect(() => {
     if (!token) return;
     fetchStats(token);
-  }, [token, fetchStats]);
+    fetchWidgetPreferences(token);
+  }, [token, fetchStats, fetchWidgetPreferences]);
 
   useEffect(() => {
     if (!token) return;
@@ -468,6 +535,7 @@ export default function LoanRequestsPage() {
 
   const statCards = [
     {
+      key: "stat_total_requests",
       label: "Total Requests",
       value: stats.total,
       icon: ClipboardList,
@@ -475,6 +543,7 @@ export default function LoanRequestsPage() {
       ring: "ring-cyan-200/60",
     },
     {
+      key: "stat_pending_review",
       label: "Pending Review",
       value: stats.pending,
       icon: Clock3,
@@ -482,6 +551,7 @@ export default function LoanRequestsPage() {
       ring: "ring-amber-200/60",
     },
     {
+      key: "stat_approved",
       label: "Approved",
       value: stats.approved,
       icon: CheckCircle2,
@@ -489,6 +559,7 @@ export default function LoanRequestsPage() {
       ring: "ring-emerald-200/60",
     },
     {
+      key: "stat_rejected",
       label: "Rejected",
       value: stats.rejected,
       icon: XCircle,
@@ -504,6 +575,24 @@ export default function LoanRequestsPage() {
     { key: "rejected", label: "Rejected" },
   ];
 
+  const tableColumns: RequestTableColumn[] = [
+    { key: "col_request", label: "Request", className: "py-3 pr-4 pl-1" },
+    { key: "col_customer", label: "Customer", className: "py-3 pr-4" },
+    { key: "col_product", label: "Product", className: "py-3 pr-4" },
+    { key: "col_status", label: "Status", className: "py-3 pr-4" },
+    { key: "col_approval", label: "Approval", className: "py-3 pr-4" },
+    { key: "col_action", label: "Action", className: "py-3 pr-4 text-right" },
+  ];
+
+  const showHeaderWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}header`);
+  const showStatsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}stats`);
+  const showPipelineHeaderWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}pipeline_header`);
+  const showPipelineTableWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}pipeline_table`);
+  const visibleStatCards = statCards.filter((card) => !hiddenWidgetKeys.includes(`${widgetPrefix}${card.key}`));
+  const visibleTableColumns = tableColumns.filter((column) => !hiddenWidgetKeys.includes(`${widgetPrefix}${column.key}`));
+  const showAnyWidget =
+    showHeaderWidget || showStatsWidget || showPipelineHeaderWidget || showPipelineTableWidget;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-cyan-50/80 to-blue-50 p-4 sm:p-6 relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0 opacity-40">
@@ -513,8 +602,31 @@ export default function LoanRequestsPage() {
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
+        {widgetNotice ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-5 text-sm font-semibold text-cyan-900">
+            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
+          </div>
+        ) : null}
+
         {/* Hero header */}
-        <div className="overflow-hidden rounded-3xl border border-white/60 bg-white/80 shadow-xl shadow-cyan-100/50 backdrop-blur-xl">
+        {showHeaderWidget ? (
+        <div className="overflow-hidden rounded-3xl border border-white/60 bg-white/80 shadow-xl shadow-cyan-100/50 backdrop-blur-xl relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-4 top-4 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/40 bg-white/20 text-white hover:bg-white/30"
+              aria-label="Hide header widget"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </WidgetCloseGate>
           <div className="bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 px-6 py-6 sm:px-8 sm:py-7">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex items-start gap-4">
@@ -559,235 +671,345 @@ export default function LoanRequestsPage() {
             </div>
           </div>
         </div>
+        ) : null}
 
         {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          {statCards.map((card) => (
-            <div
-              key={card.label}
-              className={`group relative overflow-hidden rounded-2xl border border-white/80 bg-white/90 p-4 shadow-lg shadow-slate-200/40 ring-1 ${card.ring} backdrop-blur transition hover:-translate-y-0.5 hover:shadow-xl`}
-            >
-              <div className={`absolute -right-4 -top-4 h-20 w-20 rounded-full bg-gradient-to-br ${card.gradient} opacity-15 blur-xl`} />
-              <div className="relative flex items-center justify-between gap-2">
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{card.label}</p>
-                  <p className="mt-1 text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">
-                    {statsLoading ? "—" : card.value}
-                  </p>
-                </div>
-                <div className={`flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br ${card.gradient} text-white shadow-md`}>
-                  <card.icon className="h-5 w-5" />
-                </div>
+        {showStatsWidget ? (
+          <div className="relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}stats`)}
+                className="absolute right-2 -top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 shadow-sm hover:bg-cyan-50"
+                aria-label="Hide stats widget"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </WidgetCloseGate>
+            {visibleStatCards.length > 0 ? (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                {visibleStatCards.map((card) => (
+                  <div
+                    key={card.key}
+                    className={`group relative overflow-hidden rounded-2xl border border-white/80 bg-white/90 p-4 shadow-lg shadow-slate-200/40 ring-1 ${card.ring} backdrop-blur transition hover:-translate-y-0.5 hover:shadow-xl`}
+                  >
+                    <WidgetCloseGate>
+                      <button
+                        type="button"
+                        onClick={() => hideWidget(`${widgetPrefix}${card.key}`)}
+                        className="absolute right-2 top-2 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                        aria-label={`Hide ${card.label} widget`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </WidgetCloseGate>
+                    <div className={`absolute -right-4 -top-4 h-20 w-20 rounded-full bg-gradient-to-br ${card.gradient} opacity-15 blur-xl`} />
+                    <div className="relative flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{card.label}</p>
+                        <p className="mt-1 text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">
+                          {statsLoading ? "—" : card.value}
+                        </p>
+                      </div>
+                      <div className={`flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br ${card.gradient} text-white shadow-md`}>
+                        <card.icon className="h-5 w-5" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          ))}
-        </div>
+            ) : (
+              <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+                All summary cards are hidden.
+              </div>
+            )}
+          </div>
+        ) : null}
 
         {/* List panel */}
-        <div className="rounded-3xl border border-white/80 bg-white/90 shadow-xl shadow-slate-200/30 backdrop-blur overflow-hidden">
-          <div className="border-b border-cyan-100/80 bg-gradient-to-r from-white to-cyan-50/50 px-4 sm:px-6 py-4 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <Filter className="h-4 w-4 text-cyan-700" />
-                <h2 className="text-base font-extrabold text-slate-900">Request pipeline</h2>
-              </div>
-              <div className="relative w-full sm:max-w-xs">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-cyan-600/70" />
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search request, customer, product…"
-                  className="w-full rounded-xl border border-cyan-100 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-100"
-                />
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {filterPills.map((pill) => {
-                const active = statusFilter === pill.key;
-                return (
+        {(showPipelineHeaderWidget || showPipelineTableWidget) ? (
+          <div className="rounded-3xl border border-white/80 bg-white/90 shadow-xl shadow-slate-200/30 backdrop-blur overflow-hidden">
+            {showPipelineHeaderWidget ? (
+              <div className="border-b border-cyan-100/80 bg-gradient-to-r from-white to-cyan-50/50 px-4 sm:px-6 py-4 space-y-4 relative">
+                <WidgetCloseGate>
                   <button
-                    key={pill.key}
                     type="button"
-                    onClick={() => {
-                      setStatusFilter(pill.key);
-                      setPage(1);
-                    }}
-                    className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
-                      active
-                        ? "bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-200/50"
-                        : "border border-cyan-100 bg-white text-slate-700 hover:border-cyan-200 hover:bg-cyan-50"
-                    }`}
+                    onClick={() => hideWidget(`${widgetPrefix}pipeline_header`)}
+                    className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                    aria-label="Hide request pipeline filters widget"
                   >
-                    {pill.label}
+                    <X className="h-4 w-4" />
                   </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="p-4 sm:p-6">
-            {error && !loading ? (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800">
-                {error}
+                </WidgetCloseGate>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Filter className="h-4 w-4 text-cyan-700" />
+                    <h2 className="text-base font-extrabold text-slate-900">Request pipeline</h2>
+                  </div>
+                  <div className="relative w-full sm:max-w-xs">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-cyan-600/70" />
+                    <input
+                      type="search"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search request, customer, product…"
+                      className="w-full rounded-xl border border-cyan-100 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {filterPills.map((pill) => {
+                    const active = statusFilter === pill.key;
+                    return (
+                      <button
+                        key={pill.key}
+                        type="button"
+                        onClick={() => {
+                          setStatusFilter(pill.key);
+                          setPage(1);
+                        }}
+                        className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
+                          active
+                            ? "bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-200/50"
+                            : "border border-cyan-100 bg-white text-slate-700 hover:border-cyan-200 hover:bg-cyan-50"
+                        }`}
+                      >
+                        {pill.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
 
-            {loading ? (
-              <div className="space-y-3">
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="h-16 animate-pulse rounded-2xl bg-gradient-to-r from-slate-100 via-cyan-50 to-slate-100" />
-                ))}
-              </div>
-            ) : requests.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-100 to-blue-100">
-                  <ClipboardList className="h-8 w-8 text-cyan-700" />
-                </div>
-                <p className="mt-4 text-lg font-bold text-slate-900">No requests found</p>
-                <p className="mt-1 text-sm text-slate-600 max-w-sm">
-                  {pagination.total === 0 && !debouncedSearch && statusFilter === "all"
-                    ? "Start by creating a new loan request."
-                    : "Try a different search or filter."}
-                </p>
-                {pagination.total === 0 && !debouncedSearch && statusFilter === "all" ? (
+            {showPipelineTableWidget ? (
+              <div className="p-4 sm:p-6 relative">
+                <WidgetCloseGate>
                   <button
                     type="button"
-                    onClick={() => router.push("/dashboard/loan/request")}
-                    className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-cyan-200/50 hover:from-cyan-700 hover:to-blue-700"
+                    onClick={() => hideWidget(`${widgetPrefix}pipeline_table`)}
+                    className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                    aria-label="Hide request pipeline table widget"
                   >
-                    <Plus className="h-4 w-4" />
-                    Create first request
+                    <X className="h-4 w-4" />
                   </button>
+                </WidgetCloseGate>
+                {error && !loading ? (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800">
+                    {error}
+                  </div>
+                ) : null}
+
+                {loading ? (
+                  <div className="space-y-3">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div key={i} className="h-16 animate-pulse rounded-2xl bg-gradient-to-r from-slate-100 via-cyan-50 to-slate-100" />
+                    ))}
+                  </div>
+                ) : requests.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-center">
+                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-100 to-blue-100">
+                      <ClipboardList className="h-8 w-8 text-cyan-700" />
+                    </div>
+                    <p className="mt-4 text-lg font-bold text-slate-900">No requests found</p>
+                    <p className="mt-1 text-sm text-slate-600 max-w-sm">
+                      {pagination.total === 0 && !debouncedSearch && statusFilter === "all"
+                        ? "Start by creating a new loan request."
+                        : "Try a different search or filter."}
+                    </p>
+                    {pagination.total === 0 && !debouncedSearch && statusFilter === "all" ? (
+                      <button
+                        type="button"
+                        onClick={() => router.push("/dashboard/loan/request")}
+                        className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-cyan-200/50 hover:from-cyan-700 hover:to-blue-700"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Create first request
+                      </button>
+                    ) : null}
+                  </div>
+                ) : visibleTableColumns.length === 0 ? (
+                  <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+                    All table columns are hidden.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto -mx-1">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-[10px] font-bold uppercase tracking-wider text-cyan-900 border-b-2 border-cyan-100">
+                          {visibleTableColumns.map((column) => (
+                            <th key={column.key} className={column.className}>
+                              <div className={`inline-flex items-center ${column.key === "col_action" ? "justify-end w-full" : ""} gap-2`}>
+                                <span>{column.label}</span>
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      hideWidget(`${widgetPrefix}${column.key}`);
+                                    }}
+                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-50"
+                                    aria-label={`Hide ${column.label} column`}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </WidgetCloseGate>
+                              </div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-cyan-50">
+                        {requests.map((item) => (
+                          <tr
+                            key={item.id}
+                            className="group hover:bg-gradient-to-r hover:from-cyan-50/80 hover:to-blue-50/40 transition-colors"
+                          >
+                            {visibleTableColumns.map((column) => {
+                              if (column.key === "col_request") {
+                                return (
+                                  <td key={column.key} className="py-4 pr-4 pl-1">
+                                    <p className="font-bold text-slate-900">{item.request_no}</p>
+                                    <p className="text-[10px] font-medium text-cyan-700 mt-0.5">ID #{item.id}</p>
+                                  </td>
+                                );
+                              }
+
+                              if (column.key === "col_customer") {
+                                return (
+                                  <td key={column.key} className="py-4 pr-4">
+                                    <div className="flex items-center gap-2">
+                                      <div className="hidden sm:flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-100 to-blue-100 text-cyan-800">
+                                        <UserRound className="h-4 w-4" />
+                                      </div>
+                                      <div>
+                                        <p className="font-semibold text-slate-900">{item.customer_full_name || "—"}</p>
+                                        {item.customer_no ? (
+                                          <p className="text-xs font-mono text-cyan-800 mt-0.5">{item.customer_no}</p>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </td>
+                                );
+                              }
+
+                              if (column.key === "col_product") {
+                                return (
+                                  <td key={column.key} className="py-4 pr-4">
+                                    <span className="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-800">
+                                      {item.loan_product}
+                                    </span>
+                                  </td>
+                                );
+                              }
+
+                              if (column.key === "col_status") {
+                                return (
+                                  <td key={column.key} className="py-4 pr-4">
+                                    <StatusBadge status={item.status} />
+                                  </td>
+                                );
+                              }
+
+                              if (column.key === "col_approval") {
+                                return (
+                                  <td key={column.key} className="py-4 pr-4">
+                                    <div className="flex items-center gap-2">
+                                      <ShieldCheck className="h-4 w-4 text-cyan-600 shrink-0" />
+                                      <span className="font-semibold text-slate-900 tabular-nums">
+                                        {item.approval_level}
+                                        <span className="text-slate-400 font-normal"> / </span>
+                                        {item.required_approval_level}
+                                      </span>
+                                    </div>
+                                  </td>
+                                );
+                              }
+
+                              return (
+                                <td key={column.key} className="py-4 pr-4 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => openReviewModal(item.id)}
+                                    className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold shadow-sm transition ${
+                                      item.status === "pending_approval"
+                                        ? "bg-gradient-to-r from-cyan-600 to-blue-600 text-white hover:from-cyan-700 hover:to-blue-700 shadow-cyan-200/50"
+                                        : "border border-cyan-200 bg-white text-cyan-800 hover:bg-cyan-50"
+                                    }`}
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    {item.status === "pending_approval" ? "Review" : "View"}
+                                  </button>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {!loading && requests.length > 0 ? (
+                  <div className="mt-5 flex flex-col gap-3 border-t border-cyan-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-700">
+                      <span className="font-semibold text-slate-900">
+                        Showing {pagination.from ?? 0}–{pagination.to ?? 0} of {pagination.total}
+                      </span>
+                      <label className="inline-flex items-center gap-2">
+                        <span className="font-medium">Per page</span>
+                        <select
+                          value={perPage}
+                          onChange={(e) => {
+                            setPerPage(Number(e.target.value));
+                            setPage(1);
+                          }}
+                          className="rounded-lg border border-cyan-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-900 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                        >
+                          {PER_PAGE_OPTIONS.map((size) => (
+                            <option key={size} value={size}>
+                              {size}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-xs font-semibold text-slate-600 mr-1">
+                        Page {pagination.current_page} of {pagination.last_page}
+                      </p>
+                      <button
+                        type="button"
+                        disabled={pagination.current_page <= 1 || loading}
+                        onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                        className="inline-flex items-center gap-1 rounded-xl border border-cyan-200 bg-white px-3 py-2 text-xs font-bold text-cyan-800 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        Previous
+                      </button>
+                      <button
+                        type="button"
+                        disabled={pagination.current_page >= pagination.last_page || loading}
+                        onClick={() => setPage((prev) => Math.min(pagination.last_page, prev + 1))}
+                        className="inline-flex items-center gap-1 rounded-xl border border-cyan-200 bg-white px-3 py-2 text-xs font-bold text-cyan-800 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Next
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
                 ) : null}
               </div>
             ) : (
-              <div className="overflow-x-auto -mx-1">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-[10px] font-bold uppercase tracking-wider text-cyan-900 border-b-2 border-cyan-100">
-                      <th className="py-3 pr-4 pl-1">Request</th>
-                      <th className="py-3 pr-4">Customer</th>
-                      <th className="py-3 pr-4">Product</th>
-                      <th className="py-3 pr-4">Status</th>
-                      <th className="py-3 pr-4">Approval</th>
-                      <th className="py-3 pr-4 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-cyan-50">
-                    {requests.map((item) => (
-                      <tr
-                        key={item.id}
-                        className="group hover:bg-gradient-to-r hover:from-cyan-50/80 hover:to-blue-50/40 transition-colors"
-                      >
-                        <td className="py-4 pr-4 pl-1">
-                          <p className="font-bold text-slate-900">{item.request_no}</p>
-                          <p className="text-[10px] font-medium text-cyan-700 mt-0.5">ID #{item.id}</p>
-                        </td>
-                        <td className="py-4 pr-4">
-                          <div className="flex items-center gap-2">
-                            <div className="hidden sm:flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-100 to-blue-100 text-cyan-800">
-                              <UserRound className="h-4 w-4" />
-                            </div>
-                            <div>
-                              <p className="font-semibold text-slate-900">{item.customer_full_name || "—"}</p>
-                              {item.customer_no ? (
-                                <p className="text-xs font-mono text-cyan-800 mt-0.5">{item.customer_no}</p>
-                              ) : null}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-4 pr-4">
-                          <span className="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-800">
-                            {item.loan_product}
-                          </span>
-                        </td>
-                        <td className="py-4 pr-4">
-                          <StatusBadge status={item.status} />
-                        </td>
-                        <td className="py-4 pr-4">
-                          <div className="flex items-center gap-2">
-                            <ShieldCheck className="h-4 w-4 text-cyan-600 shrink-0" />
-                            <span className="font-semibold text-slate-900 tabular-nums">
-                              {item.approval_level}
-                              <span className="text-slate-400 font-normal"> / </span>
-                              {item.required_approval_level}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="py-4 pr-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => openReviewModal(item.id)}
-                            className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold shadow-sm transition ${
-                              item.status === "pending_approval"
-                                ? "bg-gradient-to-r from-cyan-600 to-blue-600 text-white hover:from-cyan-700 hover:to-blue-700 shadow-cyan-200/50"
-                                : "border border-cyan-200 bg-white text-cyan-800 hover:bg-cyan-50"
-                            }`}
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            {item.status === "pending_approval" ? "Review" : "View"}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="p-4 sm:p-6">
+                <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-4 text-sm font-medium text-cyan-900">
+                  Request table widget is hidden.
+                </div>
               </div>
             )}
-
-            {!loading && requests.length > 0 ? (
-              <div className="mt-5 flex flex-col gap-3 border-t border-cyan-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-700">
-                  <span className="font-semibold text-slate-900">
-                    Showing {pagination.from ?? 0}–{pagination.to ?? 0} of {pagination.total}
-                  </span>
-                  <label className="inline-flex items-center gap-2">
-                    <span className="font-medium">Per page</span>
-                    <select
-                      value={perPage}
-                      onChange={(e) => {
-                        setPerPage(Number(e.target.value));
-                        setPage(1);
-                      }}
-                      className="rounded-lg border border-cyan-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-900 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
-                    >
-                      {PER_PAGE_OPTIONS.map((size) => (
-                        <option key={size} value={size}>
-                          {size}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-xs font-semibold text-slate-600 mr-1">
-                    Page {pagination.current_page} of {pagination.last_page}
-                  </p>
-                  <button
-                    type="button"
-                    disabled={pagination.current_page <= 1 || loading}
-                    onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-                    className="inline-flex items-center gap-1 rounded-xl border border-cyan-200 bg-white px-3 py-2 text-xs font-bold text-cyan-800 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                    Previous
-                  </button>
-                  <button
-                    type="button"
-                    disabled={pagination.current_page >= pagination.last_page || loading}
-                    onClick={() => setPage((prev) => Math.min(pagination.last_page, prev + 1))}
-                    className="inline-flex items-center gap-1 rounded-xl border border-cyan-200 bg-white px-3 py-2 text-xs font-bold text-cyan-800 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Next
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-            ) : null}
           </div>
-        </div>
+        ) : null}
 
         {/* Review modal */}
         {reviewOpen && (

@@ -2,6 +2,7 @@
 
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -160,8 +161,8 @@ const getPaymentPrimaryDate = (row: PaymentRow) => {
 
 const API_BASE = getApiBaseUrl();
 
-export default function MicrofinancePaymentsPage() {
-  const router = useRouter();
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
   const [token, setToken] = useState('');
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -222,8 +223,61 @@ export default function MicrofinancePaymentsPage() {
       Authorization: `Bearer ${token}`,
       Accept: 'application/json',
     }),
-    [token]
-  );
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith('mf_payments_widget_')) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setAlertModal({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this card. Please try again.',
+      });
+    }
+  };
 
   const officerNameCandidates = useMemo(() => {
     const fullName = [authUser?.employee?.first_name || '', authUser?.employee?.last_name || '']
@@ -242,7 +296,7 @@ export default function MicrofinancePaymentsPage() {
       return;
     }
 
-    setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
 
     const storedUser = localStorage.getItem('auth_user');
     if (storedUser) {
@@ -693,7 +747,133 @@ export default function MicrofinancePaymentsPage() {
       cashCount,
       bankCount,
     };
-  }, [filteredPayments]);
+
+  const paymentSummaryCards = [
+    {
+      key: 'mf_payments_widget_summary_count',
+      label: 'Payments',
+      value: String(totals.count),
+      wrapperClass: 'bg-white/10 border border-white/20 p-4 backdrop-blur',
+      valueClass: 'text-xl font-bold text-white mt-1',
+      labelClass: 'text-xs uppercase tracking-wide text-cyan-100',
+    },
+    {
+      key: 'mf_payments_widget_summary_total_collection',
+      label: 'Total Collection',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalAmount),
+      wrapperClass: 'bg-gradient-to-br from-white to-cyan-50 border border-cyan-100 shadow-[0_12px_28px_-20px_rgba(6,182,212,0.35)] p-4',
+      valueClass: 'text-lg md:text-xl font-bold text-slate-900 mt-1',
+      labelClass: 'text-xs uppercase tracking-wide text-slate-500',
+    },
+    {
+      key: 'mf_payments_widget_summary_total_capital',
+      label: 'Total Capital',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalCapital),
+      wrapperClass: 'bg-gradient-to-br from-white to-sky-50 border border-sky-100 shadow-[0_12px_28px_-20px_rgba(14,165,233,0.35)] p-4',
+      valueClass: 'text-lg md:text-xl font-bold text-slate-900 mt-1',
+      labelClass: 'text-xs uppercase tracking-wide text-slate-500',
+    },
+    {
+      key: 'mf_payments_widget_summary_total_interest',
+      label: 'Total Interest',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalInterest),
+      wrapperClass: 'bg-gradient-to-br from-white to-indigo-50 border border-indigo-100 shadow-[0_12px_28px_-20px_rgba(99,102,241,0.3)] p-4',
+      valueClass: 'text-lg md:text-xl font-bold text-slate-900 mt-1',
+      labelClass: 'text-xs uppercase tracking-wide text-slate-500',
+    },
+    {
+      key: 'mf_payments_widget_summary_today_collected',
+      label: 'Today Collected',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.todayAmount),
+      wrapperClass: 'bg-gradient-to-br from-white to-emerald-50 border border-emerald-100 shadow-[0_12px_28px_-20px_rgba(16,185,129,0.4)] p-4',
+      valueClass: 'text-lg md:text-xl font-bold text-emerald-700 mt-1',
+      labelClass: 'text-xs uppercase tracking-wide text-slate-500',
+    },
+    {
+      key: 'mf_payments_widget_summary_cash_bank',
+      label: 'Cash / Bank',
+      value: `${totals.cashCount} / ${totals.bankCount}`,
+      wrapperClass: 'bg-gradient-to-br from-white to-amber-50 border border-amber-100 shadow-[0_12px_28px_-20px_rgba(245,158,11,0.35)] p-4',
+      valueClass: 'text-xl font-bold text-slate-900 mt-1',
+      labelClass: 'text-xs uppercase tracking-wide text-slate-500',
+    },
+  ];
+
+  const visiblePaymentSummaryCards = paymentSummaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+
+  const loanHistoryCards = [
+    {
+      key: 'mf_payments_widget_history_count',
+      label: 'Payments',
+      value: String(selectedLoanHistoryStats.count),
+      valueClass: 'text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words',
+    },
+    {
+      key: 'mf_payments_widget_history_collected',
+      label: 'Collected',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.collected),
+      valueClass: 'text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-emerald-700 break-words [overflow-wrap:anywhere]',
+    },
+    {
+      key: 'mf_payments_widget_history_capital',
+      label: 'Capital',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.capital),
+      valueClass: 'text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words [overflow-wrap:anywhere]',
+    },
+    {
+      key: 'mf_payments_widget_history_interest',
+      label: 'Interest',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.interest),
+      valueClass: 'text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words [overflow-wrap:anywhere]',
+    },
+  ];
+
+  const isWidgetVisible = (key: string) => !hiddenWidgetKeys.has(key);
+
+  const mainTableColumns = [
+    { key: 'date', label: 'Date & Time' },
+    { key: 'loanCode', label: 'Loan Code' },
+    { key: 'customerNo', label: 'Customer No' },
+    { key: 'customer', label: 'Customer' },
+    { key: 'customerNic', label: 'Customer NIC' },
+    { key: 'fieldOfficer', label: 'Field Officer' },
+    { key: 'type', label: 'Type' },
+    { key: 'reference', label: 'Reference' },
+    { key: 'collected', label: 'Collected' },
+    { key: 'capital', label: 'Capital' },
+    { key: 'interest', label: 'Interest' },
+    { key: 'penalty', label: 'Penalty' },
+    { key: 'note', label: 'Note' },
+    { key: 'record', label: 'Record' },
+    { key: 'deletedBy', label: 'Deleted By' },
+    ...(canDeletePayments ? [{ key: 'action', label: 'Action' }] : []),
+  ];
+
+  const visibleMainTableColumns = mainTableColumns.filter((column) =>
+    isWidgetVisible(`mf_payments_widget_col_${column.key}`)
+  );
+
+  const historyTableColumns = [
+    { key: 'date', label: 'Date & Time' },
+    { key: 'loanCode', label: 'Loan Code' },
+    { key: 'customer', label: 'Customer' },
+    { key: 'fieldOfficer', label: 'Field Officer' },
+    { key: 'type', label: 'Type' },
+    { key: 'reference', label: 'Reference' },
+    { key: 'collected', label: 'Collected' },
+    { key: 'capital', label: 'Capital' },
+    { key: 'interest', label: 'Interest' },
+    { key: 'penalty', label: 'Penalty' },
+    { key: 'balance', label: 'Balance' },
+    { key: 'note', label: 'Note' },
+    { key: 'record', label: 'Record' },
+    { key: 'deletedBy', label: 'Deleted By' },
+    ...(canDeletePayments ? [{ key: 'action', label: 'Action' }] : []),
+  ];
+
+  const visibleHistoryTableColumns = historyTableColumns.filter((column) =>
+    isWidgetVisible(`mf_payments_widget_history_col_${column.key}`)
+  );
 
   const totalPages = Math.max(1, Math.ceil(filteredPayments.length / pageSize));
   const safePage = Math.min(currentPage, totalPages);
@@ -764,7 +944,7 @@ export default function MicrofinancePaymentsPage() {
     return `${datePart} ${timePart}`;
   };
 
-  if (!token || loading) {
+  if (!token || loading || loadingWidgets) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#eef8ff] via-[#ecfcf7] to-[#f2f9ff] flex items-center justify-center">
         <div className="h-14 w-14 animate-spin rounded-full border-4 border-cyan-100 border-t-cyan-600" />
@@ -807,38 +987,27 @@ export default function MicrofinancePaymentsPage() {
           </div>
 
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <div className="rounded-2xl bg-white/10 border border-white/20 p-4 backdrop-blur">
-              <p className="text-xs uppercase tracking-wide text-cyan-100">Payments</p>
-              <p className="text-xl font-bold text-white mt-1">{totals.count}</p>
+            {visiblePaymentSummaryCards.map((card) => (
+              <div key={card.key} className={`relative rounded-2xl ${card.wrapperClass}`}>
+                <WidgetCloseGate>
+<button
+                  type="button"
+                  onClick={() => void hideWidget(card.key)}
+                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                  aria-label={`Hide ${card.label} card`}
+                >
+                  ×
+                </button>
+</WidgetCloseGate>
+                <p className={card.labelClass}>{card.label}</p>
+                <p className={card.valueClass}>{card.value}</p>
+              </div>
+            ))}
+          {visiblePaymentSummaryCards.length === 0 && (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              All payment summary cards are hidden. Restore from dashboard with admin approval.
             </div>
-            <div className="rounded-2xl bg-gradient-to-br from-white to-cyan-50 border border-cyan-100 shadow-[0_12px_28px_-20px_rgba(6,182,212,0.35)] p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Total Collection</p>
-              <p className="text-lg md:text-xl font-bold text-slate-900 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalAmount)}
-              </p>
-            </div>
-            <div className="rounded-2xl bg-gradient-to-br from-white to-sky-50 border border-sky-100 shadow-[0_12px_28px_-20px_rgba(14,165,233,0.35)] p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Total Capital</p>
-              <p className="text-lg md:text-xl font-bold text-slate-900 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalCapital)}
-              </p>
-            </div>
-            <div className="rounded-2xl bg-gradient-to-br from-white to-indigo-50 border border-indigo-100 shadow-[0_12px_28px_-20px_rgba(99,102,241,0.3)] p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Total Interest</p>
-              <p className="text-lg md:text-xl font-bold text-slate-900 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalInterest)}
-              </p>
-            </div>
-            <div className="rounded-2xl bg-gradient-to-br from-white to-emerald-50 border border-emerald-100 shadow-[0_12px_28px_-20px_rgba(16,185,129,0.4)] p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Today Collected</p>
-              <p className="text-lg md:text-xl font-bold text-emerald-700 mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.todayAmount)}
-              </p>
-            </div>
-            <div className="rounded-2xl bg-gradient-to-br from-white to-amber-50 border border-amber-100 shadow-[0_12px_28px_-20px_rgba(245,158,11,0.35)] p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Cash / Bank</p>
-              <p className="text-xl font-bold text-slate-900 mt-1">{totals.cashCount} / {totals.bankCount}</p>
-            </div>
+          )}
           </div>
         </div>
 
@@ -1178,28 +1347,27 @@ export default function MicrofinancePaymentsPage() {
               </div>
 
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-                <div className="rounded-xl border border-white/80 bg-white/75 px-3 py-3 sm:px-4 sm:py-3.5 min-h-[84px] flex flex-col justify-between">
-                  <p className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-500">Payments</p>
-                  <p className="text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words">{selectedLoanHistoryStats.count}</p>
+                {visibleLoanHistoryCards.map((card) => (
+                  <div key={card.key} className="relative rounded-xl border border-white/80 bg-white/75 px-3 py-3 sm:px-4 sm:py-3.5 min-h-[84px] flex flex-col justify-between">
+                    <WidgetCloseGate>
+<button
+                      type="button"
+                      onClick={() => void hideWidget(card.key)}
+                      className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                      aria-label={`Hide ${card.label} history card`}
+                    >
+                      ×
+                    </button>
+</WidgetCloseGate>
+                    <p className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-500">{card.label}</p>
+                    <p className={card.valueClass}>{card.value}</p>
+                  </div>
+                ))}
+              {visibleLoanHistoryCards.length === 0 && (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  All history summary cards are hidden. Restore from dashboard with admin approval.
                 </div>
-                <div className="rounded-xl border border-white/80 bg-white/75 px-3 py-3 sm:px-4 sm:py-3.5 min-h-[84px] flex flex-col justify-between">
-                  <p className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-500">Collected</p>
-                  <p className="text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-emerald-700 break-words [overflow-wrap:anywhere]">
-                    {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.collected)}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-white/80 bg-white/75 px-3 py-3 sm:px-4 sm:py-3.5 min-h-[84px] flex flex-col justify-between">
-                  <p className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-500">Capital</p>
-                  <p className="text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words [overflow-wrap:anywhere]">
-                    {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.capital)}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-white/80 bg-white/75 px-3 py-3 sm:px-4 sm:py-3.5 min-h-[84px] flex flex-col justify-between">
-                  <p className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-500">Interest</p>
-                  <p className="text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words [overflow-wrap:anywhere]">
-                    {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.interest)}
-                  </p>
-                </div>
+              )}
               </div>
             </div>
 

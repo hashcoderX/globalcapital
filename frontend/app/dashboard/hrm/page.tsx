@@ -1,17 +1,15 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 export default function HRM() {
   const [token, setToken] = useState('');
-  const [userRoles, setUserRoles] = useState<string[]>([]);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
-  const [isAdminUser, setIsAdminUser] = useState(false);
-  const [accessReady, setAccessReady] = useState(false);
+  const widgetPrefix = 'hrm_dashboard_widget_';
   const [activeEmployees, setActiveEmployees] = useState(0);
   const [attendanceRate, setAttendanceRate] = useState(0);
   const [departmentsCount, setDepartmentsCount] = useState(0);
@@ -23,7 +21,10 @@ export default function HRM() {
   const [pendingPayrolls, setPendingPayrolls] = useState(0);
   const [processedPayrolls, setProcessedPayrolls] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
   const router = useRouter();
+  const apiBase = getApiBaseUrl();
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -34,68 +35,85 @@ export default function HRM() {
     }
   }, [router]);
 
-  useEffect(() => {
-    if (token) {
-      fetchAccessProfile();
-      fetchDashboardData();
-    }
-  }, [token]);
+  const fetchWidgetPreferences = useCallback(async () => {
+    if (!token) return;
 
-  const fetchAccessProfile = async () => {
     try {
-      const userRes = await axios.get(`${getApiBaseUrl()}/user`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
       });
 
-      const userData = userRes.data || {};
-      const employeeId = Number(userData?.employee_id || userData?.employee?.id || 0);
+      const widgets = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const hiddenKeys = widgets
+        .filter((item: { widget_key?: string; is_visible?: boolean | number | null }) => !item?.is_visible)
+        .map((item: { widget_key?: string }) => item.widget_key)
+        .filter((key: unknown): key is string => typeof key === 'string' && key.startsWith(widgetPrefix));
 
-      const roleNames = [
-        String(userData?.role || ''),
-        ...(Array.isArray(userData?.roles)
-          ? userData.roles.map((role: any) => String(role?.name || role || ''))
-          : []),
-      ]
-        .map((role) => role.trim().toLowerCase())
-        .filter(Boolean);
-
-      const permissionNames = Array.isArray(userData?.roles)
-        ? userData.roles.flatMap((role: any) =>
-            Array.isArray(role?.permissions)
-              ? role.permissions.map((permission: any) =>
-                  String(permission?.name || '').trim().toLowerCase()
-                )
-              : []
-          )
-        : [];
-
-      const roleBlob = roleNames.join(' ');
-      const adminUser =
-        !employeeId ||
-        roleBlob.includes('super admin') ||
-        roleBlob.includes('superadmin') ||
-        roleBlob.includes('administrator') ||
-        roleBlob.includes('admin');
-
-      setUserRoles(Array.from(new Set(roleNames)));
-      setUserPermissions(Array.from(new Set(permissionNames.filter(Boolean))));
-      setIsAdminUser(adminUser);
-    } catch (error) {
-      console.error('Error fetching HRM access profile:', error);
-      setUserRoles([]);
-      setUserPermissions([]);
-      setIsAdminUser(false);
-    } finally {
-      setAccessReady(true);
+      setHiddenWidgetKeys(hiddenKeys);
+      setWidgetNotice(null);
+    } catch {
+      setWidgetNotice('Failed to load widget preferences.');
     }
-  };
+  }, [apiBase, token, widgetPrefix]);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+
+      const normalizedKey = widgetKey.trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Invalid widget key. Please refresh the page and try again.');
+        return false;
+      }
+
+      try {
+        await axios.patch(
+          `${apiBase}/dashboard/widgets`,
+          {
+            widget_key: normalizedKey,
+            is_visible: Boolean(isVisible),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice(null);
+        return true;
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+        return false;
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) return;
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+    },
+    [saveWidgetPreference]
+  );
+
+  useEffect(() => {
+    if (!token) return;
+    fetchDashboardData();
+    fetchWidgetPreferences();
+  }, [token, fetchWidgetPreferences]);
 
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
       
       // Fetch all employees
-      const employeesResponse = await axios.get(`${getApiBaseUrl()}/hr/employees`, {
+      const employeesResponse = await axios.get(`${apiBase}/hr/employees`, {
         headers: { Authorization: `Bearer ${token}` },
         params: { per_page: 1000 } // Get all employees
       });
@@ -108,7 +126,7 @@ export default function HRM() {
       setActiveEmployees(activeEmployeesCount);
 
       // Fetch departments count
-      const departmentsResponse = await axios.get(`${getApiBaseUrl()}/hr/departments`, {
+      const departmentsResponse = await axios.get(`${apiBase}/hr/departments`, {
         headers: { Authorization: `Bearer ${token}` },
         params: { per_page: 1000 } // Get all departments
       });
@@ -117,7 +135,7 @@ export default function HRM() {
       setDepartmentsCount(departmentsCount);
 
       // Fetch designations count
-      const designationsResponse = await axios.get(`${getApiBaseUrl()}/hr/designations`, {
+      const designationsResponse = await axios.get(`${apiBase}/hr/designations`, {
         headers: { Authorization: `Bearer ${token}` },
         params: { per_page: 1000 } // Get all designations
       });
@@ -127,7 +145,7 @@ export default function HRM() {
 
       // Fetch today's attendance
       const today = new Date().toISOString().split('T')[0];
-      const attendanceResponse = await axios.get(`${getApiBaseUrl()}/hr/attendance`, {
+      const attendanceResponse = await axios.get(`${apiBase}/hr/attendance`, {
         headers: { Authorization: `Bearer ${token}` },
         params: { date: today, per_page: 1000 }
       });
@@ -147,7 +165,7 @@ export default function HRM() {
       }
 
       // Fetch pending leaves
-      const leavesResponse = await axios.get(`${getApiBaseUrl()}/hr/leaves`, {
+      const leavesResponse = await axios.get(`${apiBase}/hr/leaves`, {
         headers: { Authorization: `Bearer ${token}` },
         params: { status: 'pending', per_page: 1000 } // Get all pending leaves
       });
@@ -156,7 +174,7 @@ export default function HRM() {
       setPendingLeaves(pendingLeavesCount);
 
       // Fetch payroll statistics
-      const payrollsResponse = await axios.get(`${getApiBaseUrl()}/hr/payrolls`, {
+      const payrollsResponse = await axios.get(`${apiBase}/hr/payrolls`, {
         headers: { Authorization: `Bearer ${token}` },
         params: { per_page: 1000 } // Get all payrolls
       });
@@ -190,13 +208,9 @@ export default function HRM() {
     }
   };
 
-  const hasAnyPermission = (keywords: string[]) => {
-    if (isAdminUser) return true;
-    return userPermissions.some((permission) => keywords.some((keyword) => permission.includes(keyword)));
-  };
-
   const hrmModules = [
     {
+      key: 'module_employees',
       name: 'Employees',
       icon: '👥',
       path: '/dashboard/hrm/employees',
@@ -204,9 +218,9 @@ export default function HRM() {
       color: 'from-blue-500 to-cyan-500',
       bgColor: 'from-blue-50 to-cyan-50',
       getStats: () => loading ? '...' : `${totalEmployees} Employees`,
-      accessKeywords: ['view_employees', 'create_employees', 'edit_employees', 'delete_employees']
     },
     {
+      key: 'module_departments',
       name: 'Departments',
       icon: '🏢',
       path: '/dashboard/hrm/departments',
@@ -214,9 +228,9 @@ export default function HRM() {
       color: 'from-green-500 to-emerald-500',
       bgColor: 'from-green-50 to-emerald-50',
       getStats: () => loading ? '...' : `${departmentsCount} Departments`,
-      accessKeywords: ['view_departments', 'create_departments', 'edit_departments', 'delete_departments']
     },
     {
+      key: 'module_designations',
       name: 'Designations',
       icon: '👔',
       path: '/dashboard/hrm/designations',
@@ -224,9 +238,9 @@ export default function HRM() {
       color: 'from-purple-500 to-indigo-500',
       bgColor: 'from-purple-50 to-indigo-50',
       getStats: () => loading ? '...' : `${designationsCount} Positions`,
-      accessKeywords: ['view_designations', 'create_designations', 'edit_designations', 'delete_designations']
     },
     {
+      key: 'module_attendance',
       name: 'Attendance',
       icon: '📅',
       path: '/dashboard/hrm/attendance',
@@ -234,9 +248,9 @@ export default function HRM() {
       color: 'from-orange-500 to-red-500',
       bgColor: 'from-orange-50 to-red-50',
       getStats: () => loading ? '...' : `${todayAttendance} Marked Today`,
-      accessKeywords: ['view_attendance', 'create_attendance', 'edit_attendance', 'delete_attendance']
     },
     {
+      key: 'module_leaves',
       name: 'Leaves',
       icon: '🏖️',
       path: '/dashboard/hrm/leaves',
@@ -244,9 +258,9 @@ export default function HRM() {
       color: 'from-teal-500 to-green-500',
       bgColor: 'from-teal-50 to-green-50',
       getStats: () => loading ? '...' : `${pendingLeaves} Pending Requests`,
-      accessKeywords: ['view_leaves', 'create_leaves', 'approve_leaves', 'reject_leaves']
     },
     {
+      key: 'module_roles',
       name: 'Roles & Privileges',
       icon: '🔐',
       path: '/dashboard/hrm/roles',
@@ -254,9 +268,9 @@ export default function HRM() {
       color: 'from-indigo-500 to-purple-500',
       bgColor: 'from-indigo-50 to-purple-50',
       getStats: () => loading ? '...' : 'Access Control',
-      accessKeywords: ['view_roles', 'create_roles', 'edit_roles', 'delete_roles', 'assign_roles', 'view_permissions', 'create_permissions', 'edit_permissions', 'delete_permissions']
     },
     {
+      key: 'module_payroll',
       name: 'Payroll',
       icon: '💰',
       path: '/dashboard/hrm/payroll',
@@ -264,68 +278,54 @@ export default function HRM() {
       color: 'from-yellow-500 to-orange-500',
       bgColor: 'from-yellow-50 to-orange-50',
       getStats: () => loading ? '...' : `${pendingPayrolls} Pending`,
-      accessKeywords: ['view_payrolls', 'create_payrolls', 'edit_payrolls', 'delete_payrolls']
     },
   ];
 
-  const isSalesRefOnly =
-    !isAdminUser && userRoles.length > 0 && userRoles.every((role) => role === 'sales ref');
-
-  const visibleHrmModules = hrmModules.filter((module) => {
-    if (isAdminUser) return true;
-    if (module.name === 'Leaves') {
-      // All employees should be able to open leave requests.
-      return true;
-    }
-    if (isSalesRefOnly) {
-      return module.name === 'Leaves';
-    }
-    return hasAnyPermission(module.accessKeywords);
-  });
+  const visibleHrmModules = hrmModules.filter(
+    (module) => !hiddenWidgetKeys.includes(`${widgetPrefix}${module.key}`)
+  );
 
   const quickActions = [
     {
+      key: 'quick_action_add_employee',
       icon: '➕',
       title: 'Add Employee',
       desc: 'New hire',
       path: '/dashboard/hrm/employees',
-      accessKeywords: ['create_employees', 'edit_employees', 'view_employees'],
     },
     {
+      key: 'quick_action_view_reports',
       icon: '📊',
       title: 'View Reports',
       desc: 'Analytics',
       path: '/dashboard/hrm/payroll',
-      accessKeywords: ['view_payrolls', 'view_employees', 'view_attendance', 'view_leaves'],
     },
     {
+      key: 'quick_action_mark_attendance',
       icon: '📅',
       title: 'Mark Attendance',
       desc: 'Daily check-in',
       path: '/dashboard/hrm/attendance',
-      accessKeywords: ['create_attendance', 'edit_attendance', 'view_attendance'],
     },
     {
+      key: 'quick_action_process_payroll',
       icon: '💰',
       title: 'Process Payroll',
       desc: 'Monthly run',
       path: '/dashboard/hrm/payroll',
-      accessKeywords: ['create_payrolls', 'edit_payrolls', 'view_payrolls'],
     },
   ];
 
-  const visibleQuickActions = quickActions.filter((action) => {
-    if (isAdminUser) return true;
-    if (isSalesRefOnly) return false;
-    return hasAnyPermission(action.accessKeywords);
-  });
+  const visibleQuickActions = quickActions.filter(
+    (action) => !hiddenWidgetKeys.includes(`${widgetPrefix}${action.key}`)
+  );
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     router.push('/');
   };
 
-  if (!token || !accessReady) {
+  if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
@@ -377,131 +377,177 @@ export default function HRM() {
       </nav>
 
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        {/* Hero Section */}
-        <div className="text-center mb-12">
-          <div className="inline-block p-1 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full mb-6">
-            <div className="bg-white rounded-full p-4">
-              <span className="text-4xl">👥</span>
-            </div>
-          </div>
-          <h2 className="text-3xl md:text-5xl font-bold text-gray-900 mb-4">
-            Human Resource <span className="bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">Management</span>
-          </h2>
-          <p className="text-lg sm:text-xl text-gray-600 max-w-3xl mx-auto leading-relaxed mb-6 px-1">
-            Streamline your workforce management with comprehensive HR tools.
-            From employee onboarding to payroll processing, manage everything in one place.
-          </p>
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 sm:space-x-6">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-blue-600">
-                {loading ? '...' : activeEmployees}
+        {widgetNotice && (
+          <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{widgetNotice}</div>
+        )}
+
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}hero`) && (
+          <div className="text-center mb-12 relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}hero`)}
+                className="absolute -top-2 right-0 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                aria-label="Hide HRM hero widget"
+                title="Hide widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            <div className="inline-block p-1 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full mb-6">
+              <div className="bg-white rounded-full p-4">
+                <span className="text-4xl">👥</span>
               </div>
-              <div className="text-sm text-gray-500">Active Employees</div>
             </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-green-600">
-                {loading ? '...' : `${attendanceRate}%`}
+            <h2 className="text-3xl md:text-5xl font-bold text-gray-900 mb-4">
+              Human Resource <span className="bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">Management</span>
+            </h2>
+            <p className="text-lg sm:text-xl text-gray-600 max-w-3xl mx-auto leading-relaxed mb-6 px-1">
+              Streamline your workforce management with comprehensive HR tools.
+              From employee onboarding to payroll processing, manage everything in one place.
+            </p>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 sm:space-x-6">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-blue-600">{loading ? '...' : activeEmployees}</div>
+                <div className="text-sm text-gray-500">Active Employees</div>
               </div>
-              <div className="text-sm text-gray-500">Attendance Rate</div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-green-600">{loading ? '...' : `${attendanceRate}%`}</div>
+                <div className="text-sm text-gray-500">Attendance Rate</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-purple-600">{loading ? '...' : departmentsCount}</div>
+                <div className="text-sm text-gray-500">Departments</div>
+              </div>
             </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-purple-600">
-                {loading ? '...' : departmentsCount}
-              </div>
-              <div className="text-sm text-gray-500">Departments</div>
-            </div>
-          </div>
-        </div>
-
-        {/* HRM Module Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {visibleHrmModules.map((module, index) => (
-            <Link
-              key={index}
-              href={module.path}
-              className="group relative bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 cursor-pointer border border-white/20 overflow-hidden transform hover:-translate-y-2 hover:scale-105"
-            >
-              {/* Gradient Background */}
-              <div className={`absolute inset-0 bg-gradient-to-br ${module.bgColor} opacity-0 group-hover:opacity-100 transition-opacity duration-500`}></div>
-
-              {/* Content */}
-              <div className="relative p-6">
-                <div className="flex items-start justify-between mb-4">
-                  <div className={`w-14 h-14 bg-gradient-to-r ${module.color} rounded-xl flex items-center justify-center text-2xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
-                    {module.icon}
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                      {module.getStats()}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <h3 className="text-lg font-bold text-gray-900 group-hover:text-gray-800 transition-colors duration-300">
-                    {module.name}
-                  </h3>
-                  <p className="text-sm text-gray-600 group-hover:text-gray-700 transition-colors duration-300">
-                    {module.description}
-                  </p>
-                </div>
-
-                {/* Hover Effect Line */}
-                <div className="absolute bottom-0 left-0 w-0 h-1 bg-gradient-to-r from-blue-500 to-cyan-500 group-hover:w-full transition-all duration-500"></div>
-              </div>
-
-              {/* Floating Particles Effect */}
-              <div className="absolute top-4 right-4 w-2 h-2 bg-white/30 rounded-full opacity-0 group-hover:opacity-100 animate-ping"></div>
-              <div className="absolute top-8 right-6 w-1 h-1 bg-white/20 rounded-full opacity-0 group-hover:opacity-100 animate-ping animation-delay-300"></div>
-            </Link>
-          ))}
-        </div>
-
-        {visibleHrmModules.length === 0 && (
-          <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-            No HRM features are assigned to your role yet. Please contact an administrator.
           </div>
         )}
 
-        {/* Quick Actions Section */}
-        <div className="mt-12 bg-white/70 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 overflow-hidden">
-          <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-6">
-            <div className="flex items-center space-x-3">
-              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">
-                ⚡
-              </div>
-              <div>
-                <h3 className="text-xl font-bold text-white">Quick Actions</h3>
-                <p className="text-white/80">Frequently used HR operations</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {visibleQuickActions.map((action, index) => (
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}modules_section`) && (
+          <div className="relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}modules_section`)}
+                className="absolute -top-2 right-0 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                aria-label="Hide HRM modules section widget"
+                title="Hide widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {visibleHrmModules.map((module) => (
                 <Link
-                  key={index}
-                  href={action.path}
-                  className="group bg-white/50 hover:bg-white/80 rounded-xl p-4 border border-white/30 hover:border-white/50 transition-all duration-300 cursor-pointer transform hover:scale-105 text-center"
+                  key={module.key}
+                  href={module.path}
+                  className="group relative bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 cursor-pointer border border-white/20 overflow-hidden transform hover:-translate-y-2 hover:scale-105"
                 >
-                  <div className="text-2xl mb-2">{action.icon}</div>
-                  <h4 className="font-semibold text-gray-900 group-hover:text-gray-800 transition-colors duration-300 text-sm">
-                    {action.title}
-                  </h4>
-                  <p className="text-xs text-gray-600 group-hover:text-gray-700 transition-colors duration-300">
-                    {action.desc}
-                  </p>
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void hideWidget(`${widgetPrefix}${module.key}`);
+                      }}
+                      className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                      aria-label={`Hide ${module.name} widget`}
+                      title="Hide widget"
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <div className={`absolute inset-0 bg-gradient-to-br ${module.bgColor} opacity-0 group-hover:opacity-100 transition-opacity duration-500`}></div>
+                  <div className="relative p-6">
+                    <div className="flex items-start justify-between mb-4">
+                      <div className={`w-14 h-14 bg-gradient-to-r ${module.color} rounded-xl flex items-center justify-center text-2xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
+                        {module.icon}
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">{module.getStats()}</div>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="text-lg font-bold text-gray-900 group-hover:text-gray-800 transition-colors duration-300">{module.name}</h3>
+                      <p className="text-sm text-gray-600 group-hover:text-gray-700 transition-colors duration-300">{module.description}</p>
+                    </div>
+                    <div className="absolute bottom-0 left-0 w-0 h-1 bg-gradient-to-r from-blue-500 to-cyan-500 group-hover:w-full transition-all duration-500"></div>
+                  </div>
+                  <div className="absolute top-4 right-4 w-2 h-2 bg-white/30 rounded-full opacity-0 group-hover:opacity-100 animate-ping"></div>
+                  <div className="absolute top-8 right-6 w-1 h-1 bg-white/20 rounded-full opacity-0 group-hover:opacity-100 animate-ping animation-delay-300"></div>
                 </Link>
               ))}
             </div>
-            {visibleQuickActions.length === 0 && (
-              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                No quick actions available for your current permissions.
-              </div>
-            )}
           </div>
-        </div>
+        )}
+
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}modules_section`) && visibleHrmModules.length === 0 && (
+          <div className="mt-6 rounded-2xl border border-dashed border-gray-300 bg-white/60 px-5 py-4 text-sm text-gray-600">
+            All module widgets are hidden. Use `Restore Hidden Widgets` in the main dashboard to bring them back.
+          </div>
+        )}
+
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}quick_actions_section`) && (
+          <div className="mt-12 bg-white/70 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 overflow-hidden relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}quick_actions_section`)}
+                className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                aria-label="Hide quick actions section widget"
+                title="Hide widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-6">
+              <div className="flex items-center space-x-3">
+                <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">
+                  ⚡
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-white">Quick Actions</h3>
+                  <p className="text-white/80">Frequently used HR operations</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {visibleQuickActions.map((action) => (
+                  <Link
+                    key={action.key}
+                    href={action.path}
+                    className="group relative bg-white/50 hover:bg-white/80 rounded-xl p-4 border border-white/30 hover:border-white/50 transition-all duration-300 cursor-pointer transform hover:scale-105 text-center"
+                  >
+                    <WidgetCloseGate>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void hideWidget(`${widgetPrefix}${action.key}`);
+                        }}
+                        className="absolute top-2 right-2 z-20 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                        aria-label={`Hide ${action.title} widget`}
+                        title="Hide widget"
+                      >
+                        ×
+                      </button>
+                    </WidgetCloseGate>
+                    <div className="text-2xl mb-2">{action.icon}</div>
+                    <h4 className="font-semibold text-gray-900 group-hover:text-gray-800 transition-colors duration-300 text-sm">{action.title}</h4>
+                    <p className="text-xs text-gray-600 group-hover:text-gray-700 transition-colors duration-300">{action.desc}</p>
+                  </Link>
+                ))}
+              </div>
+              {visibleQuickActions.length === 0 && (
+                <p className="text-sm text-gray-600">All quick action widgets are hidden.</p>
+              )}
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import ClientMountGate from '@/app/components/ClientMountGate';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -53,6 +54,8 @@ type HubModule = {
 export default function MortgagesDashboard() {
   const router = useRouter();
   const [token, setToken] = useState('');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats>({
     total: 0,
@@ -64,6 +67,7 @@ export default function MortgagesDashboard() {
     settled: 0,
     released: 0,
   });
+  const widgetPrefix = 'mortgages_dashboard_widget_';
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -72,6 +76,7 @@ export default function MortgagesDashboard() {
       return;
     }
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   const loadStats = useCallback(async (authToken: string) => {
@@ -120,6 +125,51 @@ export default function MortgagesDashboard() {
       setLoading(false);
     }
   }, []);
+
+  async function fetchWidgetPreferences(authToken: string) {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  }
+
+  const saveWidgetPreference = useCallback(async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${getApiBaseUrl()}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, [token]);
+
+  const hideWidget = useCallback(async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
+  }, [hiddenWidgetKeys, saveWidgetPreference]);
 
   useEffect(() => {
     if (!token) return;
@@ -182,7 +232,48 @@ export default function MortgagesDashboard() {
     []
   );
 
-  const runningBook = stats.active + stats.arrears + stats.released;
+  const statsCards = [
+    { key: 'stat_total_accounts', icon: ClipboardList, label: 'Total Accounts', value: loading ? '—' : stats.total, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
+    { key: 'stat_draft', icon: FileText, label: 'Draft', value: loading ? '—' : stats.draft, tone: 'text-slate-600', bg: 'from-slate-400/10 to-zinc-500/5' },
+    { key: 'stat_submitted', icon: TrendingUp, label: 'Submitted', value: loading ? '—' : stats.submitted, tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
+    { key: 'stat_approved', icon: CheckCircle2, label: 'Approved', value: loading ? '—' : stats.approved, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
+    { key: 'stat_running_book', icon: Banknote, label: 'Running Book', value: loading ? '—' : stats.active + stats.arrears + stats.released, tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
+    { key: 'stat_arrears', icon: AlertTriangle, label: 'Arrears', value: loading ? '—' : stats.arrears, tone: 'text-rose-700', bg: 'from-rose-500/10 to-red-500/5' },
+    { key: 'stat_settled', icon: Home, label: 'Settled', value: loading ? '—' : stats.settled, tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
+    { key: 'stat_released', icon: Wallet, label: 'Released', value: loading ? '—' : stats.released, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
+  ] as const;
+  const quickActions = [
+    {
+      key: 'quick_start_application',
+      icon: Plus,
+      title: 'Start Application',
+      desc: 'Capture customer, financials, collateral, and supporting documents.',
+      color: 'text-cyan-700',
+      href: '/dashboard/mortgages/create',
+    },
+    {
+      key: 'quick_approval_queue',
+      icon: CheckCircle2,
+      title: 'Approval Queue',
+      desc: `${stats.submitted} submitted application${stats.submitted === 1 ? '' : 's'} awaiting review.`,
+      color: 'text-emerald-700',
+      href: '/dashboard/mortgages/approvals',
+    },
+    {
+      key: 'quick_arrears_focus',
+      icon: AlertTriangle,
+      title: 'Arrears Focus',
+      desc: `${stats.arrears} account${stats.arrears === 1 ? '' : 's'} currently in arrears status.`,
+      color: 'text-rose-700',
+      href: '/dashboard/mortgages/collections',
+    },
+  ] as const;
+  const showHeroWidget = !hiddenWidgetKeys.has(`${widgetPrefix}hero`);
+  const visibleStatsCards = statsCards.filter((card) => !hiddenWidgetKeys.has(`${widgetPrefix}${card.key}`));
+  const visibleQuickActions = quickActions.filter((action) => !hiddenWidgetKeys.has(`${widgetPrefix}${action.key}`));
+  const visibleModules = modules.filter((module) => !hiddenWidgetKeys.has(`${widgetPrefix}module_${module.path.replace(/\//g, '_')}`));
+  const showWorkspacesWidget = !hiddenWidgetKeys.has(`${widgetPrefix}workspaces`);
+  const isAnyWidgetVisible = showHeroWidget || visibleStatsCards.length > 0 || visibleQuickActions.length > 0 || showWorkspacesWidget;
 
   const pageFallback = (
     <div className="flex min-h-screen items-center justify-center bg-[#071a22]">
@@ -214,7 +305,29 @@ export default function MortgagesDashboard() {
         </div>
 
         <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+          {widgetNotice ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {widgetNotice}
+            </div>
+          ) : null}
+          {!isAnyWidgetVisible ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              All widgets are hidden on this page. Restore hidden widgets from dashboard.
+            </div>
+          ) : null}
+
+          {showHeroWidget ? (
           <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#0a1a24] via-[#0f3a52] to-[#0c5a7a] text-white shadow-[0_30px_80px_-24px_rgba(14,116,144,0.8)]">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+                className="absolute right-3 top-3 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/40 bg-white/80 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide hero widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.25),transparent_42%)]" />
             <div className="relative p-6 md:p-8">
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
@@ -281,22 +394,25 @@ export default function MortgagesDashboard() {
               </div>
             </div>
           </section>
+          ) : null}
 
+          {visibleStatsCards.length > 0 ? (
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
-            {[
-              { icon: ClipboardList, label: 'Total Accounts', value: loading ? '—' : stats.total, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
-              { icon: FileText, label: 'Draft', value: loading ? '—' : stats.draft, tone: 'text-slate-600', bg: 'from-slate-400/10 to-zinc-500/5' },
-              { icon: TrendingUp, label: 'Submitted', value: loading ? '—' : stats.submitted, tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
-              { icon: CheckCircle2, label: 'Approved', value: loading ? '—' : stats.approved, tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
-              { icon: Banknote, label: 'Running Book', value: loading ? '—' : runningBook, tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
-              { icon: AlertTriangle, label: 'Arrears', value: loading ? '—' : stats.arrears, tone: 'text-rose-700', bg: 'from-rose-500/10 to-red-500/5' },
-              { icon: Home, label: 'Settled', value: loading ? '—' : stats.settled, tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
-              { icon: Wallet, label: 'Released', value: loading ? '—' : stats.released, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
-            ].map((item) => (
+            {visibleStatsCards.map((item) => (
               <div
-                key={item.label}
-                className={`overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
+                key={item.key}
+                className={`relative overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
               >
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}${item.key}`)}
+                    className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${item.label} widget`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
@@ -309,37 +425,39 @@ export default function MortgagesDashboard() {
               </div>
             ))}
           </section>
+          ) : null}
 
+          {visibleQuickActions.length > 0 ? (
           <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            {[
-              {
-                icon: Plus,
-                title: 'Start Application',
-                desc: 'Capture customer, financials, collateral, and supporting documents.',
-                color: 'text-cyan-700',
-                href: '/dashboard/mortgages/create',
-              },
-              {
-                icon: CheckCircle2,
-                title: 'Approval Queue',
-                desc: `${stats.submitted} submitted application${stats.submitted === 1 ? '' : 's'} awaiting review.`,
-                color: 'text-emerald-700',
-                href: '/dashboard/mortgages/approvals',
-              },
-              {
-                icon: AlertTriangle,
-                title: 'Arrears Focus',
-                desc: `${stats.arrears} account${stats.arrears === 1 ? '' : 's'} currently in arrears status.`,
-                color: 'text-rose-700',
-                href: '/dashboard/mortgages/collections',
-              },
-            ].map((item) => (
+            {visibleQuickActions.map((item) => (
               <button
-                key={item.title}
+                key={item.key}
                 type="button"
                 onClick={() => router.push(item.href)}
-                className="rounded-2xl border border-white/90 bg-white/95 p-4 text-left shadow-sm backdrop-blur transition hover:-translate-y-0.5 hover:border-cyan-200 hover:shadow-lg"
+                className="rounded-2xl border border-white/90 bg-white/95 p-4 text-left shadow-sm backdrop-blur transition hover:-translate-y-0.5 hover:border-cyan-200 hover:shadow-lg relative"
               >
+                <WidgetCloseGate>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void hideWidget(`${widgetPrefix}${item.key}`);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void hideWidget(`${widgetPrefix}${item.key}`);
+                      }
+                    }}
+                    className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${item.title} widget`}
+                  >
+                    ×
+                  </span>
+                </WidgetCloseGate>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <item.icon className={`h-5 w-5 ${item.color}`} />
@@ -351,8 +469,20 @@ export default function MortgagesDashboard() {
               </button>
             ))}
           </section>
+          ) : null}
 
-          <section>
+          {showWorkspacesWidget ? (
+          <section className="relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}workspaces`)}
+                className="absolute right-0 top-0 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide workspaces widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="mb-4 flex items-end justify-between gap-3">
               <div>
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-700">Modules</p>
@@ -361,8 +491,13 @@ export default function MortgagesDashboard() {
               </div>
             </div>
 
+            {visibleModules.length === 0 ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                All workspace cards are hidden. Restore hidden widgets from dashboard.
+              </div>
+            ) : (
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-              {modules.map((option) => {
+              {visibleModules.map((option) => {
                 const Icon = option.icon;
                 return (
                   <button
@@ -371,6 +506,28 @@ export default function MortgagesDashboard() {
                     onClick={() => router.push(option.path)}
                     className="group relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 text-left shadow-[0_22px_55px_-34px_rgba(14,116,144,0.45)] backdrop-blur transition hover:-translate-y-1 hover:shadow-[0_28px_60px_-30px_rgba(14,116,144,0.55)]"
                   >
+                    <WidgetCloseGate>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void hideWidget(`${widgetPrefix}module_${option.path.replace(/\//g, '_')}`);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void hideWidget(`${widgetPrefix}module_${option.path.replace(/\//g, '_')}`);
+                          }
+                        }}
+                        className="absolute right-2 top-2 z-20 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                        aria-label={`Hide ${option.title} widget`}
+                      >
+                        ×
+                      </span>
+                    </WidgetCloseGate>
                     <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${option.accent}`} />
                     <div className={`absolute inset-0 bg-gradient-to-br ${option.bg} opacity-0 transition group-hover:opacity-100`} />
                     <div className="relative p-6">
@@ -393,7 +550,9 @@ export default function MortgagesDashboard() {
                 );
               })}
             </div>
+            )}
           </section>
+          ) : null}
         </div>
       </div>
     </ClientMountGate>

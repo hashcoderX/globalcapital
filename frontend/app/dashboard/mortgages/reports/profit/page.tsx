@@ -1,11 +1,12 @@
 'use client';
 
 import axios from 'axios';
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Badge from '../../_components/Badge';
 import ClientMountGate from '@/app/components/ClientMountGate';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   ArrowLeft,
   Banknote,
@@ -210,6 +211,9 @@ function MortgageProfitReportContent() {
     total: 0,
   });
   const [fetchError, setFetchError] = useState('');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
+  const widgetPrefix = 'mortgages_profit_report_widget_';
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -218,7 +222,53 @@ function MortgageProfitReportContent() {
       return;
     }
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
+
+  async function fetchWidgetPreferences(authToken: string) {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  }
+
+  const saveWidgetPreference = useCallback(async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${getApiBaseUrl()}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }, [token]);
+
+  const hideWidget = useCallback(async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
+  }, [hiddenWidgetKeys, saveWidgetPreference]);
 
   const fetchReport = async () => {
     if (!token) return;
@@ -363,6 +413,57 @@ function MortgageProfitReportContent() {
 
   const hasRows = useMemo(() => rows.length > 0, [rows]);
 
+  const kpiCards = [
+    { key: 'kpi_total_profit', icon: Sparkles, label: 'Total Profit', value: formatAmount(summary.total_profit), tone: 'text-violet-700', bg: 'from-violet-500/10 to-purple-500/5' },
+    { key: 'kpi_profit_share', icon: TrendingUp, label: 'Profit Share', value: `${summary.profit_share_of_collections.toFixed(1)}%`, tone: 'text-fuchsia-700', bg: 'from-fuchsia-500/10 to-pink-500/5' },
+    { key: 'kpi_avg_profit', icon: HandCoins, label: 'Avg Profit / Payment', value: formatAmount(summary.average_profit_per_collection), tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
+    { key: 'kpi_collections', icon: Banknote, label: 'Collections', value: summary.total_collections, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
+    { key: 'kpi_total_collected', icon: Wallet, label: 'Total Collected', value: formatAmount(summary.total_amount), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
+    { key: 'kpi_interest', icon: BarChart3, label: 'Interest', value: formatAmount(summary.total_interest), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
+    { key: 'kpi_principal', icon: PieChart, label: 'Principal', value: formatAmount(summary.total_principal), tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
+    { key: 'kpi_unique_mortgages', icon: Banknote, label: 'Unique Mortgages', value: summary.unique_mortgages, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
+  ];
+  const visibleKpiCards = kpiCards.filter((item) => !hiddenWidgetKeys.has(`${widgetPrefix}${item.key}`));
+
+  const profitTableColumns = [
+    { key: 'payment_id', label: 'Payment ID', render: (row: ProfitRow) => <span className="font-bold text-slate-900">#{row.id}</span> },
+    { key: 'paid_date', label: 'Paid Date', render: (row: ProfitRow) => <span className="whitespace-nowrap text-black">{formatDate(row.paid_date)}</span> },
+    { key: 'mortgage', label: 'Mortgage', render: (row: ProfitRow) => <span className="whitespace-nowrap text-black">#{row.mortgage_id} <span className="capitalize">({row.mortgage?.mortgage_type || '—'})</span></span> },
+    {
+      key: 'customer',
+      label: 'Customer',
+      render: (row: ProfitRow) => {
+        const customerName = `${row.mortgage?.customer?.first_name || ''} ${row.mortgage?.customer?.last_name || ''}`.trim();
+        return (
+          <>
+            <p className="font-semibold text-black">{customerName || '—'}</p>
+            <p className="text-xs text-slate-600">{row.mortgage?.customer?.customer_code || '—'}</p>
+          </>
+        );
+      },
+    },
+    { key: 'status', label: 'Status', render: (row: ProfitRow) => <Badge label={String(row.mortgage?.status || '—')} variant={statusVariant(row.mortgage?.status)} /> },
+    { key: 'method', label: 'Method', render: (row: ProfitRow) => <span className="capitalize text-black">{row.payment_method || '—'}</span> },
+    { key: 'profit', label: 'Profit', render: (row: ProfitRow) => <span className="font-bold text-violet-800">{formatAmount(row.profit_amount)}</span> },
+    { key: 'paid_amount', label: 'Paid Amount', render: (row: ProfitRow) => <span className="text-black">{formatAmount(row.amount)}</span> },
+    { key: 'principal', label: 'Principal', render: (row: ProfitRow) => <span className="text-black">{formatAmount(row.principal_amount)}</span> },
+    { key: 'interest', label: 'Interest', render: (row: ProfitRow) => <span className="text-black">{formatAmount(row.interest_amount)}</span> },
+    { key: 'note', label: 'Note', render: (row: ProfitRow) => <span className="max-w-[200px] truncate text-black" title={row.remarks || ''}>{row.remarks || '—'}</span> },
+  ];
+  const visibleProfitTableColumns = profitTableColumns.filter((column) => !hiddenWidgetKeys.has(`${widgetPrefix}table_col_${column.key}`));
+
+  const showHeroWidget = !hiddenWidgetKeys.has(`${widgetPrefix}hero`);
+  const showKpiWidget = !hiddenWidgetKeys.has(`${widgetPrefix}kpis`);
+  const showBreakdownsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}breakdowns`);
+  const showFiltersWidget = !hiddenWidgetKeys.has(`${widgetPrefix}filters`);
+  const showTransactionsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}transactions`);
+  const showAnyWidget =
+    showHeroWidget ||
+    (showKpiWidget && visibleKpiCards.length > 0) ||
+    showBreakdownsWidget ||
+    showFiltersWidget ||
+    showTransactionsWidget;
+
   const pageFallback = (
     <div className="flex min-h-screen items-center justify-center bg-[#1a1028]">
       <div className="flex flex-col items-center gap-4">
@@ -393,9 +494,32 @@ function MortgageProfitReportContent() {
         </div>
 
         <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+          {widgetNotice ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+              {widgetNotice}
+            </div>
+          ) : null}
+
+          {!showAnyWidget ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+              All widgets are hidden. Use Restore Hidden Widgets from the dashboard to bring them back.
+            </div>
+          ) : null}
+
+          {showHeroWidget ? (
           <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#1a1028] via-[#3b1d6e] to-[#5b21b6] text-white shadow-[0_30px_80px_-24px_rgba(109,40,217,0.8)]">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(192,132,252,0.25),transparent_42%)]" />
             <div className="relative p-6 md:p-8">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+                  className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/60 bg-white/85 text-sm font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide profit report hero widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                 <div className="max-w-2xl">
                   <span className="inline-flex items-center gap-2 rounded-full border border-violet-300/30 bg-violet-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-violet-100">
@@ -444,22 +568,25 @@ function MortgageProfitReportContent() {
               </div>
             </div>
           </section>
+          ) : null}
 
+          {showKpiWidget ? (
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
-            {[
-              { icon: Sparkles, label: 'Total Profit', value: formatAmount(summary.total_profit), tone: 'text-violet-700', bg: 'from-violet-500/10 to-purple-500/5' },
-              { icon: TrendingUp, label: 'Profit Share', value: `${summary.profit_share_of_collections.toFixed(1)}%`, tone: 'text-fuchsia-700', bg: 'from-fuchsia-500/10 to-pink-500/5' },
-              { icon: HandCoins, label: 'Avg Profit / Payment', value: formatAmount(summary.average_profit_per_collection), tone: 'text-amber-700', bg: 'from-amber-500/10 to-orange-500/5' },
-              { icon: Banknote, label: 'Collections', value: summary.total_collections, tone: 'text-slate-700', bg: 'from-slate-500/10 to-gray-500/5' },
-              { icon: Wallet, label: 'Total Collected', value: formatAmount(summary.total_amount), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-green-500/5' },
-              { icon: BarChart3, label: 'Interest', value: formatAmount(summary.total_interest), tone: 'text-indigo-700', bg: 'from-indigo-500/10 to-violet-500/5' },
-              { icon: PieChart, label: 'Principal', value: formatAmount(summary.total_principal), tone: 'text-cyan-700', bg: 'from-cyan-500/10 to-blue-500/5' },
-              { icon: Banknote, label: 'Unique Mortgages', value: summary.unique_mortgages, tone: 'text-teal-700', bg: 'from-teal-500/10 to-cyan-500/5' },
-            ].map((item) => (
+            {visibleKpiCards.map((item) => (
               <div
                 key={item.label}
-                className={`overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
+                className={`relative overflow-hidden rounded-2xl border border-white/80 bg-gradient-to-br ${item.bg} p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5`}
               >
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}${item.key}`)}
+                    className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/70 bg-white/85 text-xs font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${item.label} widget`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
@@ -471,9 +598,26 @@ function MortgageProfitReportContent() {
                 </div>
               </div>
             ))}
+            {visibleKpiCards.length === 0 ? (
+              <div className="sm:col-span-2 xl:col-span-4 2xl:col-span-8 rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-sm text-slate-600">
+                All KPI widgets are hidden.
+              </div>
+            ) : null}
           </section>
+          ) : null}
 
-          <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {showBreakdownsWidget ? (
+          <section className="relative grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}breakdowns`)}
+                className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide profit breakdown widgets"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="rounded-2xl border border-white/90 bg-white/95 p-4 shadow-sm">
               <div className="flex items-center gap-2">
                 <PieChart className="h-5 w-5 text-violet-700" />
@@ -531,8 +675,20 @@ function MortgageProfitReportContent() {
               )}
             </div>
           </section>
+          ) : null}
 
-          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_22px_55px_-34px_rgba(109,40,217,0.45)] backdrop-blur-xl">
+          {showFiltersWidget ? (
+          <section className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_22px_55px_-34px_rgba(109,40,217,0.45)] backdrop-blur-xl">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide profit report filters widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <button
               type="button"
               onClick={() => setFiltersOpen((v) => !v)}
@@ -633,8 +789,20 @@ function MortgageProfitReportContent() {
               </div>
             )}
           </section>
+          ) : null}
 
-          <section className="overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(109,40,217,0.5)] backdrop-blur-xl">
+          {showTransactionsWidget ? (
+          <section className="relative overflow-hidden rounded-3xl border border-white/90 bg-white/95 shadow-[0_24px_60px_-34px_rgba(109,40,217,0.5)] backdrop-blur-xl">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}transactions`)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide profit transactions widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <h2 className="text-lg font-extrabold text-slate-900">Profit Transactions</h2>
@@ -733,52 +901,44 @@ function MortgageProfitReportContent() {
                 </div>
               ) : (
                 <div className="overflow-x-auto rounded-2xl border border-violet-100">
-                  <table className="min-w-[1100px] w-full text-sm">
-                    <thead>
-                      <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
-                        <th className="px-3 py-3 text-black">Payment ID</th>
-                        <th className="px-3 py-3 text-black">Paid Date</th>
-                        <th className="px-3 py-3 text-black">Mortgage</th>
-                        <th className="px-3 py-3 text-black">Customer</th>
-                        <th className="px-3 py-3 text-black">Status</th>
-                        <th className="px-3 py-3 text-black">Method</th>
-                        <th className="px-3 py-3 text-black">Profit</th>
-                        <th className="px-3 py-3 text-black">Paid Amount</th>
-                        <th className="px-3 py-3 text-black">Principal</th>
-                        <th className="px-3 py-3 text-black">Interest</th>
-                        <th className="px-3 py-3 text-black">Note</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {rows.map((row, index) => {
-                        const customerName = `${row.mortgage?.customer?.first_name || ''} ${row.mortgage?.customer?.last_name || ''}`.trim();
-                        return (
+                  {visibleProfitTableColumns.length > 0 ? (
+                    <table className="min-w-[1100px] w-full text-sm">
+                      <thead>
+                        <tr className="bg-slate-100 text-left text-[11px] font-bold uppercase tracking-wide text-black">
+                          {visibleProfitTableColumns.map((column) => (
+                            <th key={column.key} className="px-3 py-3 text-black">
+                              <div className="flex items-center justify-between gap-2">
+                                <span>{column.label}</span>
+                                <WidgetCloseGate>
+                                  <button
+                                    type="button"
+                                    onClick={() => void hideWidget(`${widgetPrefix}table_col_${column.key}`)}
+                                    className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-700"
+                                    aria-label={`Hide ${column.label} column`}
+                                  >
+                                    ×
+                                  </button>
+                                </WidgetCloseGate>
+                              </div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {rows.map((row, index) => (
                           <tr key={row.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                            <td className="px-3 py-2.5 font-bold text-slate-900">#{row.id}</td>
-                            <td className="px-3 py-2.5 whitespace-nowrap text-black">{formatDate(row.paid_date)}</td>
-                            <td className="px-3 py-2.5 whitespace-nowrap text-black">
-                              #{row.mortgage_id} <span className="capitalize">({row.mortgage?.mortgage_type || '—'})</span>
-                            </td>
-                            <td className="px-3 py-2.5">
-                              <p className="font-semibold text-black">{customerName || '—'}</p>
-                              <p className="text-xs text-slate-600">{row.mortgage?.customer?.customer_code || '—'}</p>
-                            </td>
-                            <td className="px-3 py-2.5">
-                              <Badge label={String(row.mortgage?.status || '—')} variant={statusVariant(row.mortgage?.status)} />
-                            </td>
-                            <td className="px-3 py-2.5 text-black capitalize">{row.payment_method || '—'}</td>
-                            <td className="px-3 py-2.5 font-bold text-violet-800">{formatAmount(row.profit_amount)}</td>
-                            <td className="px-3 py-2.5 text-black">{formatAmount(row.amount)}</td>
-                            <td className="px-3 py-2.5 text-black">{formatAmount(row.principal_amount)}</td>
-                            <td className="px-3 py-2.5 text-black">{formatAmount(row.interest_amount)}</td>
-                            <td className="max-w-[200px] truncate px-3 py-2.5 text-black" title={row.remarks || ''}>
-                              {row.remarks || '—'}
-                            </td>
+                            {visibleProfitTableColumns.map((column) => (
+                              <td key={column.key} className="px-3 py-2.5">
+                                {column.render(row)}
+                              </td>
+                            ))}
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="py-8 text-center text-sm text-slate-600">All profit table columns are hidden.</div>
+                  )}
                 </div>
               )}
 
@@ -811,6 +971,7 @@ function MortgageProfitReportContent() {
               )}
             </div>
           </section>
+          ) : null}
         </div>
       </div>
     </ClientMountGate>

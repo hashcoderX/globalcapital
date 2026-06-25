@@ -4,6 +4,7 @@ import axios from 'axios';
 import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type LoanRow = {
   id: number;
@@ -51,6 +52,66 @@ export default function NotPaidCustomersReportPage() {
   const [rows, setRows] = useState<NotPaidRow[]>([]);
   const [keyword, setKeyword] = useState('');
   const [officerFilter, setOfficerFilter] = useState('all');
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
+  const widgetPrefix = 'mf_not_paid_customers_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this widget. Please try again.',
+      });
+    }
+  };
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -60,6 +121,7 @@ export default function NotPaidCustomersReportPage() {
     }
 
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -210,6 +272,40 @@ export default function NotPaidCustomersReportPage() {
     }).format(parsed);
   };
 
+  const summaryCards = [
+    {
+      key: `${widgetPrefix}summary_customers`,
+      label: 'Customers',
+      value: String(summary.customers),
+      tone: 'text-rose-700',
+      boxClass: 'border-rose-100 bg-rose-50/70',
+    },
+    {
+      key: `${widgetPrefix}summary_outstanding`,
+      label: 'Outstanding',
+      value: formatMoney(summary.outstanding),
+      tone: 'text-amber-700',
+      boxClass: 'border-amber-100 bg-amber-50/70',
+    },
+    {
+      key: `${widgetPrefix}summary_arrears`,
+      label: 'Arrears',
+      value: formatMoney(summary.arrears),
+      tone: 'text-orange-700',
+      boxClass: 'border-orange-100 bg-orange-50/70',
+    },
+    {
+      key: `${widgetPrefix}summary_collected`,
+      label: 'Collected',
+      value: formatMoney(summary.collected),
+      tone: 'text-emerald-700',
+      boxClass: 'border-emerald-100 bg-emerald-50/70',
+    },
+  ];
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+  const showFilterSection = !hiddenWidgetKeys.has(`${widgetPrefix}filters_section`);
+  const showTableSection = !hiddenWidgetKeys.has(`${widgetPrefix}table_section`);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-orange-50 to-amber-100 p-5 md:p-7">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -232,7 +328,18 @@ export default function NotPaidCustomersReportPage() {
           </div>
         </div>
 
-        <div className="rounded-3xl border border-rose-100 bg-white/85 p-5 backdrop-blur-xl shadow-[0_18px_45px_-28px_rgba(190,24,93,0.35)]">
+        {showFilterSection && (
+        <div className="relative rounded-3xl border border-rose-100 bg-white/85 p-5 backdrop-blur-xl shadow-[0_18px_45px_-28px_rgba(190,24,93,0.35)]">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters_section`)}
+              className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide filters widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Search</label>
@@ -261,26 +368,43 @@ export default function NotPaidCustomersReportPage() {
           </div>
 
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="rounded-xl border border-rose-100 bg-rose-50/70 p-3">
-              <p className="text-xs text-rose-700 uppercase tracking-wide">Customers</p>
-              <p className="mt-1 text-xl font-extrabold text-rose-700">{summary.customers}</p>
-            </div>
-            <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
-              <p className="text-xs text-amber-700 uppercase tracking-wide">Outstanding</p>
-              <p className="mt-1 text-xl font-extrabold text-amber-700">{formatMoney(summary.outstanding)}</p>
-            </div>
-            <div className="rounded-xl border border-orange-100 bg-orange-50/70 p-3">
-              <p className="text-xs text-orange-700 uppercase tracking-wide">Arrears</p>
-              <p className="mt-1 text-xl font-extrabold text-orange-700">{formatMoney(summary.arrears)}</p>
-            </div>
-            <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3">
-              <p className="text-xs text-emerald-700 uppercase tracking-wide">Collected</p>
-              <p className="mt-1 text-xl font-extrabold text-emerald-700">{formatMoney(summary.collected)}</p>
-            </div>
+            {visibleSummaryCards.map((card) => (
+              <div key={card.key} className={`relative rounded-xl border p-3 ${card.boxClass}`}>
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(card.key)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${card.label} summary card`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
+                <p className={`text-xs uppercase tracking-wide ${card.tone}`}>{card.label}</p>
+                <p className={`mt-1 text-xl font-extrabold ${card.tone}`}>{card.value}</p>
+              </div>
+            ))}
           </div>
+          {visibleSummaryCards.length === 0 && (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              All summary widgets are hidden. Restore from dashboard with admin approval.
+            </div>
+          )}
         </div>
+        )}
 
-        <div className="rounded-3xl border border-rose-100 bg-white/90 p-4 backdrop-blur-xl shadow-[0_18px_45px_-28px_rgba(190,24,93,0.35)]">
+        {showTableSection && (
+        <div className="relative rounded-3xl border border-rose-100 bg-white/90 p-4 backdrop-blur-xl shadow-[0_18px_45px_-28px_rgba(190,24,93,0.35)]">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}table_section`)}
+              className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide table widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           {loading ? (
             <p className="py-8 text-center text-slate-600">Loading report...</p>
           ) : filteredRows.length === 0 ? (
@@ -326,7 +450,31 @@ export default function NotPaidCustomersReportPage() {
             </div>
           )}
         </div>
+        )}
+        {!showFilterSection && !showTableSection && visibleSummaryCards.length === 0 && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            All widgets on this page are hidden. Use "Restore Hidden Widgets" on dashboard to show them again.
+          </div>
+        )}
       </div>
+      {widgetNotice.open && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={() => setWidgetNotice({ open: false, title: '', message: '' })} />
+          <div className="relative w-full max-w-sm rounded-2xl border border-rose-100 bg-white p-5 shadow-xl">
+            <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
+            <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
+                className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

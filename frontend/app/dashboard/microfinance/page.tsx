@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type LoanStatRow = {
   id: number;
@@ -64,6 +65,13 @@ export default function MicrofinanceDashboard() {
   const [token, setToken] = useState('');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
   const [stats, setStats] = useState({
     activeLoans: 0,
     totalCollections: 0,
@@ -178,12 +186,67 @@ export default function MicrofinanceDashboard() {
       'loan close',
     ]);
 
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith('mf_widget_')) continue;
+        if (row?.is_visible === false) {
+          nextHidden.add(key);
+        }
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${apiBase}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this card. Please try again.',
+      });
+    }
+  };
+
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
       router.push('/');
     } else {
       setToken(storedToken);
+      void fetchWidgetPreferences(storedToken);
       const storedUser = localStorage.getItem('auth_user');
       if (storedUser) {
         try {
@@ -221,14 +284,17 @@ export default function MicrofinanceDashboard() {
   };
 
   const microfinanceModules = [
-    { name: 'Loan Management', icon: '💰', color: 'from-green-500 to-emerald-500', bgColor: 'from-green-50 to-emerald-50', description: 'Manage micro loans and applications' },
-    { name: 'Collection Management', icon: '📊', color: 'from-blue-500 to-cyan-500', bgColor: 'from-blue-50 to-cyan-50', description: 'Handle loan collections and repayments' },
-    { name: 'Payments', icon: '💳', color: 'from-purple-500 to-indigo-500', bgColor: 'from-purple-50 to-indigo-50', description: 'Process payments and transactions' },
-    { name: 'Customers', icon: '👤', color: 'from-amber-500 to-orange-500', bgColor: 'from-amber-50 to-orange-50', description: 'View and manage microfinance customers' },
-    { name: 'Settings', icon: '⚙️', color: 'from-gray-500 to-slate-500', bgColor: 'from-gray-50 to-slate-50', description: 'Configure microfinance settings' },
+    { key: 'mf_widget_module_loans', name: 'Loan Management', icon: '💰', color: 'from-green-500 to-emerald-500', bgColor: 'from-green-50 to-emerald-50', description: 'Manage micro loans and applications' },
+    { key: 'mf_widget_module_collections', name: 'Collection Management', icon: '📊', color: 'from-blue-500 to-cyan-500', bgColor: 'from-blue-50 to-cyan-50', description: 'Handle loan collections and repayments' },
+    { key: 'mf_widget_module_payments', name: 'Payments', icon: '💳', color: 'from-purple-500 to-indigo-500', bgColor: 'from-purple-50 to-indigo-50', description: 'Process payments and transactions' },
+    { key: 'mf_widget_module_customers', name: 'Customers', icon: '👤', color: 'from-amber-500 to-orange-500', bgColor: 'from-amber-50 to-orange-50', description: 'View and manage microfinance customers' },
+    { key: 'mf_widget_module_settings', name: 'Settings', icon: '⚙️', color: 'from-gray-500 to-slate-500', bgColor: 'from-gray-50 to-slate-50', description: 'Configure microfinance settings' },
   ];
 
   const visibleModules = microfinanceModules.filter((module) => {
+    if (hiddenWidgetKeys.has(module.key)) {
+      return false;
+    }
     if (module.name === 'Settings') {
       return hasMicrofinanceSettingsAccess;
     }
@@ -238,6 +304,7 @@ export default function MicrofinanceDashboard() {
 
   const reportModules = [
     {
+      key: 'mf_widget_report_collection',
       name: 'Collection Report',
       icon: '📘',
       color: 'from-cyan-500 to-blue-500',
@@ -247,6 +314,7 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['collection report', 'micro finance related reports', '/dashboard/microfinance/reports/collection'],
     },
     {
+      key: 'mf_widget_report_charges',
       name: 'Charges Report',
       icon: '🧮',
       color: 'from-cyan-500 to-teal-500',
@@ -256,6 +324,7 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['charges report', '/dashboard/microfinance/reports/charges'],
     },
     {
+      key: 'mf_widget_report_field_officer_collection',
       name: 'Field Officer Collection Report',
       icon: '🧭',
       color: 'from-sky-500 to-cyan-500',
@@ -265,6 +334,7 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['field officer collection report', '/dashboard/microfinance/reports/field-officer-collection'],
     },
     {
+      key: 'mf_widget_report_arrears',
       name: 'Arrears Report',
       icon: '⚠️',
       color: 'from-amber-500 to-orange-500',
@@ -274,6 +344,7 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['arrears report', '/dashboard/microfinance/reports/arrears'],
     },
     {
+      key: 'mf_widget_report_active_members',
       name: 'Active Member Report',
       icon: '🧑‍🤝‍🧑',
       color: 'from-emerald-500 to-teal-500',
@@ -283,6 +354,7 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['active member report', '/dashboard/microfinance/reports/active-members'],
     },
     {
+      key: 'mf_widget_report_blacklisted_customers',
       name: 'Blacklisted Customer Report',
       icon: '⛔',
       color: 'from-rose-500 to-red-500',
@@ -292,6 +364,7 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['blacklisted customer report', '/dashboard/microfinance/reports/blacklisted-customers'],
     },
     {
+      key: 'mf_widget_report_repayment',
       name: 'Re-Payment Report',
       icon: '💸',
       color: 'from-indigo-500 to-blue-500',
@@ -301,6 +374,7 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['re-payment report', 'repayment report', '/dashboard/microfinance/reports/repayment'],
     },
     {
+      key: 'mf_widget_report_recovery',
       name: 'Recovery Report',
       icon: '🛟',
       color: 'from-teal-500 to-cyan-500',
@@ -310,6 +384,7 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['recovery report', '/dashboard/microfinance/reports/recovery'],
     },
     {
+      key: 'mf_widget_report_not_paid_customers',
       name: 'Not Paid Customer Report',
       icon: '📋',
       color: 'from-rose-500 to-orange-500',
@@ -319,6 +394,7 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['not paid customer report', '/dashboard/microfinance/reports/not-paid-customers'],
     },
     {
+      key: 'mf_widget_report_year_end_summary',
       name: 'Year End Summary Report',
       icon: '🗓️',
       color: 'from-violet-500 to-indigo-500',
@@ -328,6 +404,7 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['year end summary report', '/dashboard/microfinance/reports/year-end-summary'],
     },
     {
+      key: 'mf_widget_report_customer_payment_history',
       name: 'Customer Payment History Report',
       icon: '🧾',
       color: 'from-fuchsia-500 to-pink-500',
@@ -338,12 +415,11 @@ export default function MicrofinanceDashboard() {
     },
   ];
 
-  const visibleReportModules = reportModules.filter((report) =>
-    isAdminUser || hasAnyPermissionToken(report.permissionTokens)
-  );
+  const visibleReportModules = reportModules.filter((report) => !hiddenWidgetKeys.has(report.key));
 
   const summaryReportCards = [
     {
+      key: 'mf_widget_summary_total_outstanding',
       label: 'Total Outstanding Amount',
       value: statsLoading
         ? '...'
@@ -355,6 +431,7 @@ export default function MicrofinanceDashboard() {
       ],
     },
     {
+      key: 'mf_widget_summary_today_collection',
       label: 'Today Collection',
       value: statsLoading
         ? '...'
@@ -366,6 +443,7 @@ export default function MicrofinanceDashboard() {
       ],
     },
     {
+      key: 'mf_widget_summary_asset_value_total',
       label: 'Asset Value Total',
       value: statsLoading
         ? '...'
@@ -377,6 +455,7 @@ export default function MicrofinanceDashboard() {
       ],
     },
     {
+      key: 'mf_widget_summary_month_collection',
       label: 'Month Collection',
       value: statsLoading
         ? '...'
@@ -388,6 +467,7 @@ export default function MicrofinanceDashboard() {
       ],
     },
     {
+      key: 'mf_widget_summary_imagine_profit',
       label: 'Imagine Profit',
       value: statsLoading
         ? '...'
@@ -399,6 +479,7 @@ export default function MicrofinanceDashboard() {
       ],
     },
     {
+      key: 'mf_widget_summary_today_profit',
       label: 'Today Profit',
       value: statsLoading
         ? '...'
@@ -410,6 +491,7 @@ export default function MicrofinanceDashboard() {
       ],
     },
     {
+      key: 'mf_widget_summary_month_profit',
       label: 'Month Profit',
       value: statsLoading
         ? '...'
@@ -422,9 +504,7 @@ export default function MicrofinanceDashboard() {
     },
   ];
 
-  const visibleSummaryReportCards = summaryReportCards.filter((item) =>
-    isAdminUser || hasAnyPermissionName(item.permissionNames)
-  );
+  const visibleSummaryReportCards = summaryReportCards.filter((item) => !hiddenWidgetKeys.has(item.key));
 
   const visibleChargeRows = useMemo(() => {
     if (selectedChargeOfficer === 'all') {
@@ -713,7 +793,95 @@ export default function MicrofinanceDashboard() {
     loadDashboardStats();
   }, [token, isScopedUser, authUser]);
 
-  if (!token) {
+  const chargeSummaryCards = [
+    {
+      key: 'mf_widget_charges_document',
+      label: 'Document Charges',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
+            chargeTotals.document
+          ),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: 'mf_widget_charges_stamp',
+      label: 'Stamp Charges',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
+            chargeTotals.stamp
+          ),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: 'mf_widget_charges_insurance',
+      label: 'Insurance Charges',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
+            chargeTotals.insurance
+          ),
+      valueClass: 'text-slate-900',
+    },
+    {
+      key: 'mf_widget_charges_total',
+      label: 'Total Charges',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
+            chargeTotals.total
+          ),
+      valueClass: 'text-cyan-700',
+    },
+    {
+      key: 'mf_widget_charges_loans_count',
+      label: 'Loans Count',
+      value: statsLoading ? '...' : chargeTotals.loans.toLocaleString(),
+      valueClass: 'text-slate-900',
+    },
+  ];
+
+  const visibleChargeSummaryCards = chargeSummaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+
+  const quickStatsCards = [
+    {
+      key: 'mf_widget_quick_active_loans',
+      label: 'Active Loans',
+      value: statsLoading ? '...' : stats.activeLoans.toLocaleString(),
+      icon: '💰',
+      color: 'from-green-500 to-emerald-500',
+    },
+    {
+      key: 'mf_widget_quick_total_collections',
+      label: 'Total Collections',
+      value: statsLoading
+        ? '...'
+        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
+            stats.totalCollections
+          ),
+      icon: '📊',
+      color: 'from-blue-500 to-cyan-500',
+    },
+    {
+      key: 'mf_widget_quick_pending_payments',
+      label: 'Pending Payments',
+      value: statsLoading ? '...' : stats.pendingPayments.toLocaleString(),
+      icon: '⏳',
+      color: 'from-yellow-500 to-orange-500',
+    },
+    {
+      key: 'mf_widget_quick_default_rate',
+      label: 'Default Rate',
+      value: statsLoading ? '...' : `${stats.defaultRate.toFixed(2)}%`,
+      icon: '📉',
+      color: 'from-red-500 to-pink-500',
+    },
+  ];
+
+  const visibleQuickStatsCards = quickStatsCards.filter((stat) => !hiddenWidgetKeys.has(stat.key));
+
+  if (!token || loadingWidgets) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
@@ -818,9 +986,9 @@ export default function MicrofinanceDashboard() {
 
         {/* Module Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
-          {visibleModules.map((module, index) => (
+          {visibleModules.map((module) => (
             <div
-              key={index}
+              key={module.key}
               onClick={() => {
                 if (module.name === 'Loan Management') {
                   router.push('/dashboard/microfinance/loans');
@@ -841,6 +1009,19 @@ export default function MicrofinanceDashboard() {
 
               {/* Content */}
               <div className="relative p-6">
+                <WidgetCloseGate>
+<button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void hideWidget(module.key);
+                  }}
+                  className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                  aria-label={`Hide ${module.name} widget`}
+                >
+                  ×
+                </button>
+</WidgetCloseGate>
                 <div className="flex items-start justify-between mb-4">
                   <div className={`w-14 h-14 bg-gradient-to-r ${module.color} rounded-xl flex items-center justify-center text-2xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
                     {module.icon}
@@ -871,6 +1052,11 @@ export default function MicrofinanceDashboard() {
             </div>
           ))}
         </div>
+        {visibleModules.length === 0 && (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            All microfinance module cards are hidden. Restore them from the dashboard with admin approval.
+          </div>
+        )}
 
         {/* Reports Section */}
         <div className="mt-14">
@@ -890,7 +1076,17 @@ export default function MicrofinanceDashboard() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {visibleSummaryReportCards.map((item) => (
-                <div key={item.label} className="rounded-xl border border-cyan-100 bg-white p-4">
+                <div key={item.key} className="relative rounded-xl border border-cyan-100 bg-white p-4">
+                  <WidgetCloseGate>
+<button
+                    type="button"
+                    onClick={() => void hideWidget(item.key)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${item.label} summary card`}
+                  >
+                    ×
+                  </button>
+</WidgetCloseGate>
                   <div className={`h-1.5 w-20 rounded-full bg-gradient-to-r ${item.tone} mb-3`}></div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
                   <p className="text-lg font-extrabold text-slate-900 mt-1">{item.value}</p>
@@ -899,7 +1095,7 @@ export default function MicrofinanceDashboard() {
             </div>
             {visibleSummaryReportCards.length === 0 && (
               <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                No summary cards are available for your current permissions.
+                All summary cards are hidden. Restore them from the dashboard with admin approval.
               </div>
             )}
           </div>
@@ -939,45 +1135,28 @@ export default function MicrofinanceDashboard() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mb-4">
-              <div className="rounded-xl border border-cyan-100 bg-white p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Document Charges</p>
-                <p className="text-base font-extrabold text-slate-900">
-                  {statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.document)}
-                </p>
-              </div>
-              <div className="rounded-xl border border-cyan-100 bg-white p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stamp Charges</p>
-                <p className="text-base font-extrabold text-slate-900">
-                  {statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.stamp)}
-                </p>
-              </div>
-              <div className="rounded-xl border border-cyan-100 bg-white p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Insurance Charges</p>
-                <p className="text-base font-extrabold text-slate-900">
-                  {statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.insurance)}
-                </p>
-              </div>
-              <div className="rounded-xl border border-cyan-100 bg-white p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Charges</p>
-                <p className="text-base font-extrabold text-cyan-700">
-                  {statsLoading
-                    ? '...'
-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.total)}
-                </p>
-              </div>
-              <div className="rounded-xl border border-cyan-100 bg-white p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Loans Count</p>
-                <p className="text-base font-extrabold text-slate-900">
-                  {statsLoading ? '...' : chargeTotals.loans.toLocaleString()}
-                </p>
-              </div>
+              {visibleChargeSummaryCards.map((card) => (
+                <div key={card.key} className="relative rounded-xl border border-cyan-100 bg-white p-3">
+                  <WidgetCloseGate>
+<button
+                    type="button"
+                    onClick={() => void hideWidget(card.key)}
+                    className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${card.label} charge card`}
+                  >
+                    ×
+                  </button>
+</WidgetCloseGate>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{card.label}</p>
+                  <p className={`text-base font-extrabold ${card.valueClass}`}>{card.value}</p>
+                </div>
+              ))}
             </div>
+            {visibleChargeSummaryCards.length === 0 && (
+              <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                All charge summary cards are hidden. Restore them from the dashboard with admin approval.
+              </div>
+            )}
 
             <div className="overflow-x-auto rounded-xl border border-cyan-100 bg-white">
               <table className="min-w-full text-sm">
@@ -1013,14 +1192,24 @@ export default function MicrofinanceDashboard() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {visibleReportModules.map((report, index) => (
+            {visibleReportModules.map((report) => (
               <div
-                key={index}
+                key={report.key}
                 className="group relative bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 border border-white/20 overflow-hidden transform hover:-translate-y-2"
               >
                 <div className={`absolute inset-0 bg-gradient-to-br ${report.bgColor} opacity-0 group-hover:opacity-100 transition-opacity duration-500`}></div>
 
                 <div className="relative p-6">
+                  <WidgetCloseGate>
+<button
+                    type="button"
+                    onClick={() => void hideWidget(report.key)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide ${report.name} report card`}
+                  >
+                    ×
+                  </button>
+</WidgetCloseGate>
                   <div className="flex items-start justify-between mb-4">
                     <div className={`w-14 h-14 bg-gradient-to-r ${report.color} rounded-xl flex items-center justify-center text-2xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
                       {report.icon}
@@ -1060,44 +1249,30 @@ export default function MicrofinanceDashboard() {
               </div>
             ))}
           </div>
+          {visibleReportModules.length === 0 && (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              All report cards are hidden. Restore them from the dashboard with admin approval.
+            </div>
+          )}
         </div>
 
         {/* Quick Stats Section */}
         <div className="mt-10 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 md:gap-5">
-          {[
-            {
-              label: 'Active Loans',
-              value: statsLoading ? '...' : stats.activeLoans.toLocaleString(),
-              icon: '💰',
-              color: 'from-green-500 to-emerald-500',
-            },
-            {
-              label: 'Total Collections',
-              value: statsLoading
-                ? '...'
-                : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
-                    stats.totalCollections
-                  ),
-              icon: '📊',
-              color: 'from-blue-500 to-cyan-500',
-            },
-            {
-              label: 'Pending Payments',
-              value: statsLoading ? '...' : stats.pendingPayments.toLocaleString(),
-              icon: '⏳',
-              color: 'from-yellow-500 to-orange-500',
-            },
-            {
-              label: 'Default Rate',
-              value: statsLoading ? '...' : `${stats.defaultRate.toFixed(2)}%`,
-              icon: '📉',
-              color: 'from-red-500 to-pink-500',
-            },
-          ].map((stat, index) => (
+          {visibleQuickStatsCards.map((stat) => (
             <div
-              key={index}
-              className="bg-white/75 backdrop-blur-sm rounded-xl shadow-lg border border-white/20 px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-5 overflow-hidden"
+              key={stat.key}
+              className="relative bg-white/75 backdrop-blur-sm rounded-xl shadow-lg border border-white/20 px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-5 overflow-hidden"
             >
+              <WidgetCloseGate>
+<button
+                type="button"
+                onClick={() => void hideWidget(stat.key)}
+                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label={`Hide ${stat.label} quick stat card`}
+              >
+                ×
+              </button>
+</WidgetCloseGate>
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm md:text-[15px] leading-5 font-medium text-gray-600">{stat.label}</p>
@@ -1112,7 +1287,34 @@ export default function MicrofinanceDashboard() {
             </div>
           ))}
         </div>
+        {visibleQuickStatsCards.length === 0 && (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            All quick stat cards are hidden. Restore them from the dashboard with admin approval.
+          </div>
+        )}
       </main>
+
+      {widgetNotice.open && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/35 backdrop-blur-sm"
+            onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
+          />
+          <div className="relative w-full max-w-sm rounded-2xl border border-cyan-100 bg-white p-5 shadow-xl">
+            <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
+            <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
+                className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

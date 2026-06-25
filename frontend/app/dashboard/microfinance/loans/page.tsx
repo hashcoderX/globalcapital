@@ -2,30 +2,68 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-
-type AuthUser = {
-    designation?: { name?: string } | null;
-    roles?: Array<{ name?: string | null }> | null;
-};
+import axios from 'axios';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 export default function LoanManagementPage() {
     const [token, setToken] = useState('');
-    const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+    const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+    const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+        open: false,
+        title: '',
+        message: '',
+    });
     const router = useRouter();
+    const widgetPrefix = 'mf_loans_widget_';
 
-    const normalizeText = (value: string) =>
-        String(value || '')
-            .toLowerCase()
-            .trim()
-            .replace(/[^a-z0-9]+/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
+    const fetchWidgetPreferences = async (authToken: string) => {
+        try {
+            const response = await axios.get('/api/dashboard/widgets', {
+                headers: { Authorization: `Bearer ${authToken}` },
+            });
+            const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+            const nextHidden = new Set<string>();
+            for (const row of rows) {
+                const key = String(row?.widget_key || '').trim();
+                if (!key.startsWith(widgetPrefix)) continue;
+                if (row?.is_visible === false) nextHidden.add(key);
+            }
+            setHiddenWidgetKeys(nextHidden);
+        } catch {
+            setHiddenWidgetKeys(new Set());
+        }
+    };
 
-    const designationName = normalizeText(String(authUser?.designation?.name || ''));
-    const roleNames = (authUser?.roles || []).map((role) => normalizeText(String(role?.name || '')));
-    const isFieldOfficer =
-        designationName.includes('field officer') ||
-        roleNames.some((role) => role.includes('field officer'));
+    const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+        if (!token) return false;
+        try {
+            await axios.patch(
+                '/api/dashboard/widgets',
+                { widget_key: widgetKey, is_visible: isVisible },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
+    const hideWidget = async (widgetKey: string) => {
+        const previous = new Set(hiddenWidgetKeys);
+        const next = new Set(hiddenWidgetKeys);
+        next.add(widgetKey);
+        setHiddenWidgetKeys(next);
+
+        const ok = await saveWidgetPreference(widgetKey, false);
+        if (!ok) {
+            setHiddenWidgetKeys(previous);
+            setWidgetNotice({
+                open: true,
+                title: 'Widget Update Failed',
+                message: 'Failed to hide this widget. Please try again.',
+            });
+        }
+    };
 
     useEffect(() => {
         const storedToken = localStorage.getItem('token');
@@ -33,21 +71,13 @@ export default function LoanManagementPage() {
             router.push('/');
         } else {
             setToken(storedToken);
-            const storedUser = localStorage.getItem('auth_user');
-            if (storedUser) {
-                try {
-                    setAuthUser(JSON.parse(storedUser));
-                } catch {
-                    setAuthUser(null);
-                }
-            } else {
-                setAuthUser(null);
-            }
+            void fetchWidgetPreferences(storedToken);
         }
     }, [router]);
 
     const options = [
         {
+            key: `${widgetPrefix}request_loan`,
             title: 'Request Loan',
             description: 'Create and submit new loan requests for customers.',
             icon: '📝',
@@ -58,6 +88,7 @@ export default function LoanManagementPage() {
             path: '/dashboard/microfinance/loans/request',
         },
         {
+            key: `${widgetPrefix}loan_approvals`,
             title: 'Loan Approvals',
             description: 'Review pending approvals and approve or reject loans.',
             icon: '🔎',
@@ -68,6 +99,7 @@ export default function LoanManagementPage() {
             path: '/dashboard/microfinance/loans/approvals',
         },
         {
+            key: `${widgetPrefix}released_loans`,
             title: 'View Released Loans',
             description: 'View all disbursed/released loans with status details.',
             icon: '✅',
@@ -78,7 +110,7 @@ export default function LoanManagementPage() {
             path: '/dashboard/microfinance/loans/released',
         },
     ];
-    const visibleOptions = options.filter((option) => !(isFieldOfficer && option.title === 'Loan Approvals'));
+    const visibleOptions = options.filter((option) => !hiddenWidgetKeys.has(option.key));
 
     if (!token) {
         return (
@@ -135,7 +167,7 @@ export default function LoanManagementPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                     {visibleOptions.map((option, index) => (
                         <button
-                            key={option.title}
+                            key={option.key}
                             type="button"
                             onClick={() => router.push(option.path)}
                             className="group relative text-left bg-white/80 backdrop-blur-sm rounded-3xl shadow-[0_20px_40px_-30px_rgba(8,47,73,0.85)] hover:shadow-[0_28px_55px_-28px_rgba(8,47,73,0.75)] transition-all duration-500 cursor-pointer border border-white/50 overflow-hidden transform hover:-translate-y-2 hover:scale-[1.01]"
@@ -145,6 +177,27 @@ export default function LoanManagementPage() {
                             <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-white/50 blur-2xl"></div>
 
                             <div className="relative p-6">
+                                <WidgetCloseGate>
+                                    <span
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            void hideWidget(option.key);
+                                        }}
+                                        onKeyDown={(event) => {
+                                            if (event.key === 'Enter' || event.key === ' ') {
+                                                event.preventDefault();
+                                                event.stopPropagation();
+                                                void hideWidget(option.key);
+                                            }
+                                        }}
+                                        className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                                        aria-label={`Hide ${option.title} widget`}
+                                    >
+                                        ×
+                                    </span>
+                                </WidgetCloseGate>
                                 <div className="flex items-start justify-between mb-4">
                                     <div className={`h-14 w-14 bg-gradient-to-r ${option.color} rounded-xl flex items-center justify-center text-2xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
                                         {option.icon}
@@ -170,7 +223,30 @@ export default function LoanManagementPage() {
                         </button>
                     ))}
                 </div>
+                {visibleOptions.length === 0 && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                        All loan workspace widgets are hidden. Use "Restore Hidden Widgets" on dashboard to show them again.
+                    </div>
+                )}
             </div>
+            {widgetNotice.open && (
+                <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={() => setWidgetNotice({ open: false, title: '', message: '' })} />
+                    <div className="relative w-full max-w-sm rounded-2xl border border-cyan-100 bg-white p-5 shadow-xl">
+                        <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
+                        <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
+                        <div className="mt-4 flex justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
+                                className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+                            >
+                                OK
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -1,9 +1,11 @@
 'use client';
 
 import axios from 'axios';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Building2, CheckCircle2, HandCoins, Landmark, Plus, RefreshCw, Search, Sparkles, Trash2, Wallet, X } from 'lucide-react';
+import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   accountingInputClass,
   accountingLabelClass,
@@ -70,6 +72,7 @@ function formatDate(value: string): string {
 
 export default function AccountingRefundsPage() {
   const router = useRouter();
+  const widgetPrefix = 'accounting_refunds_widget_';
   const [token, setToken] = useState('');
   const [loadingCompanies, setLoadingCompanies] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -85,6 +88,8 @@ export default function AccountingRefundsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [form, setForm] = useState<RefundForm>(emptyForm());
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState('');
 
   const selectedCompany = useMemo(
     () => companies.find((company) => company.id === selectedCompanyId) || null,
@@ -186,6 +191,73 @@ export default function AccountingRefundsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, selectedCompanyId, loadingCompanies]);
 
+  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const widgets = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data?.widgets)
+          ? response.data.widgets
+          : [];
+      const hidden = widgets
+        .filter(
+          (item: { widget_key?: unknown; is_visible?: unknown }) =>
+            typeof item.widget_key === 'string' &&
+            item.widget_key.startsWith(widgetPrefix) &&
+            (item.is_visible === false || Number(item.is_visible) === 0)
+        )
+        .map((item: { widget_key: string }) => item.widget_key);
+      setHiddenWidgetKeys(hidden);
+    } catch {
+      setWidgetNotice('Failed to load widget preferences.');
+    }
+  }, []);
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return;
+      const normalizedKey = String(widgetKey || '').trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Failed to save widget preference.');
+        return;
+      }
+      try {
+        await axios.patch(
+          `${getApiBaseUrl()}/dashboard/widgets`,
+          { widget_key: normalizedKey, is_visible: Boolean(isVisible) },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice('');
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+      }
+    },
+    [token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+      await saveWidgetPreference(widgetKey, false);
+    },
+    [saveWidgetPreference]
+  );
+
+  useEffect(() => {
+    if (!token) return;
+    void fetchWidgetPreferences(token);
+  }, [token, fetchWidgetPreferences]);
+
   const openAddModal = (mode: RefundForm['payment_method'] = 'cash') => {
     setForm(emptyForm(mode));
     setShowAddModal(true);
@@ -261,6 +333,48 @@ export default function AccountingRefundsPage() {
     }
   };
 
+  const statCards = [
+    {
+      key: 'total_refunds',
+      label: 'Total Refunds',
+      value: formatMoney(totalAmount, currency),
+      icon: Wallet,
+      accent: 'from-teal-500 to-cyan-600',
+      tone: 'text-teal-800',
+    },
+    {
+      key: 'cash_refunds',
+      label: 'Cash Refunds',
+      value: formatMoney(cashTotal, currency),
+      icon: HandCoins,
+      accent: 'from-emerald-500 to-teal-600',
+      tone: 'text-emerald-800',
+    },
+    {
+      key: 'bank_refunds',
+      label: 'Bank Refunds',
+      value: formatMoney(bankTotal, currency),
+      icon: Landmark,
+      accent: 'from-cyan-500 to-sky-600',
+      tone: 'text-cyan-800',
+    },
+  ];
+  const tableColumns = [
+    { key: 'date', label: 'Date' },
+    { key: 'title', label: 'Title' },
+    { key: 'mode', label: 'Mode' },
+    { key: 'amount', label: 'Amount' },
+    { key: 'reference', label: 'Reference' },
+    { key: 'action', label: 'Action' },
+  ];
+  const showHeroWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}hero`);
+  const showStatsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}stats`);
+  const showFiltersWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}filters`);
+  const showRecordsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}records`);
+  const visibleStatCards = statCards.filter((card) => !hiddenWidgetKeys.includes(`${widgetPrefix}stat_${card.key}`));
+  const visibleTableColumns = tableColumns.filter((column) => !hiddenWidgetKeys.includes(`${widgetPrefix}col_${column.key}`));
+  const showAnyWidget = showHeroWidget || showStatsWidget || showFiltersWidget || showRecordsWidget;
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-teal-50 via-cyan-50 to-sky-100 flex items-center justify-center">
@@ -278,7 +392,30 @@ export default function AccountingRefundsPage() {
       </div>
 
       <div className="relative z-10 mx-auto max-w-7xl space-y-6">
+        {widgetNotice ? (
+          <section className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800 shadow-sm">
+            {widgetNotice}
+          </section>
+        ) : null}
+
+        {!showAnyWidget ? (
+          <section className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-5 text-sm font-semibold text-teal-900 shadow-sm">
+            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
+          </section>
+        ) : null}
+
+        {showHeroWidget ? (
         <section className="relative overflow-hidden rounded-[2rem] border border-white/20 bg-gradient-to-br from-[#0f766e] via-[#0e7490] to-[#0369a1] p-6 text-white shadow-[0_30px_80px_-24px_rgba(8,145,178,0.65)]">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+              className="absolute right-4 top-4 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-white/10 text-white hover:bg-white/20"
+              aria-label="Hide refunds hero widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(167,243,208,0.3),transparent_45%)]" />
           <div className="relative flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="max-w-2xl">
@@ -336,6 +473,7 @@ export default function AccountingRefundsPage() {
             </div>
           </div>
         </section>
+        ) : null}
 
         {notice ? (
           <section
@@ -352,48 +490,67 @@ export default function AccountingRefundsPage() {
           </section>
         ) : null}
 
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {[
-            {
-              label: 'Total Refunds',
-              value: formatMoney(totalAmount, currency),
-              icon: Wallet,
-              accent: 'from-teal-500 to-cyan-600',
-              tone: 'text-teal-800',
-            },
-            {
-              label: 'Cash Refunds',
-              value: formatMoney(cashTotal, currency),
-              icon: HandCoins,
-              accent: 'from-emerald-500 to-teal-600',
-              tone: 'text-emerald-800',
-            },
-            {
-              label: 'Bank Refunds',
-              value: formatMoney(bankTotal, currency),
-              icon: Landmark,
-              accent: 'from-cyan-500 to-sky-600',
-              tone: 'text-cyan-800',
-            },
-          ].map((item) => {
-            const Icon = item.icon;
-            return (
-              <div key={item.label} className="rounded-2xl border border-teal-100/80 bg-white/90 p-4 shadow-sm backdrop-blur">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
-                    <p className={`mt-2 text-2xl font-black ${item.tone}`}>{item.value}</p>
-                  </div>
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br ${item.accent} text-white shadow-lg`}>
-                    <Icon className="h-5 w-5" />
-                  </div>
-                </div>
+        {showStatsWidget ? (
+          <section className="relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}stats`)}
+                className="absolute right-2 -top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
+                aria-label="Hide refunds stats widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            {visibleStatCards.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                {visibleStatCards.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <div key={item.key} className="relative rounded-2xl border border-teal-100/80 bg-white/90 p-4 shadow-sm backdrop-blur">
+                      <WidgetCloseGate>
+                        <button
+                          type="button"
+                          onClick={() => void hideWidget(`${widgetPrefix}stat_${item.key}`)}
+                          className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
+                          aria-label={`Hide ${item.label} stat widget`}
+                        >
+                          ×
+                        </button>
+                      </WidgetCloseGate>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
+                          <p className={`mt-2 text-2xl font-black ${item.tone}`}>{item.value}</p>
+                        </div>
+                        <div className={`flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br ${item.accent} text-white shadow-lg`}>
+                          <Icon className="h-5 w-5" />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </section>
+            ) : (
+              <div className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-4 text-sm font-medium text-teal-900">
+                All refund stat cards are hidden.
+              </div>
+            )}
+          </section>
+        ) : null}
 
-        <section className="rounded-3xl border border-teal-100/80 bg-white/90 p-5 shadow-sm backdrop-blur space-y-4">
+        {showFiltersWidget ? (
+        <section className="relative rounded-3xl border border-teal-100/80 bg-white/90 p-5 shadow-sm backdrop-blur space-y-4">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+              className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
+              aria-label="Hide refund filters widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center gap-2">
             <Search className="h-4 w-4 text-teal-700" />
             <h2 className="text-sm font-bold text-slate-900">Filter Refund Records</h2>
@@ -473,8 +630,20 @@ export default function AccountingRefundsPage() {
             </button>
           </div>
         </section>
+        ) : null}
 
-        <section className="rounded-3xl border border-teal-100/80 bg-white/90 p-5 shadow-sm backdrop-blur">
+        {showRecordsWidget ? (
+        <section className="relative rounded-3xl border border-teal-100/80 bg-white/90 p-5 shadow-sm backdrop-blur">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}records`)}
+              className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
+              aria-label="Hide refund records widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-slate-900">Refund Records</h2>
@@ -498,52 +667,93 @@ export default function AccountingRefundsPage() {
               <p className="text-sm font-semibold text-amber-900">No refunds found</p>
               <p className="text-xs text-amber-800 mt-1">Use Add Cash Refund or Add Bank Refund to create a record.</p>
             </div>
+          ) : visibleTableColumns.length === 0 ? (
+            <div className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-8 text-center">
+              <p className="text-sm font-semibold text-teal-900">All refund table columns are hidden.</p>
+            </div>
           ) : (
             <div className="overflow-x-auto rounded-xl border border-teal-100">
               <table className="min-w-full text-xs text-slate-900">
                 <thead className="bg-teal-50/70 text-[10px] font-bold uppercase tracking-wider">
                   <tr>
-                    <th className="px-3 py-3 text-left">Date</th>
-                    <th className="px-3 py-3 text-left">Title</th>
-                    <th className="px-3 py-3 text-left">Mode</th>
-                    <th className="px-3 py-3 text-right">Amount</th>
-                    <th className="px-3 py-3 text-left">Reference</th>
-                    <th className="px-3 py-3 text-right">Action</th>
+                    {visibleTableColumns.map((column) => (
+                      <th
+                        key={column.key}
+                        className={`px-3 py-3 ${column.key === 'amount' || column.key === 'action' ? 'text-right' : 'text-left'}`}
+                      >
+                        <div className={`inline-flex items-center gap-2 ${column.key === 'amount' || column.key === 'action' ? 'justify-end w-full' : ''}`}>
+                          <span>{column.label}</span>
+                          <WidgetCloseGate>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void hideWidget(`${widgetPrefix}col_${column.key}`);
+                              }}
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
+                              aria-label={`Hide ${column.label} column`}
+                            >
+                              ×
+                            </button>
+                          </WidgetCloseGate>
+                        </div>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-teal-50 bg-white">
                   {refunds.map((row) => (
                     <tr key={row.id} className="hover:bg-teal-50/35">
-                      <td className="px-3 py-2.5 whitespace-nowrap font-semibold">{formatDate(row.refund_date)}</td>
-                      <td className="px-3 py-2.5">
-                        <p className="font-semibold">{row.title}</p>
-                        {row.notes ? <p className="text-[10px] text-slate-500 mt-0.5">{row.notes}</p> : null}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${
-                            row.payment_method === 'cash'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-cyan-100 text-cyan-800'
-                          }`}
-                        >
-                          {paymentLabel(row.payment_method)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-rose-700">
-                        {formatMoney(row.amount, currency)}
-                      </td>
-                      <td className="px-3 py-2.5">{row.reference_no || '—'}</td>
-                      <td className="px-3 py-2.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => void handleDelete(row.id)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-700 transition hover:bg-rose-100"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          Delete
-                        </button>
-                      </td>
+                      {visibleTableColumns.map((column) => {
+                        if (column.key === 'date') {
+                          return <td key={column.key} className="px-3 py-2.5 whitespace-nowrap font-semibold">{formatDate(row.refund_date)}</td>;
+                        }
+                        if (column.key === 'title') {
+                          return (
+                            <td key={column.key} className="px-3 py-2.5">
+                              <p className="font-semibold">{row.title}</p>
+                              {row.notes ? <p className="text-[10px] text-slate-500 mt-0.5">{row.notes}</p> : null}
+                            </td>
+                          );
+                        }
+                        if (column.key === 'mode') {
+                          return (
+                            <td key={column.key} className="px-3 py-2.5">
+                              <span
+                                className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${
+                                  row.payment_method === 'cash'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-cyan-100 text-cyan-800'
+                                }`}
+                              >
+                                {paymentLabel(row.payment_method)}
+                              </span>
+                            </td>
+                          );
+                        }
+                        if (column.key === 'amount') {
+                          return (
+                            <td key={column.key} className="px-3 py-2.5 text-right tabular-nums font-semibold text-rose-700">
+                              {formatMoney(row.amount, currency)}
+                            </td>
+                          );
+                        }
+                        if (column.key === 'reference') {
+                          return <td key={column.key} className="px-3 py-2.5">{row.reference_no || '—'}</td>;
+                        }
+                        return (
+                          <td key={column.key} className="px-3 py-2.5 text-right">
+                            <button
+                              type="button"
+                              onClick={() => void handleDelete(row.id)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-700 transition hover:bg-rose-100"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              Delete
+                            </button>
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -551,6 +761,7 @@ export default function AccountingRefundsPage() {
             </div>
           )}
         </section>
+        ) : null}
       </div>
 
       {showAddModal ? (

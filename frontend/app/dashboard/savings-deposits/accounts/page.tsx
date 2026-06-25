@@ -20,6 +20,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import {
   DEFAULT_INTEREST_BY_ACCOUNT,
   formatAccountTypeLabel,
@@ -93,6 +94,8 @@ function accountTypeBadgeClass(type: string | null | undefined): string {
 export default function SavingsOpenAccountPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
   const [activeStep, setActiveStep] = useState(1);
   const [showInterestGuide, setShowInterestGuide] = useState(false);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
@@ -111,6 +114,52 @@ export default function SavingsOpenAccountPage() {
   const [interestRate, setInterestRate] = useState('4.5');
   const [openedAt, setOpenedAt] = useState('');
   const [resolvedCustomer, setResolvedCustomer] = useState<CustomerSummary | null>(null);
+  const widgetPrefix = 'savings_accounts_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    try {
+      const response = await axios.get('/api/dashboard/widgets', {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        '/api/dashboard/widgets',
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
+  };
 
   const selectedAccountMeta = useMemo(
     () => SAVINGS_ACCOUNT_TYPES.find((item) => item.value === accountType),
@@ -147,6 +196,7 @@ export default function SavingsOpenAccountPage() {
       return;
     }
     setToken(t);
+    void fetchWidgetPreferences(t);
     const today = new Date().toISOString().slice(0, 10);
     setOpenedAt(today);
   }, [router]);
@@ -323,6 +373,24 @@ export default function SavingsOpenAccountPage() {
     }
   };
 
+  const showHeroWidget = !hiddenWidgetKeys.has(`${widgetPrefix}hero`);
+  const showMainFormWidget = !hiddenWidgetKeys.has(`${widgetPrefix}main_form`);
+  const showSidebarWidget = !hiddenWidgetKeys.has(`${widgetPrefix}sidebar`);
+  const showAccountsListWidget = !hiddenWidgetKeys.has(`${widgetPrefix}accounts_list`);
+  const tableColumns = [
+    { key: 'account', label: 'Account' },
+    { key: 'customer', label: 'Customer' },
+    { key: 'type', label: 'Type' },
+    { key: 'interest', label: 'Interest' },
+    { key: 'rate', label: 'Rate' },
+    { key: 'balance', label: 'Balance' },
+  ] as const;
+  const visibleTableColumns = tableColumns.filter(
+    (column) => !hiddenWidgetKeys.has(`${widgetPrefix}col_${column.key}`)
+  );
+  const isAnyWidgetVisible =
+    showHeroWidget || showMainFormWidget || showSidebarWidget || showAccountsListWidget;
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 flex items-center justify-center">
@@ -334,8 +402,29 @@ export default function SavingsOpenAccountPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50/80 to-yellow-50 p-4 sm:p-6">
       <div className="max-w-7xl mx-auto space-y-5">
+        {widgetNotice ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {widgetNotice}
+          </div>
+        ) : null}
+        {!isAnyWidgetVisible ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            All widgets are hidden on this page. Restore hidden widgets from dashboard.
+          </div>
+        ) : null}
         {/* Hero */}
-        <div className="rounded-3xl border border-white/80 bg-white/95 shadow-xl overflow-hidden">
+        {showHeroWidget ? (
+        <div className="rounded-3xl border border-white/80 bg-white/95 shadow-xl overflow-hidden relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}hero`)}
+              className="absolute right-3 top-3 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide hero widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-500 px-6 py-6">
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <div className="flex items-start gap-4">
@@ -376,6 +465,7 @@ export default function SavingsOpenAccountPage() {
             </div>
           </div>
         </div>
+        ) : null}
 
         {/* Alerts */}
         {errorMessage && (
@@ -400,7 +490,18 @@ export default function SavingsOpenAccountPage() {
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-5 items-start">
           {/* Main form */}
-          <div className="rounded-3xl border border-orange-100 bg-white/95 shadow-lg overflow-hidden">
+          {showMainFormWidget ? (
+          <div className="rounded-3xl border border-orange-100 bg-white/95 shadow-lg overflow-hidden relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}main_form`)}
+                className="absolute right-3 top-3 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide account form widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             {/* Stepper */}
             <div className="flex border-b border-orange-100 bg-gradient-to-r from-orange-50/80 to-amber-50/50">
               {STEPS.map((step) => {
@@ -744,9 +845,21 @@ export default function SavingsOpenAccountPage() {
               )}
             </div>
           </div>
+          ) : null}
 
           {/* Sidebar summary */}
-          <aside className="xl:sticky xl:top-6 space-y-4">
+          {showSidebarWidget ? (
+          <aside className="xl:sticky xl:top-6 space-y-4 relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => void hideWidget(`${widgetPrefix}sidebar`)}
+                className="absolute right-3 top-3 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide sidebar widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <div className="rounded-3xl border border-orange-100 bg-white/95 p-5 shadow-lg">
               <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Live summary</h3>
               <div className="mt-4 space-y-3">
@@ -779,10 +892,22 @@ export default function SavingsOpenAccountPage() {
               Pick the account type first — we’ll suggest the best interest types for that product.
             </div>
           </aside>
+          ) : null}
         </div>
 
         {/* Accounts list */}
-        <div className="rounded-3xl border border-orange-100 bg-white/95 shadow-lg overflow-hidden">
+        {showAccountsListWidget ? (
+        <div className="rounded-3xl border border-orange-100 bg-white/95 shadow-lg overflow-hidden relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}accounts_list`)}
+              className="absolute right-3 top-3 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide accounts list widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-orange-100 bg-gradient-to-r from-orange-50/80 to-transparent">
             <div className="flex items-center gap-2">
               <CircleDollarSign className="h-5 w-5 text-orange-700" />
@@ -803,40 +928,75 @@ export default function SavingsOpenAccountPage() {
               <p className="mt-3 text-sm font-semibold text-slate-700">No accounts yet</p>
               <p className="text-xs text-slate-500 mt-1">Open your first savings or deposit account above.</p>
             </div>
+          ) : visibleTableColumns.length === 0 ? (
+            <div className="py-16 text-center px-6">
+              <p className="text-sm text-amber-800">All table columns are hidden. Restore hidden widgets from dashboard.</p>
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="text-left text-[10px] font-bold uppercase tracking-wider text-slate-500 bg-slate-50/80">
-                    <th className="py-3 px-4">Account</th>
-                    <th className="py-3 px-4">Customer</th>
-                    <th className="py-3 px-4">Type</th>
-                    <th className="py-3 px-4">Interest</th>
-                    <th className="py-3 px-4 text-right">Rate</th>
-                    <th className="py-3 px-4 text-right">Balance</th>
+                    {visibleTableColumns.map((column) => (
+                      <th key={column.key} className="py-3 px-4 relative">
+                        {column.label}
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void hideWidget(`${widgetPrefix}col_${column.key}`);
+                            }}
+                            className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-orange-200 bg-white text-[10px] font-bold text-orange-700 hover:bg-rose-50 hover:text-rose-700"
+                            aria-label={`Hide ${column.label} column`}
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-orange-50">
                   {accounts.slice(0, 15).map((row) => (
                     <tr key={row.id} className="hover:bg-orange-50/40 transition">
-                      <td className="py-3 px-4">
-                        <p className="font-bold text-slate-900">{row.account_number || '—'}</p>
-                        <p className="text-[10px] text-slate-500 capitalize">{row.status || 'active'}</p>
-                      </td>
-                      <td className="py-3 px-4">
-                        <p className="font-medium text-slate-800">{row.customer?.first_name} {row.customer?.last_name}</p>
-                        <p className="text-xs text-slate-500">{row.customer?.customer_code}</p>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span
-                          className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${accountTypeBadgeClass(row.account_type)}`}
-                        >
-                          {formatAccountTypeLabel(row.account_type)}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-slate-700">{formatInterestTypeLabel(row.interest_type)}</td>
-                      <td className="py-3 px-4 text-right tabular-nums font-medium">{amount(row.interest_rate)}%</td>
-                      <td className="py-3 px-4 text-right tabular-nums font-bold text-emerald-800">{amount(row.balance)}</td>
+                      {visibleTableColumns.map((column) => {
+                        if (column.key === 'account') {
+                          return (
+                            <td key={column.key} className="py-3 px-4">
+                              <p className="font-bold text-slate-900">{row.account_number || '—'}</p>
+                              <p className="text-[10px] text-slate-500 capitalize">{row.status || 'active'}</p>
+                            </td>
+                          );
+                        }
+                        if (column.key === 'customer') {
+                          return (
+                            <td key={column.key} className="py-3 px-4">
+                              <p className="font-medium text-slate-800">{row.customer?.first_name} {row.customer?.last_name}</p>
+                              <p className="text-xs text-slate-500">{row.customer?.customer_code}</p>
+                            </td>
+                          );
+                        }
+                        if (column.key === 'type') {
+                          return (
+                            <td key={column.key} className="py-3 px-4">
+                              <span
+                                className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${accountTypeBadgeClass(row.account_type)}`}
+                              >
+                                {formatAccountTypeLabel(row.account_type)}
+                              </span>
+                            </td>
+                          );
+                        }
+                        if (column.key === 'interest') {
+                          return <td key={column.key} className="py-3 px-4 text-slate-700">{formatInterestTypeLabel(row.interest_type)}</td>;
+                        }
+                        if (column.key === 'rate') {
+                          return <td key={column.key} className="py-3 px-4 text-right tabular-nums font-medium">{amount(row.interest_rate)}%</td>;
+                        }
+                        return <td key={column.key} className="py-3 px-4 text-right tabular-nums font-bold text-emerald-800">{amount(row.balance)}</td>;
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -844,6 +1004,7 @@ export default function SavingsOpenAccountPage() {
             </div>
           )}
         </div>
+        ) : null}
       </div>
     </div>
   );

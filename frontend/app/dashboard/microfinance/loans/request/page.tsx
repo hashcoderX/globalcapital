@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl, resolveStorageAssetUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type MFRoute = { id: number; name: string; code: string };
 type MFCenter = { id: number; mf_route_id: number; name: string; code: string };
@@ -223,6 +224,7 @@ export default function RequestLoanPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [modal, setModal] = useState<{ open: boolean; title: string; message: string; onClose?: () => void }>({
     open: false,
@@ -238,6 +240,51 @@ export default function RequestLoanPage() {
     const callback = modal.onClose;
     setModal({ open: false, title: '', message: '' });
     if (callback) callback();
+  };
+  const widgetPrefix = 'mf_loan_request_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    try {
+      const response = await axios.get('/api/dashboard/widgets', {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        '/api/dashboard/widgets',
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      openModal('Failed to hide this widget. Please try again.', 'Widget Update Failed');
+    }
   };
 
   const [routes, setRoutes] = useState<MFRoute[]>([]);
@@ -482,6 +529,7 @@ export default function RequestLoanPage() {
       return;
     }
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
 
     const storedUser = localStorage.getItem('auth_user');
     if (storedUser) {
@@ -1167,6 +1215,22 @@ export default function RequestLoanPage() {
     }
   };
 
+  const showStepPanel = !hiddenWidgetKeys.has(`${widgetPrefix}step_panel`);
+  const showStep1 = !hiddenWidgetKeys.has(`${widgetPrefix}step_1_location_mapping`);
+  const showStep2 = !hiddenWidgetKeys.has(`${widgetPrefix}step_2_officer_team`);
+  const showStep3 = !hiddenWidgetKeys.has(`${widgetPrefix}step_3_customer_details`);
+  const showStep4 = !hiddenWidgetKeys.has(`${widgetPrefix}step_4_guarantors`);
+  const showStep5 = !hiddenWidgetKeys.has(`${widgetPrefix}step_5_loan_documents`);
+  const showStep6 = !hiddenWidgetKeys.has(`${widgetPrefix}step_6_loan_details`);
+  const showLiveSummary = !hiddenWidgetKeys.has(`${widgetPrefix}live_summary`);
+  const isActiveStepVisible =
+    (activeStep === 1 && showStep1) ||
+    (activeStep === 2 && showStep2) ||
+    (activeStep === 3 && showStep3) ||
+    (activeStep === 4 && showStep4) ||
+    (activeStep === 5 && showStep5) ||
+    (activeStep === 6 && showStep6);
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-green-100 flex items-center justify-center">
@@ -1199,7 +1263,18 @@ export default function RequestLoanPage() {
 
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
             <div className="xl:col-span-2 space-y-6">
-              <div className="stepPanel">
+              {showStepPanel && (
+              <div className="stepPanel relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}step_panel`)}
+                    className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide step navigator widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="stepProgressBar">
                   <div className="stepProgressFill" style={{ width: `${progressPercent}%` }}></div>
                 </div>
@@ -1220,9 +1295,20 @@ export default function RequestLoanPage() {
                   ))}
                 </div>
               </div>
+              )}
 
-              {activeStep === 1 && (
-              <div className="sectionCard">
+              {activeStep === 1 && showStep1 && (
+              <div className="sectionCard relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}step_1_location_mapping`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide Location Mapping widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <h2 className="sectionTitle">Location Mapping</h2>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                   <div>
@@ -1278,8 +1364,18 @@ export default function RequestLoanPage() {
               </div>
               )}
 
-              {activeStep === 2 && (
-              <div className="sectionCard">
+              {activeStep === 2 && showStep2 && (
+              <div className="sectionCard relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}step_2_officer_team`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide Officer and Team widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <h2 className="sectionTitle">Officer & Team Details</h2>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                   <div>
@@ -1338,8 +1434,18 @@ export default function RequestLoanPage() {
               </div>
               )}
 
-              {activeStep === 3 && (
-              <div className="sectionCard emerald">
+              {activeStep === 3 && showStep3 && (
+              <div className="sectionCard emerald relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}step_3_customer_details`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide Customer Details widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <h2 className="sectionTitle">Customer Details</h2>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                   <div>
@@ -1469,8 +1575,18 @@ export default function RequestLoanPage() {
               </div>
               )}
 
-              {activeStep === 4 && (
-              <div className="sectionCard cyan">
+              {activeStep === 4 && showStep4 && (
+              <div className="sectionCard cyan relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}step_4_guarantors`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide Guarantors widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="sectionTitle">Guarantors</h2>
                   <button type="button" onClick={addGuarantor} className="px-3 py-2 rounded-lg bg-cyan-600 text-white text-sm font-semibold">+ Add Guarantor</button>
@@ -1544,8 +1660,18 @@ export default function RequestLoanPage() {
               </div>
               )}
 
-              {activeStep === 5 && (
-              <div className="sectionCard cyan">
+              {activeStep === 5 && showStep5 && (
+              <div className="sectionCard cyan relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}step_5_loan_documents`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide Loan Documents widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="sectionTitle">Loan Documents</h2>
                   <button type="button" onClick={addDocument} className="px-3 py-2 rounded-lg bg-cyan-600 text-white text-sm font-semibold">+ Add Document</button>
@@ -1597,8 +1723,18 @@ export default function RequestLoanPage() {
               </div>
               )}
 
-              {activeStep === 6 && (
-              <div className="sectionCard blue">
+              {activeStep === 6 && showStep6 && (
+              <div className="sectionCard blue relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}step_6_loan_details`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide Loan Details widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <h2 className="sectionTitle">Loan Details</h2>
                 <div className="mt-4 space-y-4">
                   <div className="rounded-xl border border-blue-200 bg-white/90 p-4">
@@ -1913,6 +2049,12 @@ export default function RequestLoanPage() {
               </div>
               )}
 
+              {!isActiveStepVisible && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                  This step widget is hidden. Use the step tabs to continue, or restore hidden widgets from dashboard.
+                </div>
+              )}
+
               <div className="flex justify-end">
                 <div className="w-full flex items-center justify-between gap-3">
                   <button
@@ -1943,7 +2085,18 @@ export default function RequestLoanPage() {
             </div>
 
             <div className="xl:col-span-1">
-              <div className="sticky top-6 rounded-2xl border border-emerald-100 bg-white/90 shadow-lg p-5 space-y-4">
+              {showLiveSummary && (
+              <div className="sticky top-6 relative rounded-2xl border border-emerald-100 bg-white/90 shadow-lg p-5 space-y-4">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}live_summary`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label="Hide Live Summary widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <h3 className="text-lg font-bold text-slate-900">Live Summary</h3>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div className="summaryTile">
@@ -1993,6 +2146,7 @@ export default function RequestLoanPage() {
                   Tip: select loan scope, route, and center to generate loan code automatically.
                 </p>
               </div>
+              )}
             </div>
           </div>
         </form>

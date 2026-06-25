@@ -2,6 +2,7 @@
 
 import axios from 'axios';
 import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import jsPDF from 'jspdf';
@@ -45,16 +46,83 @@ type ReportRow = {
 
 const API_BASE = getApiBaseUrl();
 
-export default function CollectionReportPage() {
+export default function MicrofinanceCollectionReportPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const branchId = searchParams.get('branch_id') || '';
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ReportRow[]>([]);
+  const [loadingWidgets, setLoadingWidgets] = useState(true);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
+    open: false,
+    title: '',
+    message: '',
+  });
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
-  const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    setLoadingWidgets(true);
+    try {
+      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const list = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of list) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith('mf_collection_widget_')) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    } finally {
+      setLoadingWidgets(false);
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${API_BASE}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+        }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice({
+        open: true,
+        title: 'Widget Update Failed',
+        message: 'Failed to hide this item. Please try again.',
+      });
+    }
+  };
 
   const handleBack = () => router.back();
 
@@ -66,6 +134,7 @@ export default function CollectionReportPage() {
     }
 
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -195,6 +264,58 @@ export default function CollectionReportPage() {
       officerCount: officers.size,
     };
   }, [filteredRows]);
+
+  const summaryCards = [
+    { key: 'mf_collection_widget_summary_transactions', label: 'Transactions', value: String(summary.transactionCount), style: 'text-slate-900' },
+    {
+      key: 'mf_collection_widget_summary_total_collected',
+      label: 'Total Collected',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCollected),
+      style: 'text-emerald-700',
+    },
+    {
+      key: 'mf_collection_widget_summary_capital',
+      label: 'Capital',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCapital),
+      style: 'text-slate-900',
+    },
+    {
+      key: 'mf_collection_widget_summary_interest',
+      label: 'Interest',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalInterest),
+      style: 'text-slate-900',
+    },
+    {
+      key: 'mf_collection_widget_summary_penalty',
+      label: 'Penalty',
+      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalPenalty),
+      style: 'text-rose-700',
+    },
+    {
+      key: 'mf_collection_widget_summary_today_officers',
+      label: 'Today / Officers',
+      value: `${new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.todayCollected)} / ${summary.officerCount}`,
+      style: 'text-cyan-800',
+    },
+  ];
+  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+  const showHeaderBack = !hiddenWidgetKeys.has('mf_collection_widget_header_back');
+  const showToolbar = !hiddenWidgetKeys.has('mf_collection_widget_toolbar');
+  const showMobileCards = !hiddenWidgetKeys.has('mf_collection_widget_mobile_cards');
+  const tableColumns = [
+    { key: 'date', label: 'Date & Time' },
+    { key: 'loanCode', label: 'Loan Code' },
+    { key: 'customerNo', label: 'Customer No' },
+    { key: 'customer', label: 'Customer' },
+    { key: 'fieldOfficer', label: 'Field Officer' },
+    { key: 'paymentType', label: 'Payment Type' },
+    { key: 'reference', label: 'Reference' },
+    { key: 'collected', label: 'Collected' },
+    { key: 'capital', label: 'Capital' },
+    { key: 'interest', label: 'Interest' },
+    { key: 'penalty', label: 'Penalty' },
+  ];
+  const visibleTableColumns = tableColumns.filter((column) => !hiddenWidgetKeys.has(`mf_collection_widget_col_${column.key}`));
 
   const formatDateTime = (value: string) => {
     const parsed = new Date(value);
@@ -331,7 +452,7 @@ export default function CollectionReportPage() {
     doc.save(`collection-report-${getReportFileDate()}.pdf`);
   };
 
-  if (!token || loading) {
+  if (!token || loading || loadingWidgets) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
@@ -359,70 +480,77 @@ export default function CollectionReportPage() {
               <h1 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 mt-3 tracking-tight">Collection Report</h1>
               <p className="text-sm sm:text-base text-slate-600 mt-2 max-w-2xl">Period-wise collection performance with capital, interest, and penalty breakdown.</p>
             </div>
-            <button
-              onClick={handleBack}
-              className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm w-full sm:w-auto"
-            >
-              Back
-            </button>
+            {showHeaderBack && (
+              <div className="relative">
+                <WidgetCloseGate>
+<button
+                  type="button"
+                  onClick={() => void hideWidget('mf_collection_widget_header_back')}
+                  className="absolute -top-2 -left-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide back button"
+                >
+                  ×
+                </button>
+</WidgetCloseGate>
+                <button
+                  onClick={handleBack}
+                  className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm w-full sm:w-auto"
+                >
+                  Back
+                </button>
+                </div>
+              )}
+              {!showMobileCards && (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 lg:hidden">
+                  Mobile cards are hidden. Restore from dashboard with admin approval.
+                </div>
+              )}
           </div>
 
           <div className="mt-5 h-1.5 w-40 rounded-full bg-gradient-to-r from-cyan-500 via-sky-500 to-emerald-500"></div>
 
           <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-            <div className="relative overflow-hidden rounded-2xl border border-cyan-100 bg-gradient-to-br from-white via-cyan-50/60 to-sky-50/70 p-4 shadow-sm">
-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-cyan-200/40 blur-xl"></div>
-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-100 text-cyan-700 text-xs font-bold">TX</div>
-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Transactions</p>
-              <p className="text-lg sm:text-xl font-bold text-slate-900 mt-1">{summary.transactionCount}</p>
+            {visibleSummaryCards.map((card) => (
+              <div key={card.key} className="relative overflow-hidden rounded-2xl border border-cyan-100 bg-gradient-to-br from-white via-cyan-50/60 to-sky-50/70 p-4 shadow-sm">
+                <WidgetCloseGate>
+<button
+                  type="button"
+                  onClick={() => void hideWidget(card.key)}
+                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                  aria-label={`Hide ${card.label} card`}
+                >
+                  ×
+                </button>
+</WidgetCloseGate>
+                <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">{card.label}</p>
+                <p className={`text-sm sm:text-base font-bold mt-1 break-words [overflow-wrap:anywhere] ${card.style}`}>
+                  {card.value}
+                </p>
+              </div>
+            ))}
+          {visibleSummaryCards.length === 0 && (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              All summary cards are hidden. Restore from dashboard with admin approval.
             </div>
-            <div className="relative overflow-hidden rounded-2xl border border-emerald-100 bg-gradient-to-br from-white via-emerald-50/70 to-teal-50/70 p-4 shadow-sm">
-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-emerald-200/40 blur-xl"></div>
-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 text-xs font-bold">TC</div>
-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Total Collected</p>
-              <p className="text-sm sm:text-base font-bold text-emerald-700 mt-1 break-words [overflow-wrap:anywhere]">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCollected)}
-              </p>
-            </div>
-            <div className="relative overflow-hidden rounded-2xl border border-sky-100 bg-gradient-to-br from-white via-sky-50/70 to-cyan-50/70 p-4 shadow-sm">
-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-sky-200/40 blur-xl"></div>
-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-sky-100 text-sky-700 text-xs font-bold">CP</div>
-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Capital</p>
-              <p className="text-sm sm:text-base font-bold text-slate-900 mt-1 break-words [overflow-wrap:anywhere]">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCapital)}
-              </p>
-            </div>
-            <div className="relative overflow-hidden rounded-2xl border border-cyan-100 bg-gradient-to-br from-white via-cyan-50/70 to-blue-50/70 p-4 shadow-sm">
-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-cyan-200/40 blur-xl"></div>
-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-100 text-cyan-700 text-xs font-bold">IN</div>
-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Interest</p>
-              <p className="text-sm sm:text-base font-bold text-slate-900 mt-1 break-words [overflow-wrap:anywhere]">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalInterest)}
-              </p>
-            </div>
-            <div className="relative overflow-hidden rounded-2xl border border-rose-100 bg-gradient-to-br from-white via-rose-50/70 to-orange-50/70 p-4 shadow-sm sm:col-span-2">
-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-rose-200/40 blur-xl"></div>
-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-700 text-xs font-bold">PN</div>
-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Penalty</p>
-              <p className="text-sm sm:text-base font-bold text-rose-700 mt-1 break-words [overflow-wrap:anywhere]">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalPenalty)}
-              </p>
-            </div>
-            <div className="relative overflow-hidden rounded-2xl border border-teal-100 bg-gradient-to-br from-white via-teal-50/70 to-cyan-50/70 p-4 shadow-sm sm:col-span-2">
-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-teal-200/40 blur-xl"></div>
-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-teal-100 text-teal-700 text-xs font-bold">TD</div>
-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Today / Officers</p>
-              <p className="text-sm sm:text-base font-bold text-cyan-800 mt-1 break-words [overflow-wrap:anywhere]">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.todayCollected)} / {summary.officerCount}
-              </p>
-            </div>
+          )}
           </div>
         </div>
 
         <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">Collection Transactions</h2>
-            <div className="flex flex-col sm:flex-row sm:items-end gap-2 w-full lg:w-auto lg:flex-wrap">
+            {showToolbar && (
+              <div className="relative flex flex-col sm:flex-row sm:items-end gap-2 w-full lg:w-auto lg:flex-wrap">
+              <WidgetCloseGate>
+<button
+                type="button"
+                onClick={() => void hideWidget('mf_collection_widget_toolbar')}
+                className="absolute -top-2 -left-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Hide toolbar"
+              >
+                ×
+              </button>
+</WidgetCloseGate>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full lg:w-auto">
                 <div>
                   <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">From Date</label>
@@ -470,8 +598,13 @@ export default function CollectionReportPage() {
                   Download PDF
                 </button>
               </div>
+              </div>
+            )}
+          {!showToolbar && (
+            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              Toolbar controls are hidden. Restore from dashboard with admin approval.
             </div>
-          </div>
+          )}
 
           <div className="mt-3 rounded-xl border border-cyan-100 bg-gradient-to-r from-cyan-50/80 via-sky-50/70 to-emerald-50/70 px-3 py-2 text-xs sm:text-sm text-slate-600">
             Showing <span className="font-bold text-slate-800">{filteredRows.length}</span> transaction(s)
@@ -484,7 +617,18 @@ export default function CollectionReportPage() {
             </div>
           ) : (
             <>
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 lg:hidden">
+              {showMobileCards && (
+                <div className="relative mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 lg:hidden">
+                <WidgetCloseGate>
+<button
+                  type="button"
+                  onClick={() => void hideWidget('mf_collection_widget_mobile_cards')}
+                  className="absolute -top-2 -left-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide mobile cards"
+                >
+                  ×
+                </button>
+</WidgetCloseGate>
                 {filteredRows.map((row) => (
                   <div
                     key={row.id}
@@ -541,6 +685,7 @@ export default function CollectionReportPage() {
                   </div>
                 ))}
               </div>
+              )}
 
               <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 hidden lg:block">
                 <table className="min-w-full text-sm text-left text-slate-700 bg-white">
@@ -582,6 +727,7 @@ export default function CollectionReportPage() {
           )}
         </div>
       </div>
+    </div>
     </div>
   );
 }

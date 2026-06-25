@@ -25,6 +25,8 @@ use App\Http\Controllers\Api\AccountingExpenseController;
 use App\Http\Controllers\Api\AccountingRefundController;
 use App\Http\Controllers\Api\AccountingOverviewController;
 use App\Http\Controllers\Api\AccountingReportsController;
+use App\Http\Controllers\Api\UserDashboardWidgetController;
+use App\Http\Controllers\Api\UserNotificationController;
 use App\Http\Controllers\Api\CompanyAccountController;
 use App\Http\Controllers\Api\CompanyDocumentTemplateController;
 use App\Http\Controllers\Api\Microfinance\RouteController as MicrofinanceRouteController;
@@ -125,6 +127,18 @@ Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
 
 Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
+    Route::get('dashboard/widgets', [UserDashboardWidgetController::class, 'index']);
+    Route::patch('dashboard/widgets', [UserDashboardWidgetController::class, 'upsert']);
+    Route::delete('dashboard/widgets', [UserDashboardWidgetController::class, 'reset']);
+    Route::post('dashboard/widgets/authorize-admin', [UserDashboardWidgetController::class, 'authorizeAdminAction']);
+    Route::post('dashboard/widgets/restore-employee', [UserDashboardWidgetController::class, 'restoreEmployeeWidgets']);
+    Route::get('notifications', [UserNotificationController::class, 'index']);
+    Route::get('notifications/preview', [UserNotificationController::class, 'preview']);
+    Route::patch('notifications/{notification}/read', [UserNotificationController::class, 'markRead']);
+    Route::patch('notifications/{notification}/important', [UserNotificationController::class, 'toggleImportant']);
+    Route::patch('notifications/read-all', [UserNotificationController::class, 'markAllRead']);
+    Route::delete('notifications/read', [UserNotificationController::class, 'clearRead']);
+
     Route::get('system/status', [CompanyController::class, 'getSystemStatus']);
     Route::post('system/status', [CompanyController::class, 'updateSystemStatus']);
     Route::post('system/reset', [CompanyController::class, 'resetSystem']);

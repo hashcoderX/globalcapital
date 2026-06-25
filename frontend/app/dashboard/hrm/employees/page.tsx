@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 interface EmployeeAllowanceDeduction {
   id: number;
@@ -157,8 +158,11 @@ const DEFAULT_LEAVE_TYPES: LeaveType[] = [
 
 export default function Employees() {
   const apiBase = getApiBaseUrl();
+  const widgetPrefix = 'hrm_employees_widget_';
   const [token, setToken] = useState('');
   const [isAdminUser, setIsAdminUser] = useState(false);
+  const [canRestoreEmployeeWidgets, setCanRestoreEmployeeWidgets] = useState(false);
+  const [isRestoringWidgets, setIsRestoringWidgets] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [designations, setDesignations] = useState<Designation[]>([]);
@@ -266,6 +270,8 @@ export default function Employees() {
   // Leave details state
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
   const [employeeLeaveBalances, setEmployeeLeaveBalances] = useState<EmployeeLeaveBalance[]>([]);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
   const [selectedLeaveType, setSelectedLeaveType] = useState('');
   const [leaveDays, setLeaveDays] = useState('');
   const [leavePaid, setLeavePaid] = useState<'yes' | 'no'>('yes');
@@ -304,6 +310,23 @@ export default function Employees() {
   const startIndex = (currentPage - 1) * pageSize;
   const endIndex = Math.min(startIndex + pageSize, filteredEmployees.length);
   const paginatedEmployees = filteredEmployees.slice(startIndex, startIndex + pageSize);
+  const showCodeColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_code`);
+  const showNameColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_name`);
+  const showEmailColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_email`);
+  const showDepartmentColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_department`);
+  const showDesignationColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_designation`);
+  const showBranchColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_branch`);
+  const showStatusColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_status`);
+  const showActionsColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_actions`);
+  const showAnyEmployeeColumn =
+    showCodeColumn ||
+    showNameColumn ||
+    showEmailColumn ||
+    showDepartmentColumn ||
+    showDesignationColumn ||
+    showBranchColumn ||
+    showStatusColumn ||
+    showActionsColumn;
 
   const calculateMonthlyApit = (monthlyIncome: number) => {
     const slabs = [
@@ -416,6 +439,145 @@ export default function Employees() {
     setNoticeMessage('');
   };
 
+  const fetchWidgetPreferences = useCallback(
+    async (authToken?: string) => {
+      const tokenToUse = authToken || token;
+      if (!tokenToUse) return;
+
+      try {
+        const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+          headers: {
+            Authorization: `Bearer ${tokenToUse}`,
+            Accept: 'application/json',
+          },
+        });
+
+        const widgets = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+        const isVisibleWidget = (value: unknown): boolean => {
+          if (typeof value === 'boolean') return value;
+          if (typeof value === 'number') return value === 1;
+          if (typeof value === 'string') {
+            const normalized = value.trim().toLowerCase();
+            return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+          }
+          return false;
+        };
+        const hiddenKeys = widgets
+          .filter((item: { widget_key?: string; is_visible?: unknown }) => !isVisibleWidget(item?.is_visible))
+          .map((item: { widget_key?: string }) => item.widget_key)
+          .filter((key: unknown): key is string => typeof key === 'string' && key.startsWith(widgetPrefix));
+
+        setHiddenWidgetKeys(hiddenKeys);
+        setWidgetNotice(null);
+      } catch {
+        setWidgetNotice('Failed to load widget preferences.');
+      }
+    },
+    [apiBase, token, widgetPrefix]
+  );
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+      const normalizedKey = widgetKey.trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Invalid widget key. Please refresh and try again.');
+        return false;
+      }
+
+      try {
+        await axios.patch(
+          `${apiBase}/dashboard/widgets`,
+          {
+            widget_key: normalizedKey,
+            is_visible: Boolean(isVisible),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice(null);
+        return true;
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+        return false;
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) return;
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+    },
+    [saveWidgetPreference]
+  );
+
+  const restoreEmployeeWidgets = useCallback(async (employeeId?: number, employeeName?: string) => {
+    if (!token || isRestoringWidgets) return;
+
+    setIsRestoringWidgets(true);
+    try {
+      if (employeeId && canRestoreEmployeeWidgets) {
+        const response = await axios.post(
+          `${apiBase}/dashboard/widgets/restore-employee`,
+          {
+            employee_id: employeeId,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        const restoredCount = Number(response?.data?.restored_count ?? 0);
+        if (restoredCount > 0) {
+          showNotice(
+            'Widgets Restored',
+            `Restored ${restoredCount} hidden widgets for ${employeeName || 'employee'}.`,
+            'success'
+          );
+          setWidgetNotice(null);
+        } else {
+          showNotice(
+            'No Hidden Widgets',
+            `No hidden widgets found for ${employeeName || 'employee'}.`,
+            'info'
+          );
+        }
+      } else {
+        const ownHiddenKeys = hiddenWidgetKeys.filter((key) => key.startsWith(widgetPrefix));
+        if (ownHiddenKeys.length === 0) {
+          showNotice('No Hidden Widgets', 'No hidden employee widgets to restore.', 'info');
+          return;
+        }
+
+        const restoreResults = await Promise.all(
+          ownHiddenKeys.map((widgetKey) => saveWidgetPreference(widgetKey, true))
+        );
+
+        if (restoreResults.every(Boolean)) {
+          const restoredSet = new Set(ownHiddenKeys);
+          setHiddenWidgetKeys((prev) => prev.filter((key) => !restoredSet.has(key)));
+          setWidgetNotice(null);
+          showNotice('Widgets Restored', `Restored ${ownHiddenKeys.length} hidden widgets.`, 'success');
+        } else {
+          showNotice('Restore Failed', 'Failed to restore some widget preferences.', 'error');
+        }
+      }
+    } catch {
+      showNotice('Restore Failed', 'Failed to restore employee widgets.', 'error');
+    } finally {
+      setIsRestoringWidgets(false);
+    }
+  }, [token, isRestoringWidgets, canRestoreEmployeeWidgets, apiBase, widgetPrefix, hiddenWidgetKeys, saveWidgetPreference, showNotice]);
+
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
@@ -428,8 +590,9 @@ export default function Employees() {
       fetchDesignations(storedToken);
       fetchBranches(storedToken);
       fetchLeaveTypes(storedToken);
+      fetchWidgetPreferences(storedToken);
     }
-  }, [router]);
+  }, [router, fetchWidgetPreferences]);
 
   const fetchAuthUser = async (authToken?: string) => {
     const tokenToUse = authToken || token;
@@ -455,10 +618,22 @@ export default function Employees() {
         roleName.includes('admin') || roleName.includes('super admin') || roleName.includes('md')
       );
 
+      const isSuperAdminOrAdmin = roleNames.some((roleName) => {
+        const normalizedRole = roleName.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+        return (
+          normalizedRole === 'admin' ||
+          normalizedRole === 'super admin' ||
+          normalizedRole === 'superadmin' ||
+          normalizedRole.includes('admin')
+        );
+      });
+
       setIsAdminUser(isAdmin);
+      setCanRestoreEmployeeWidgets(isSuperAdminOrAdmin);
     } catch (error) {
       console.error('Error fetching authenticated user:', error);
       setIsAdminUser(false);
+      setCanRestoreEmployeeWidgets(false);
     }
   };
 
@@ -1290,8 +1465,25 @@ export default function Employees() {
       </nav>
 
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        {widgetNotice && (
+          <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {widgetNotice}
+          </div>
+        )}
         {/* Hero Section */}
-        <div className="mb-8 flex flex-col md:flex-row md:items-start md:justify-between gap-6 md:gap-8">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}hero`) && (
+        <div className="mb-8 flex flex-col md:flex-row md:items-start md:justify-between gap-6 md:gap-8 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}hero`)}
+              className="absolute -top-2 right-0 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide employees hero widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div>
             <div className="flex items-center space-x-3 mb-4">
               <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center text-2xl shadow-lg">
@@ -1317,7 +1509,19 @@ export default function Employees() {
               </div>
             </div>
           </div>
-          <div className="md:flex-shrink-0">
+          {!hiddenWidgetKeys.includes(`${widgetPrefix}btn_add_employee`) && (
+          <div className="md:flex-shrink-0 relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}btn_add_employee`)}
+                className="absolute -top-2 -right-2 h-7 w-7 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                aria-label="Hide add employee button widget"
+                title="Hide widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
             <button
               onClick={() => {
                 resetForm();
@@ -1331,10 +1535,24 @@ export default function Employees() {
               <span>Add Employee</span>
             </button>
           </div>
+          )}
         </div>
+        )}
 
         {/* Employee List */}
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}employee_list`) && (
         <div className="bg-white/70 backdrop-blur-sm shadow-xl rounded-2xl border border-white/20 overflow-visible relative z-0 min-h-[700px] flex flex-col">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}employee_list`)}
+              className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide employee list widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-6">
             <div className="flex items-center space-x-3">
               <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">
@@ -1418,67 +1636,123 @@ export default function Employees() {
             </div>
           </div>
 
+          {showAnyEmployeeColumn ? (
           <div className="overflow-x-auto overflow-y-visible flex-1">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Employee Code
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Name
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Email
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Department
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Designation
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Branch
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Actions
-                  </th>
+                  {showCodeColumn && (
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Employee Code</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_code`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showNameColumn && (
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Name</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_name`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showEmailColumn && (
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Email</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_email`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showDepartmentColumn && (
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Department</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_department`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showDesignationColumn && (
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Designation</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_designation`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showBranchColumn && (
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Branch</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_branch`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showStatusColumn && (
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Status</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_status`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showActionsColumn && (
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      <div className="flex items-center gap-2">
+                        <span>Actions</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_actions`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {paginatedEmployees.map((employee) => (
                   <tr key={employee.id} className="hover:bg-gray-50 transition-colors duration-200">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
-                      {employee.employee_code}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {employee.first_name} {employee.last_name}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {employee.email}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {employee.department.name}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {employee.designation.name}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {employee.branch.name}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full ${
-                        employee.status === 'active'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}>
-                        {employee.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium relative z-20">
+                    {showCodeColumn && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
+                        {employee.employee_code}
+                      </td>
+                    )}
+                    {showNameColumn && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {employee.first_name} {employee.last_name}
+                      </td>
+                    )}
+                    {showEmailColumn && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {employee.email}
+                      </td>
+                    )}
+                    {showDepartmentColumn && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {employee.department.name}
+                      </td>
+                    )}
+                    {showDesignationColumn && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {employee.designation.name}
+                      </td>
+                    )}
+                    {showBranchColumn && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {employee.branch.name}
+                      </td>
+                    )}
+                    {showStatusColumn && (
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full ${
+                          employee.status === 'active'
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}>
+                          {employee.status}
+                        </span>
+                      </td>
+                    )}
+                    {showActionsColumn && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium relative z-20">
                       <div className="relative" ref={openMenuFor === employee.id ? menuRef : undefined}>
                         <button
                           aria-haspopup="menu"
@@ -1507,6 +1781,28 @@ export default function Employees() {
                               <span className="w-4 h-4">👁️</span>
                               <span>View</span>
                             </button>
+                            {canRestoreEmployeeWidgets && (
+                              <button
+                                role="menuitem"
+                                onClick={() => {
+                                  setOpenMenuFor(null);
+                                  const employeeName = `${employee.first_name || ''} ${employee.last_name || ''}`.trim() || employee.email || 'employee';
+                                  openConfirm(
+                                    'Restore Hidden Widgets',
+                                    `Are you sure you want to restore all hidden widgets for ${employeeName}?`,
+                                    async () => {
+                                      closeConfirm();
+                                      await restoreEmployeeWidgets(employee.id, employeeName);
+                                    }
+                                  );
+                                }}
+                                disabled={isRestoringWidgets}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-left text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <span className="w-4 h-4">↺</span>
+                                <span>{isRestoringWidgets ? 'Restoring...' : 'Restore Hidden Widgets'}</span>
+                              </button>
+                            )}
                             {!employee.wallet && (
                               <button role="menuitem" onClick={() => { createEmployeeWallet(employee); setOpenMenuFor(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-left text-gray-700 hover:bg-gray-50">
                                 <span className="w-4 h-4">👛</span>
@@ -1574,11 +1870,17 @@ export default function Employees() {
                         )}
                       </div>
                     </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          ) : (
+            <div className="text-center py-12 text-gray-500">
+              All employee table columns are hidden.
+            </div>
+          )}
 
           <div className="px-6 py-4 border-t border-gray-200 bg-white/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <p className="text-sm text-gray-600">
@@ -1611,6 +1913,7 @@ export default function Employees() {
             </div>
           </div>
         </div>
+        )}
       </main>
 
       {/* Employee Form Modal */}

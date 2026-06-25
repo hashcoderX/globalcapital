@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { AlertTriangle, ArrowLeft, Building2, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 
 interface Department {
@@ -88,6 +89,7 @@ function sanitizeMessage(raw: string, fallback: string): string {
 export default function Departments() {
   const router = useRouter();
   const apiBase = getApiBaseUrl();
+  const widgetPrefix = 'hrm_departments_widget_';
 
   const [token, setToken] = useState('');
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -104,6 +106,8 @@ export default function Departments() {
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [noticeTitle, setNoticeTitle] = useState('Notice');
   const [noticeMessage, setNoticeMessage] = useState('');
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
+  const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -126,6 +130,82 @@ export default function Departments() {
   const startIndex = (currentPage - 1) * pageSize;
   const endIndex = Math.min(startIndex + pageSize, filteredDepartments.length);
   const paginatedDepartments = filteredDepartments.slice(startIndex, startIndex + pageSize);
+  const showNameColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_name`);
+  const showDescriptionColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_description`);
+  const showCreatedColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_created`);
+  const showActionsColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_actions`);
+  const showAnyDepartmentColumn = showNameColumn || showDescriptionColumn || showCreatedColumn || showActionsColumn;
+
+  const fetchWidgetPreferences = useCallback(
+    async (authToken?: string) => {
+      const tokenToUse = authToken || token;
+      if (!tokenToUse) return;
+
+      try {
+        const response = await axios.get(`${apiBase}/dashboard/widgets`, {
+          headers: {
+            Authorization: `Bearer ${tokenToUse}`,
+            Accept: 'application/json',
+          },
+        });
+
+        const widgets = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+        const hiddenKeys = widgets
+          .filter((item: { widget_key?: string; is_visible?: boolean | number | null }) => !item?.is_visible)
+          .map((item: { widget_key?: string }) => item.widget_key)
+          .filter((key: unknown): key is string => typeof key === 'string' && key.startsWith(widgetPrefix));
+
+        setHiddenWidgetKeys(hiddenKeys);
+        setWidgetNotice(null);
+      } catch {
+        setWidgetNotice('Failed to load widget preferences.');
+      }
+    },
+    [apiBase, token, widgetPrefix]
+  );
+
+  const saveWidgetPreference = useCallback(
+    async (widgetKey: string, isVisible: boolean) => {
+      if (!token) return false;
+
+      const normalizedKey = widgetKey.trim();
+      if (!normalizedKey || normalizedKey.length > 120) {
+        setWidgetNotice('Invalid widget key. Please refresh and try again.');
+        return false;
+      }
+
+      try {
+        await axios.patch(
+          `${apiBase}/dashboard/widgets`,
+          {
+            widget_key: normalizedKey,
+            is_visible: Boolean(isVisible),
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        setWidgetNotice(null);
+        return true;
+      } catch {
+        setWidgetNotice('Failed to save widget preference.');
+        return false;
+      }
+    },
+    [apiBase, token]
+  );
+
+  const hideWidget = useCallback(
+    async (widgetKey: string) => {
+      const ok = await saveWidgetPreference(widgetKey, false);
+      if (!ok) return;
+      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
+    },
+    [saveWidgetPreference]
+  );
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -208,7 +288,8 @@ export default function Departments() {
     setApiError(null);
     checkCompanyProfile(storedToken);
     fetchDepartments(storedToken);
-  }, [router, checkCompanyProfile, fetchDepartments]);
+    fetchWidgetPreferences(storedToken);
+  }, [router, checkCompanyProfile, fetchDepartments, fetchWidgetPreferences]);
 
   const resetForm = () => {
     setName('');
@@ -322,7 +403,25 @@ export default function Departments() {
         <div className="absolute top-40 right-20 w-72 h-72 bg-cyan-200 rounded-full mix-blend-multiply filter blur-xl" />
       </div>
 
+      {widgetNotice && (
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{widgetNotice}</div>
+        </div>
+      )}
+
+      {!hiddenWidgetKeys.includes(`${widgetPrefix}top_nav`) && (
       <nav className="relative z-10 bg-white/85 backdrop-blur-lg shadow-lg border-b border-white/20">
+        <WidgetCloseGate>
+          <button
+            type="button"
+            onClick={() => hideWidget(`${widgetPrefix}top_nav`)}
+            className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-20"
+            aria-label="Hide departments top navigation widget"
+            title="Hide widget"
+          >
+            ×
+          </button>
+        </WidgetCloseGate>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <button
             type="button"
@@ -338,9 +437,22 @@ export default function Departments() {
           </div>
         </div>
       </nav>
+      )}
 
       <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8 space-y-6">
-        <div className="rounded-3xl border border-white/80 bg-white/90 shadow-xl overflow-hidden">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}hero`) && (
+        <div className="rounded-3xl border border-white/80 bg-white/90 shadow-xl overflow-hidden relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}hero`)}
+              className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm z-20"
+              aria-label="Hide departments hero widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="bg-gradient-to-r from-blue-600 via-cyan-600 to-teal-600 px-6 py-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
               <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-blue-100">Human resources</p>
@@ -348,10 +460,24 @@ export default function Departments() {
               <p className="text-sm text-blue-50 mt-1">Organize teams and structure before assigning employees.</p>
             </div>
             <div className="flex items-center gap-3">
-              <div className="rounded-2xl bg-white/15 px-4 py-3 text-center min-w-[100px]">
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}stat_total`) && (
+              <div className="rounded-2xl bg-white/15 px-4 py-3 text-center min-w-[100px] relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => hideWidget(`${widgetPrefix}stat_total`)}
+                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full border border-white/60 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
+                    aria-label="Hide departments total stat widget"
+                    title="Hide widget"
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <p className="text-2xl font-extrabold text-white">{departments.length}</p>
                 <p className="text-[10px] uppercase tracking-wide text-blue-100">Total</p>
               </div>
+              )}
+              {!hiddenWidgetKeys.includes(`${widgetPrefix}btn_add_department`) && (
               <button
                 type="button"
                 onClick={openCreateForm}
@@ -361,9 +487,11 @@ export default function Departments() {
                 <Plus className="h-4 w-4" />
                 Add department
               </button>
+              )}
             </div>
           </div>
         </div>
+        )}
 
         {!canManageDepartments && companyProfileState !== 'loading' && (
           <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -496,46 +624,92 @@ export default function Departments() {
           </div>
         )}
 
-        <div className="bg-white/90 backdrop-blur-lg rounded-2xl shadow-xl border border-white/20 overflow-hidden">
+        {!hiddenWidgetKeys.includes(`${widgetPrefix}department_list`) && (
+        <div className="bg-white/90 backdrop-blur-lg rounded-2xl shadow-xl border border-white/20 overflow-hidden relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => hideWidget(`${widgetPrefix}department_list`)}
+              className="absolute top-3 right-3 z-20 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+              aria-label="Hide department list widget"
+              title="Hide widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-cyan-50 flex items-center justify-between gap-3 flex-wrap">
             <h3 className="text-lg font-semibold text-gray-900">Department list</h3>
-            <div className="relative w-full sm:w-80">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search departments…"
-                className={`${inputClass} pl-10 py-2.5`}
-              />
-            </div>
+            {!hiddenWidgetKeys.includes(`${widgetPrefix}search`) && (
+              <div className="relative w-full sm:w-80">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Search departments…"
+                  className={`${inputClass} pl-10 py-2.5`}
+                />
+              </div>
+            )}
           </div>
 
+          {showAnyDepartmentColumn ? (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Name</th>
-                  <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Description</th>
-                  <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Created</th>
-                  <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">Actions</th>
+                  {showNameColumn && (
+                    <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
+                      <div className="flex items-center gap-2">
+                        <span>Name</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_name`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showDescriptionColumn && (
+                    <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
+                      <div className="flex items-center gap-2">
+                        <span>Description</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_description`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showCreatedColumn && (
+                    <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
+                      <div className="flex items-center gap-2">
+                        <span>Created</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_created`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
+                  {showActionsColumn && (
+                    <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
+                      <div className="flex items-center gap-2">
+                        <span>Actions</span>
+                        <WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}col_actions`)} className="h-5 w-5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300">×</button></WidgetCloseGate>
+                      </div>
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-100">
                 {paginatedDepartments.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="px-6 py-12 text-center text-sm text-gray-500">
+                    <td colSpan={(showNameColumn ? 1 : 0) + (showDescriptionColumn ? 1 : 0) + (showCreatedColumn ? 1 : 0) + (showActionsColumn ? 1 : 0) || 1} className="px-6 py-12 text-center text-sm text-gray-500">
                       {searchTerm ? 'No departments match your search.' : 'No departments yet.'}
                     </td>
                   </tr>
                 ) : (
                   paginatedDepartments.map((department) => (
                     <tr key={department.id} className="hover:bg-blue-50/40 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">{department.name}</td>
-                      <td className="px-6 py-4 text-sm text-gray-800">{department.description || 'No description'}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                        {new Date(department.created_at).toLocaleDateString()}
-                      </td>
+                      {showNameColumn && <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">{department.name}</td>}
+                      {showDescriptionColumn && <td className="px-6 py-4 text-sm text-gray-800">{department.description || 'No description'}</td>}
+                      {showCreatedColumn && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                          {new Date(department.created_at).toLocaleDateString()}
+                        </td>
+                      )}
+                      {showActionsColumn && (
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex flex-wrap items-center gap-2">
                         <button
@@ -556,12 +730,16 @@ export default function Departments() {
                         </button>
                         </div>
                       </td>
+                      )}
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
+          ) : (
+            <div className="py-12 text-center text-sm text-gray-500">All department table columns are hidden.</div>
+          )}
 
           <div className="px-6 py-4 border-t border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <p className="text-sm text-gray-600">
@@ -590,6 +768,7 @@ export default function Departments() {
             </div>
           </div>
         </div>
+        )}
       </main>
     </div>
   );

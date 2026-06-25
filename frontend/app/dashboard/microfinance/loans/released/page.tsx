@@ -4,6 +4,7 @@ import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type MFRoute = { id: number; name: string; code: string };
 type MFCenter = { id: number; mf_route_id: number; name: string; code: string };
@@ -128,6 +129,8 @@ export default function ReleasedLoansPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+  const [widgetNotice, setWidgetNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [loans, setLoans] = useState<LoanRequest[]>([]);
   const [collections, setCollections] = useState<CollectionRow[]>([]);
@@ -233,6 +236,52 @@ export default function ReleasedLoansPage() {
 
   const closeModal = () => {
     setModal({ open: false, title: '', message: '' });
+  };
+  const widgetPrefix = 'mf_released_loans_widget_';
+
+  const fetchWidgetPreferences = async (authToken: string) => {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
+      const nextHidden = new Set<string>();
+      for (const row of rows) {
+        const key = String(row?.widget_key || '').trim();
+        if (!key.startsWith(widgetPrefix)) continue;
+        if (row?.is_visible === false) nextHidden.add(key);
+      }
+      setHiddenWidgetKeys(nextHidden);
+    } catch {
+      setHiddenWidgetKeys(new Set());
+    }
+  };
+
+  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
+    if (!token) return false;
+    try {
+      await axios.patch(
+        `${getApiBaseUrl()}/dashboard/widgets`,
+        { widget_key: widgetKey, is_visible: isVisible },
+        { headers }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const hideWidget = async (widgetKey: string) => {
+    setWidgetNotice('');
+    const previous = new Set(hiddenWidgetKeys);
+    const next = new Set(hiddenWidgetKeys);
+    next.add(widgetKey);
+    setHiddenWidgetKeys(next);
+    const ok = await saveWidgetPreference(widgetKey, false);
+    if (!ok) {
+      setHiddenWidgetKeys(previous);
+      setWidgetNotice('Failed to hide widget. Please try again.');
+    }
   };
 
   const openRemoveConfirmModal = (loan: LoanRequest) => {
@@ -702,6 +751,7 @@ export default function ReleasedLoansPage() {
       return;
     }
     setToken(storedToken);
+    void fetchWidgetPreferences(storedToken);
 
     const storedUser = localStorage.getItem('auth_user');
     if (storedUser) {
@@ -1074,6 +1124,103 @@ export default function ReleasedLoansPage() {
   const safePage = Math.min(currentPage, totalPages);
   const startIndex = (safePage - 1) * pageSize;
   const paginatedLoans = filteredLoans.slice(startIndex, startIndex + pageSize);
+  const showHeaderWidget = !hiddenWidgetKeys.has(`${widgetPrefix}header`);
+  const showFiltersWidget = !hiddenWidgetKeys.has(`${widgetPrefix}filters`);
+  const showTransactionsWidget = !hiddenWidgetKeys.has(`${widgetPrefix}transactions`);
+  const showResultsMetaWidget = !hiddenWidgetKeys.has(`${widgetPrefix}results_meta`);
+  const showPaginationWidget = !hiddenWidgetKeys.has(`${widgetPrefix}pagination`);
+  const transactionCards: Array<{
+    key: string;
+    title: string;
+    value: string;
+    cardClass: string;
+    titleClass: string;
+    valueClass: string;
+    note?: string;
+    noteClass?: string;
+  }> = [
+    {
+      key: 'txn_card_transactions',
+      title: 'Transactions',
+      value: String(transactionSummary.transactionCount),
+      cardClass: 'rounded-xl border border-slate-200/80 bg-gradient-to-br from-white to-slate-50 p-3 shadow-sm',
+      titleClass: 'text-[0.68rem] font-bold uppercase tracking-wide text-slate-500',
+      valueClass: 'mt-1 text-lg font-extrabold text-slate-900',
+    },
+    {
+      key: 'txn_card_total_collected',
+      title: 'Total Collected',
+      value: formatMoney(transactionSummary.totalCollected),
+      cardClass: 'rounded-xl border border-emerald-200/80 bg-gradient-to-br from-white to-emerald-50/60 p-3 shadow-sm',
+      titleClass: 'text-[0.68rem] font-bold uppercase tracking-wide text-emerald-700',
+      valueClass: 'mt-1 text-sm sm:text-base font-extrabold text-emerald-800',
+    },
+    {
+      key: 'txn_card_capital',
+      title: 'Capital',
+      value: formatMoney(transactionSummary.totalCapital),
+      cardClass: 'rounded-xl border border-blue-200/80 bg-gradient-to-br from-white to-blue-50/60 p-3 shadow-sm',
+      titleClass: 'text-[0.68rem] font-bold uppercase tracking-wide text-blue-700',
+      valueClass: 'mt-1 text-sm sm:text-base font-extrabold text-blue-800',
+    },
+    {
+      key: 'txn_card_profit',
+      title: 'Profit (Interest)',
+      value: formatMoney(transactionSummary.totalProfit),
+      cardClass: 'rounded-xl border border-violet-200/80 bg-gradient-to-br from-white to-violet-50/60 p-3 shadow-sm',
+      titleClass: 'text-[0.68rem] font-bold uppercase tracking-wide text-violet-700',
+      valueClass: 'mt-1 text-sm sm:text-base font-extrabold text-violet-800',
+    },
+    {
+      key: 'txn_card_penalty',
+      title: 'Penalty',
+      value: formatMoney(transactionSummary.totalPenalty),
+      cardClass: 'rounded-xl border border-amber-200/80 bg-gradient-to-br from-white to-amber-50/60 p-3 shadow-sm',
+      titleClass: 'text-[0.68rem] font-bold uppercase tracking-wide text-amber-700',
+      valueClass: 'mt-1 text-sm sm:text-base font-extrabold text-amber-800',
+    },
+    {
+      key: 'txn_card_today_officers',
+      title: 'Today / Officers',
+      value: formatMoney(transactionSummary.todayCollected),
+      note: `${transactionSummary.officerCount} officer(s)`,
+      cardClass: 'rounded-xl border border-cyan-200/80 bg-gradient-to-br from-white to-cyan-50/60 p-3 shadow-sm sm:col-span-2 xl:col-span-1',
+      titleClass: 'text-[0.68rem] font-bold uppercase tracking-wide text-cyan-700',
+      valueClass: 'mt-1 text-sm sm:text-base font-extrabold text-cyan-800',
+      noteClass: 'text-xs text-slate-500 mt-0.5',
+    },
+  ];
+  const visibleTransactionCards = transactionCards.filter(
+    (card) => !hiddenWidgetKeys.has(`${widgetPrefix}${card.key}`)
+  );
+  const transactionColumns = [
+    { key: 'date', label: 'Date', headerClass: 'px-3 py-2.5 font-semibold', cellClass: 'px-3 py-2 whitespace-nowrap text-slate-700' },
+    { key: 'loanCode', label: 'Loan Code', headerClass: 'px-3 py-2.5 font-semibold', cellClass: 'px-3 py-2 font-medium text-slate-900' },
+    { key: 'customerName', label: 'Customer', headerClass: 'px-3 py-2.5 font-semibold', cellClass: 'px-3 py-2 text-slate-700' },
+    { key: 'fieldOfficer', label: 'Officer', headerClass: 'px-3 py-2.5 font-semibold', cellClass: 'px-3 py-2 text-slate-600' },
+    { key: 'paymentType', label: 'Pay Type', headerClass: 'px-3 py-2.5 font-semibold', cellClass: 'px-3 py-2 capitalize text-slate-600' },
+    { key: 'collected', label: 'Collected', headerClass: 'px-3 py-2.5 font-semibold text-right', cellClass: 'px-3 py-2 text-right font-semibold text-emerald-700' },
+    { key: 'capital', label: 'Capital', headerClass: 'px-3 py-2.5 font-semibold text-right', cellClass: 'px-3 py-2 text-right text-blue-700' },
+    { key: 'profit', label: 'Profit', headerClass: 'px-3 py-2.5 font-semibold text-right', cellClass: 'px-3 py-2 text-right font-semibold text-violet-700' },
+    { key: 'penalty', label: 'Penalty', headerClass: 'px-3 py-2.5 font-semibold text-right', cellClass: 'px-3 py-2 text-right text-amber-700' },
+  ] as const;
+  const visibleTransactionColumns = transactionColumns.filter(
+    (column) => !hiddenWidgetKeys.has(`${widgetPrefix}txn_col_${column.key}`)
+  );
+  const visiblePaginatedLoans = paginatedLoans.filter(
+    (loan) => !hiddenWidgetKeys.has(`${widgetPrefix}loan_card_${loan.id}`)
+  );
+  const renderTransactionCellValue = (row: CollectionTransaction, key: (typeof transactionColumns)[number]['key']) => {
+    if (key === 'date') return formatTransactionDate(row.date);
+    if (key === 'loanCode') return row.loanCode;
+    if (key === 'customerName') return row.customerName;
+    if (key === 'fieldOfficer') return row.fieldOfficer;
+    if (key === 'paymentType') return row.paymentType;
+    if (key === 'collected') return formatMoney(row.collected);
+    if (key === 'capital') return formatMoney(row.capital);
+    if (key === 'profit') return formatMoney(row.profit);
+    return formatMoney(row.penalty);
+  };
 
   if (!token || loading) {
     return (
@@ -1086,7 +1233,24 @@ export default function ReleasedLoansPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-100 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-lg border border-white/20 p-6 flex items-center justify-between">
+        {widgetNotice && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {widgetNotice}
+          </div>
+        )}
+
+        {showHeaderWidget && (
+        <div className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-lg border border-white/20 p-6 flex items-center justify-between relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}header`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide header widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div>
             <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Approved Loans</h1>
             <p className="text-sm text-gray-600 mt-1">View all approved loan records and filter quickly.</p>
@@ -1098,8 +1262,20 @@ export default function ReleasedLoansPage() {
             Back
           </button>
         </div>
+        )}
 
-        <div className="bg-white/90 rounded-2xl shadow-lg border border-cyan-100 p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3 text-black">
+        {showFiltersWidget && (
+        <div className="bg-white/90 rounded-2xl shadow-lg border border-cyan-100 p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3 text-black relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}filters`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide filters widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <input
             className="px-3 py-2 rounded-lg border border-cyan-100 text-sm text-black"
             placeholder="Search customer / no"
@@ -1138,8 +1314,20 @@ export default function ReleasedLoansPage() {
           <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm text-black" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
           <input className="px-3 py-2 rounded-lg border border-cyan-100 text-sm text-black" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
         </div>
+        )}
 
-        <div className="bg-white/95 rounded-2xl shadow-lg border border-cyan-100 p-4 sm:p-5 space-y-4">
+        {showTransactionsWidget && (
+        <div className="bg-white/95 rounded-2xl shadow-lg border border-cyan-100 p-4 sm:p-5 space-y-4 relative">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}transactions`)}
+              className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide transactions widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
               <h2 className="text-lg font-bold text-gray-900">Collection Transactions</h2>
@@ -1156,80 +1344,102 @@ export default function ReleasedLoansPage() {
             <p className="text-sm text-rose-600">{collectionsError}</p>
           ) : null}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
-            <div className="rounded-xl border border-slate-200/80 bg-gradient-to-br from-white to-slate-50 p-3 shadow-sm">
-              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-slate-500">Transactions</p>
-              <p className="mt-1 text-lg font-extrabold text-slate-900">{transactionSummary.transactionCount}</p>
+          {visibleTransactionCards.length === 0 ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              All transaction summary cards are hidden. Restore hidden widgets from dashboard.
             </div>
-            <div className="rounded-xl border border-emerald-200/80 bg-gradient-to-br from-white to-emerald-50/60 p-3 shadow-sm">
-              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-emerald-700">Total Collected</p>
-              <p className="mt-1 text-sm sm:text-base font-extrabold text-emerald-800">{formatMoney(transactionSummary.totalCollected)}</p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
+              {visibleTransactionCards.map((card) => (
+                <div key={card.key} className={`${card.cardClass} relative`}>
+                  <WidgetCloseGate>
+                    <button
+                      type="button"
+                      onClick={() => void hideWidget(`${widgetPrefix}${card.key}`)}
+                      className="absolute right-2 top-2 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                      aria-label={`Hide ${card.title} summary widget`}
+                    >
+                      ×
+                    </button>
+                  </WidgetCloseGate>
+                  <p className={card.titleClass}>{card.title}</p>
+                  <p className={card.valueClass}>{card.value}</p>
+                  {card.note ? <p className={card.noteClass}>{card.note}</p> : null}
+                </div>
+              ))}
             </div>
-            <div className="rounded-xl border border-blue-200/80 bg-gradient-to-br from-white to-blue-50/60 p-3 shadow-sm">
-              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-blue-700">Capital</p>
-              <p className="mt-1 text-sm sm:text-base font-extrabold text-blue-800">{formatMoney(transactionSummary.totalCapital)}</p>
-            </div>
-            <div className="rounded-xl border border-violet-200/80 bg-gradient-to-br from-white to-violet-50/60 p-3 shadow-sm">
-              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-violet-700">Profit (Interest)</p>
-              <p className="mt-1 text-sm sm:text-base font-extrabold text-violet-800">{formatMoney(transactionSummary.totalProfit)}</p>
-            </div>
-            <div className="rounded-xl border border-amber-200/80 bg-gradient-to-br from-white to-amber-50/60 p-3 shadow-sm">
-              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-amber-700">Penalty</p>
-              <p className="mt-1 text-sm sm:text-base font-extrabold text-amber-800">{formatMoney(transactionSummary.totalPenalty)}</p>
-            </div>
-            <div className="rounded-xl border border-cyan-200/80 bg-gradient-to-br from-white to-cyan-50/60 p-3 shadow-sm sm:col-span-2 xl:col-span-1">
-              <p className="text-[0.68rem] font-bold uppercase tracking-wide text-cyan-700">Today / Officers</p>
-              <p className="mt-1 text-sm sm:text-base font-extrabold text-cyan-800">{formatMoney(transactionSummary.todayCollected)}</p>
-              <p className="text-xs text-slate-500 mt-0.5">{transactionSummary.officerCount} officer(s)</p>
-            </div>
-          </div>
+          )}
 
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="bg-red-700 text-left text-white">
-                  <th className="px-3 py-2.5 font-semibold">Date</th>
-                  <th className="px-3 py-2.5 font-semibold">Loan Code</th>
-                  <th className="px-3 py-2.5 font-semibold">Customer</th>
-                  <th className="px-3 py-2.5 font-semibold">Officer</th>
-                  <th className="px-3 py-2.5 font-semibold">Pay Type</th>
-                  <th className="px-3 py-2.5 font-semibold text-right">Collected</th>
-                  <th className="px-3 py-2.5 font-semibold text-right">Capital</th>
-                  <th className="px-3 py-2.5 font-semibold text-right">Profit</th>
-                  <th className="px-3 py-2.5 font-semibold text-right">Penalty</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredTransactions.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
-                      No collection transactions found for the current filters.
-                    </td>
+          {visibleTransactionColumns.length === 0 ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              All transaction table columns are hidden. Restore hidden widgets from dashboard.
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-red-700 text-left text-white">
+                    {visibleTransactionColumns.map((column) => (
+                      <th key={column.key} className={`${column.headerClass} relative`}>
+                        {column.label}
+                        <WidgetCloseGate>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void hideWidget(`${widgetPrefix}txn_col_${column.key}`);
+                            }}
+                            className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/70 bg-white/20 text-[10px] font-bold text-white transition hover:bg-white hover:text-rose-700"
+                            aria-label={`Hide ${column.label} column`}
+                          >
+                            ×
+                          </button>
+                        </WidgetCloseGate>
+                      </th>
+                    ))}
                   </tr>
-                ) : (
-                  filteredTransactions.slice(0, 50).map((row) => (
-                    <tr key={row.id} className="border-t border-slate-100 odd:bg-white even:bg-slate-50/60">
-                      <td className="px-3 py-2 whitespace-nowrap text-slate-700">{formatTransactionDate(row.date)}</td>
-                      <td className="px-3 py-2 font-medium text-slate-900">{row.loanCode}</td>
-                      <td className="px-3 py-2 text-slate-700">{row.customerName}</td>
-                      <td className="px-3 py-2 text-slate-600">{row.fieldOfficer}</td>
-                      <td className="px-3 py-2 capitalize text-slate-600">{row.paymentType}</td>
-                      <td className="px-3 py-2 text-right font-semibold text-emerald-700">{formatMoney(row.collected)}</td>
-                      <td className="px-3 py-2 text-right text-blue-700">{formatMoney(row.capital)}</td>
-                      <td className="px-3 py-2 text-right font-semibold text-violet-700">{formatMoney(row.profit)}</td>
-                      <td className="px-3 py-2 text-right text-amber-700">{formatMoney(row.penalty)}</td>
+                </thead>
+                <tbody>
+                  {filteredTransactions.length === 0 ? (
+                    <tr>
+                      <td colSpan={visibleTransactionColumns.length} className="px-3 py-8 text-center text-slate-500">
+                        No collection transactions found for the current filters.
+                      </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                  ) : (
+                    filteredTransactions.slice(0, 50).map((row) => (
+                      <tr key={row.id} className="border-t border-slate-100 odd:bg-white even:bg-slate-50/60">
+                        {visibleTransactionColumns.map((column) => (
+                          <td key={`${row.id}-${column.key}`} className={column.cellClass}>
+                            {renderTransactionCellValue(row, column.key)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
           {filteredTransactions.length > 50 ? (
             <p className="text-xs text-slate-500">Showing latest 50 of {filteredTransactions.length} transactions. Use date filters to narrow results.</p>
           ) : null}
         </div>
+        )}
 
-        <div className="flex items-center justify-between gap-3">
+        {showResultsMetaWidget && (
+        <div className="flex items-center justify-between gap-3 relative rounded-xl p-2">
+          <WidgetCloseGate>
+            <button
+              type="button"
+              onClick={() => void hideWidget(`${widgetPrefix}results_meta`)}
+              className="absolute -right-1 -top-1 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+              aria-label="Hide results meta widget"
+            >
+              ×
+            </button>
+          </WidgetCloseGate>
           <p className="text-sm text-gray-600">
             Showing {filteredLoans.length === 0 ? 0 : startIndex + 1}-{Math.min(startIndex + pageSize, filteredLoans.length)} of {filteredLoans.length}
           </p>
@@ -1247,15 +1457,30 @@ export default function ReleasedLoansPage() {
             </select>
           </div>
         </div>
+        )}
 
         {filteredLoans.length === 0 ? (
           <div className="bg-white rounded-2xl shadow-lg p-8 text-center text-gray-600">
             No approved loans found for selected filters.
           </div>
+        ) : visiblePaginatedLoans.length === 0 ? (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl shadow-lg p-8 text-center text-amber-800">
+            All released loan widgets are hidden for this page. Restore hidden widgets from dashboard to show them.
+          </div>
         ) : (
           <div className="space-y-4">
-            {paginatedLoans.map((loan) => (
-              <div key={loan.id} className="bg-white/90 rounded-2xl shadow-lg border border-cyan-100 p-4 sm:p-5">
+            {visiblePaginatedLoans.map((loan) => (
+              <div key={loan.id} className="bg-white/90 rounded-2xl shadow-lg border border-cyan-100 p-4 sm:p-5 relative">
+                <WidgetCloseGate>
+                  <button
+                    type="button"
+                    onClick={() => void hideWidget(`${widgetPrefix}loan_card_${loan.id}`)}
+                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                    aria-label={`Hide released loan widget ${loan.customer_no}`}
+                  >
+                    ×
+                  </button>
+                </WidgetCloseGate>
                 <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
                   <div className="space-y-1 min-w-0">
                     <h2 className="text-lg font-bold text-gray-900">{loan.customer_name}</h2>
@@ -1364,7 +1589,18 @@ export default function ReleasedLoansPage() {
               </div>
             ))}
 
-            <div className="flex items-center justify-center gap-2 pt-2">
+            {showPaginationWidget && (
+            <div className="flex items-center justify-center gap-2 pt-2 relative">
+              <WidgetCloseGate>
+                <button
+                  type="button"
+                  onClick={() => void hideWidget(`${widgetPrefix}pagination`)}
+                  className="absolute -right-1 -top-1 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Hide pagination widget"
+                >
+                  ×
+                </button>
+              </WidgetCloseGate>
               <button
                 onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
                 disabled={safePage === 1}
@@ -1404,6 +1640,7 @@ export default function ReleasedLoansPage() {
                 Next
               </button>
             </div>
+            )}
           </div>
         )}
 

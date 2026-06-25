@@ -2,6 +2,7 @@
 
 import clsx from 'clsx';
 import { ReactNode } from 'react';
+import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 
 type Variant = 'primary' | 'success' | 'warning' | 'info' | 'danger' | 'default';
 type Size = 'sm' | 'md';
@@ -14,6 +15,8 @@ interface ActionButtonProps {
   size?: Size;
   disabled?: boolean;
   className?: string;
+  onHideWidget?: () => void;
+  hideWidgetAriaLabel?: string;
 }
 
 export default function ActionButton({
@@ -24,6 +27,8 @@ export default function ActionButton({
   size = 'md',
   disabled = false,
   className,
+  onHideWidget,
+  hideWidgetAriaLabel,
 }: ActionButtonProps) {
   const sizeClasses = size === 'sm'
     ? 'px-3 py-1 text-xs'
@@ -38,7 +43,7 @@ export default function ActionButton({
     default: 'bg-gradient-to-r from-gray-500 to-zinc-700',
   }[variant];
 
-  const baseClasses = 'inline-flex items-center gap-2 rounded-lg text-white shadow-sm border border-white/10 transition will-change-transform hover:translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed';
+  const baseClasses = 'relative inline-flex items-center gap-2 rounded-lg text-white shadow-sm border border-white/10 transition will-change-transform hover:translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed';
 
   return (
     <button
@@ -47,6 +52,30 @@ export default function ActionButton({
       disabled={disabled}
       className={clsx(baseClasses, sizeClasses, variantClasses, className)}
     >
+      {onHideWidget ? (
+        <WidgetCloseGate>
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onHideWidget();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                event.stopPropagation();
+                onHideWidget();
+              }
+            }}
+            className="absolute -right-1 -top-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/70 bg-white/85 text-[10px] font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+            aria-label={hideWidgetAriaLabel || `Hide ${label} widget`}
+          >
+            ×
+          </span>
+        </WidgetCloseGate>
+      ) : null}
       {icon ? <span className="h-4 w-4">{icon}</span> : null}
       <span>{label}</span>
     </button>
