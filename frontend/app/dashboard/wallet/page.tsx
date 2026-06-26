@@ -46,6 +46,9 @@ type WalletCashHandoverHistory = {
   handover_date?: string;
   received_by?: string | null;
   note?: string | null;
+  status?: string;
+  approved_at?: string | null;
+  branch_cash_transferred_at?: string | null;
   manager_employee?: {
     first_name?: string;
     last_name?: string;
@@ -118,6 +121,17 @@ export default function WalletPage() {
       month: 'short',
       year: 'numeric',
     });
+  };
+
+  const getHandoverBadge = (row: WalletCashHandoverHistory) => {
+    const status = String(row.status || '').trim().toLowerCase();
+    if (status === 'approved') {
+      return { label: 'Complete', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' };
+    }
+    if (status === 'pending') {
+      return { label: 'Pending', className: 'border-amber-200 bg-amber-50 text-amber-700' };
+    }
+    return { label: 'Draft', className: 'border-slate-200 bg-slate-50 text-slate-600' };
   };
 
   const fetchWalletData = async (authToken: string) => {
@@ -529,27 +543,36 @@ export default function WalletPage() {
                           <th className="px-5 py-3 font-semibold">Date</th>
                           <th className="px-5 py-3 font-semibold">Manager</th>
                           <th className="px-5 py-3 font-semibold">Received By</th>
+                          <th className="px-5 py-3 font-semibold">Status</th>
                           <th className="px-5 py-3 text-right font-semibold">Amount</th>
                           <th className="px-5 py-3 font-semibold">Note</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {walletRecentHandovers.map((row) => (
-                          <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50/70">
-                            <td className="px-5 py-3">{formatDate(row.handover_date)}</td>
-                            <td className="px-5 py-3">
-                              <div className="font-medium text-slate-900">
-                                {row.manager_employee
-                                  ? `${row.manager_employee.first_name || ''} ${row.manager_employee.last_name || ''}`.trim() || '-'
-                                  : '-'}
-                              </div>
-                              <div className="text-xs text-slate-500">{row.manager_employee?.employee_code || ''}</div>
-                            </td>
-                            <td className="px-5 py-3 text-slate-600">{row.received_by || '-'}</td>
-                            <td className="px-5 py-3 text-right font-semibold text-slate-900">{formatLkr(Number(row.amount || 0))}</td>
-                            <td className="px-5 py-3 text-slate-600">{row.note || '-'}</td>
-                          </tr>
-                        ))}
+                        {walletRecentHandovers.map((row) => {
+                          const badge = getHandoverBadge(row);
+                          return (
+                            <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50/70">
+                              <td className="px-5 py-3">{formatDate(row.handover_date)}</td>
+                              <td className="px-5 py-3">
+                                <div className="font-medium text-slate-900">
+                                  {row.manager_employee
+                                    ? `${row.manager_employee.first_name || ''} ${row.manager_employee.last_name || ''}`.trim() || '-'
+                                    : '-'}
+                                </div>
+                                <div className="text-xs text-slate-500">{row.manager_employee?.employee_code || ''}</div>
+                              </td>
+                              <td className="px-5 py-3 text-slate-600">{row.received_by || '-'}</td>
+                              <td className="px-5 py-3">
+                                <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${badge.className}`}>
+                                  {badge.label}
+                                </span>
+                              </td>
+                              <td className="px-5 py-3 text-right font-semibold text-slate-900">{formatLkr(Number(row.amount || 0))}</td>
+                              <td className="px-5 py-3 text-slate-600">{row.note || '-'}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

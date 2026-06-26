@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\Api\Microfinance;
 
 use App\Http\Controllers\Controller;
+use App\Models\Department;
+use App\Models\Designation;
+use App\Models\Employee;
 use App\Models\EmployeeWallet;
 use App\Models\MicrofinanceLoanCollection;
 use App\Models\MicrofinanceLoanRequest;
@@ -46,8 +49,8 @@ class LoanCollectionController extends Controller
             return $existing;
         }
 
-        $employee = $collectorUser->employee;
-        if (!$employee || (int) $employee->id !== $employeeId) {
+        $employee = Employee::query()->find($employeeId);
+        if (!$employee) {
             return null;
         }
 
@@ -73,7 +76,8 @@ class LoanCollectionController extends Controller
             return;
         }
 
-        $employeeId = (int) ($collectorUser->employee_id ?? 0);
+        $collectorEmployee = $this->ensureCollectorEmployee($collectorUser, $loanRequest);
+        $employeeId = (int) ($collectorEmployee?->id ?? 0);
         if ($employeeId <= 0) {
             return;
         }
@@ -86,6 +90,128 @@ class LoanCollectionController extends Controller
         $newBalance = round((float) ($wallet->current_balance ?? 0) + $amountDelta, 2);
         $wallet->current_balance = $newBalance;
         $wallet->save();
+    }
+
+    private function resolveCollectorEmployeeId(User $collectorUser): ?int
+    {
+        $fromUser = (int) ($collectorUser->employee_id ?? 0);
+        if ($fromUser > 0) {
+            return $fromUser;
+        }
+
+        $fromRelation = (int) optional($collectorUser->employee)->id;
+        if ($fromRelation > 0) {
+            $collectorUser->employee_id = $fromRelation;
+            $collectorUser->save();
+            return $fromRelation;
+        }
+
+        $email = strtolower(trim((string) $collectorUser->email));
+        if ($email === '') {
+            return null;
+        }
+
+        $matchedEmployee = Employee::withTrashed()
+            ->whereRaw('LOWER(TRIM(email)) = ?', [$email])
+            ->first();
+
+        if ($matchedEmployee) {
+            if (method_exists($matchedEmployee, 'trashed') && $matchedEmployee->trashed()) {
+                $matchedEmployee->restore();
+            }
+
+            $collectorUser->employee_id = (int) $matchedEmployee->id;
+            $collectorUser->save();
+
+            return (int) $matchedEmployee->id;
+        }
+
+        return null;
+    }
+
+    private function generateUniqueAutoEmployeeCode(): string
+    {
+        $nextNumber = 1;
+        $latestCode = Employee::withTrashed()
+            ->whereNotNull('employee_code')
+            ->where('employee_code', 'like', 'AUTO%')
+            ->orderByDesc('id')
+            ->value('employee_code');
+
+        if (is_string($latestCode) && preg_match('/^AUTO(\d+)$/', $latestCode, $matches)) {
+            $nextNumber = ((int) $matches[1]) + 1;
+        }
+
+        do {
+            $candidate = 'AUTO' . str_pad((string) $nextNumber, 6, '0', STR_PAD_LEFT);
+            $nextNumber++;
+        } while (Employee::withTrashed()->where('employee_code', $candidate)->exists());
+
+        return $candidate;
+    }
+
+    private function ensureCollectorEmployee(User $collectorUser, MicrofinanceLoanRequest $loanRequest): ?Employee
+    {
+        $existingEmployeeId = $this->resolveCollectorEmployeeId($collectorUser);
+        if ($existingEmployeeId && $existingEmployeeId > 0) {
+            return Employee::query()->find($existingEmployeeId);
+        }
+
+        $tenantId = (int) ($loanRequest->tenant_id ?? $loanRequest->branch_id ?? 1);
+        $branchId = (int) ($collectorUser->branch_id ?? $loanRequest->branch_id ?? 1);
+        if ($branchId <= 0) {
+            $branchId = 1;
+        }
+        if ($tenantId <= 0) {
+            $tenantId = $branchId;
+        }
+
+        $department = Department::query()->firstOrCreate(
+            ['tenant_id' => $tenantId, 'name' => 'System Collectors'],
+            ['branch_id' => $branchId, 'description' => 'Auto-generated collectors', 'is_active' => true]
+        );
+
+        $designation = Designation::query()->firstOrCreate(
+            ['tenant_id' => $tenantId, 'name' => 'System Collector'],
+            ['branch_id' => $branchId, 'description' => 'Auto-generated collector profile', 'is_active' => true]
+        );
+
+        $fullName = trim((string) ($collectorUser->name ?? 'Collector User'));
+        $firstName = $fullName !== '' ? explode(' ', $fullName)[0] : 'Collector';
+        $lastName = trim(str_replace($firstName, '', $fullName)) ?: 'User';
+        $email = trim((string) ($collectorUser->email ?? ''));
+        if ($email === '') {
+            $email = 'collector-' . $collectorUser->id . '@local.invalid';
+        }
+
+        $employee = Employee::query()->create([
+            'tenant_id' => $tenantId,
+            'branch_id' => $branchId,
+            'employee_code' => $this->generateUniqueAutoEmployeeCode(),
+            'first_name' => $firstName,
+            'last_name' => $lastName,
+            'email' => $email,
+            'mobile' => '0000000000',
+            'nic_passport' => 'AUTO-NIC-' . $collectorUser->id . '-' . now()->format('YmdHis'),
+            'address' => 'Auto-generated collector profile',
+            'date_of_birth' => '1990-01-01',
+            'gender' => 'other',
+            'department_id' => (int) $department->id,
+            'designation_id' => (int) $designation->id,
+            'join_date' => now()->toDateString(),
+            'basic_salary' => 0,
+            'employee_type' => 'full_time',
+            'status' => 'active',
+        ]);
+
+        $collectorUser->employee_id = (int) $employee->id;
+        $collectorUser->designation_id = (int) $designation->id;
+        if ((int) ($collectorUser->branch_id ?? 0) <= 0) {
+            $collectorUser->branch_id = $branchId;
+        }
+        $collectorUser->save();
+
+        return $employee;
     }
 
     private function isAdminUser(?object $user): bool

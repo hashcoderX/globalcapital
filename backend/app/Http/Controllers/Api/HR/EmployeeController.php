@@ -20,6 +20,15 @@ use Illuminate\Support\Facades\Schema;
 
 class EmployeeController extends Controller
 {
+    private function canOverrideWalletApprovals(?User $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        return $user->isSystemAdmin();
+    }
+
     private function buildBaseWalletNo(int $employeeId): string
     {
         return 'EW' . str_pad((string) $employeeId, 6, '0', STR_PAD_LEFT);
@@ -561,11 +570,16 @@ class EmployeeController extends Controller
             return response()->json(['message' => 'Unauthorized.'], 401);
         }
 
-        $branchIds = Company::query()
-            ->where('manager_user_id', (int) $user->id)
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id)
-            ->all();
+        $branchIds = $this->canOverrideWalletApprovals($user)
+            ? Company::query()
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all()
+            : Company::query()
+                ->where('manager_user_id', (int) $user->id)
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
 
         if (empty($branchIds)) {
             return response()->json([
@@ -671,10 +685,13 @@ class EmployeeController extends Controller
 
                 $branch = Company::query()
                     ->where('id', (int) $row->branch_id)
-                    ->where('manager_user_id', (int) $user->id)
                     ->first();
 
                 if (!$branch) {
+                    throw new HttpResponseException(response()->json(['message' => 'Branch not found for this transaction.'], 404));
+                }
+
+                if (!$this->canOverrideWalletApprovals($user) && (int) ($branch->manager_user_id ?? 0) !== (int) $user->id) {
                     throw new HttpResponseException(response()->json(['message' => 'You are not allowed to approve this transaction.'], 403));
                 }
 
@@ -741,10 +758,13 @@ class EmployeeController extends Controller
 
                 $branch = Company::query()
                     ->where('id', (int) $row->branch_id)
-                    ->where('manager_user_id', (int) $user->id)
                     ->first();
 
                 if (!$branch) {
+                    throw new HttpResponseException(response()->json(['message' => 'Branch not found for this transaction.'], 404));
+                }
+
+                if (!$this->canOverrideWalletApprovals($user) && (int) ($branch->manager_user_id ?? 0) !== (int) $user->id) {
                     throw new HttpResponseException(response()->json(['message' => 'You are not allowed to approve this transaction.'], 403));
                 }
 
@@ -837,10 +857,13 @@ class EmployeeController extends Controller
 
             $branch = Company::query()
                 ->where('id', (int) $row->branch_id)
-                ->where('manager_user_id', (int) $user->id)
                 ->first();
 
             if (!$branch) {
+                throw new HttpResponseException(response()->json(['message' => 'Branch not found for this handover.'], 404));
+            }
+
+            if (!$this->canOverrideWalletApprovals($user) && (int) ($branch->manager_user_id ?? 0) !== (int) $user->id) {
                 throw new HttpResponseException(response()->json(['message' => 'You are not allowed to transfer this handover.'], 403));
             }
 

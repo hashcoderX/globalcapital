@@ -55,6 +55,18 @@ type CollectionRow = {
   collection_date?: string;
 };
 
+type BulkCollectionMember = {
+  loanId: number;
+  loanCode: string;
+  customerNo: string;
+  customerName: string;
+  dueDate: string;
+  installmentAmount: number;
+  outstandingAmount: number;
+  amount: string;
+  selected: boolean;
+};
+
 const normalizeCollectionDate = (row: Record<string, unknown>) => {
   const candidates = [row.collection_date, row.collectionDate, row.created_at, row.createdAt];
 
@@ -168,6 +180,32 @@ export default function CollectionManagementPage() {
     date: new Date().toISOString().split('T')[0],
   });
   const [collectSaving, setCollectSaving] = useState(false);
+  const [bulkCollectSaving, setBulkCollectSaving] = useState(false);
+  const [bulkCollectModal, setBulkCollectModal] = useState<{
+    open: boolean;
+    centerId: number | null;
+    centerName: string;
+    groupId: number | null;
+    groupName: string;
+    groupCode: string;
+    date: string;
+    paymentType: 'cash' | 'check' | 'bank_transfer';
+    paymentReference: string;
+    note: string;
+    members: BulkCollectionMember[];
+  }>({
+    open: false,
+    centerId: null,
+    centerName: '',
+    groupId: null,
+    groupName: '',
+    groupCode: '',
+    date: new Date().toISOString().split('T')[0],
+    paymentType: 'cash',
+    paymentReference: '',
+    note: '',
+    members: [],
+  });
   const [cacheMeta, setCacheMeta] = useState<{ available: boolean; cachedAt: string | null }>({
     available: false,
     cachedAt: null,
@@ -281,24 +319,12 @@ export default function CollectionManagementPage() {
   };
 
   const isFieldOfficer = hasRoleOrDesignation(['field officer']);
-  const isCollectionOfficer = hasRoleOrDesignation(['collection officer']);
-  const isCashier = hasRoleOrDesignation(['cashier']);
   const isAdmin =
     hasRoleOrDesignation(['admin']) || normalizeText(String(authUser?.email || '')) === 'superadmin softcodelk com';
 
-  const canViewOfficeCollection =
-    isAdmin ||
-    hasRoleOrDesignation([
-      'finance manager',
-      'branch manager',
-      'loan officer',
-      'credit officer',
-      'collection supervisor',
-      'admin officer',
-      'cashier',
-    ]);
-
-  const canViewCenterRouteCollections = !isCashier;
+  // Allow all logged-in roles to access collection modes.
+  const canViewOfficeCollection = true;
+  const canViewCenterRouteCollections = true;
 
   const officerNameCandidates = useMemo(() => {
     const fullName = [authUser?.employee?.first_name || '', authUser?.employee?.last_name || '']
@@ -414,6 +440,19 @@ export default function CollectionManagementPage() {
       setLoading(false);
     }
   }, [token, headers, isFieldOfficer, authUser?.branch_id, authUser?.name, scopeKey]);
+
+  const refreshAuthUserSnapshot = useCallback(async () => {
+    if (!token) return;
+    try {
+      const response = await axios.get(`${API_BASE}/user`, { headers });
+      if (response?.data) {
+        setAuthUser(response.data as AuthUser);
+        localStorage.setItem('auth_user', JSON.stringify(response.data));
+      }
+    } catch {
+      // Ignore snapshot refresh failures; collection should still succeed.
+    }
+  }, [token, headers]);
 
   const { isOnline, pendingCount, syncing, lastSyncMessage, syncNow, refreshPendingCount } = useMfOffline(
     token,
@@ -1255,6 +1294,365 @@ export default function CollectionManagementPage() {
     });
   };
 
+  const closeBulkCollectModal = () => {
+    setBulkCollectModal({
+      open: false,
+      centerId: null,
+      centerName: '',
+      groupId: null,
+      groupName: '',
+      groupCode: '',
+      date: new Date().toISOString().split('T')[0],
+      paymentType: 'cash',
+      paymentReference: '',
+      note: '',
+      members: [],
+    });
+  };
+
+  const openBulkCollectModal = (groupRow: { groupId: number; groupName: string; groupCode: string }) => {
+    if (!selectedCenterId) {
+      setNoticeModal({ open: true, title: 'Missing Center', message: 'Please select a center before bulk collection.' });
+      return;
+    }
+
+    const members = filteredScopedLoans
+      .filter(
+        (loan) =>
+          loan.loan_scope === 'center_loan' &&
+          Number(loan.center?.id || 0) === selectedCenterId &&
+          Number(loan.group?.id || 0) === Number(groupRow.groupId || 0)
+      )
+      .sort((a, b) => String(a.customer_name || '').localeCompare(String(b.customer_name || '')))
+      .map((loan) => {
+        const installment = Number(loan.installment_amount || 0);
+        const outstanding = getOutstandingBalance(loan);
+        const suggestedAmount = Math.min(installment, outstanding);
+        return {
+          loanId: loan.id,
+          loanCode: getFinderLoanCode(loan),
+          customerNo: getFinderCustomerNo(loan),
+          customerName: loan.customer_name,
+          dueDate: loan.due_date || '',
+          installmentAmount: installment,
+          outstandingAmount: outstanding,
+          amount: suggestedAmount > 0 ? suggestedAmount.toFixed(2) : '',
+          selected: suggestedAmount > 0,
+        };
+      });
+
+    setBulkCollectModal({
+      open: true,
+      centerId: selectedCenterId,
+      centerName: selectedCenter?.centerName || '',
+      groupId: groupRow.groupId,
+      groupName: groupRow.groupName,
+      groupCode: groupRow.groupCode,
+      date: new Date().toISOString().split('T')[0],
+      paymentType: 'cash',
+      paymentReference: '',
+      note: '',
+      members,
+    });
+  };
+
+  const printBulkMemberReceipts = useCallback(
+    (receipts: CollectionReceipt[]) => {
+      if (!receipts.length) return;
+      if (typeof window === 'undefined') return;
+      const printWindow = window.open('', '_blank', 'width=1000,height=760');
+      if (!printWindow) return;
+
+      const escapeHtml = (value: string) =>
+        String(value || '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#039;');
+
+      const formatAmount = (value: unknown) =>
+        Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const formatDate = (value?: string | null) => {
+        const raw = String(value || '').trim();
+        if (!raw) return '-';
+        const parsed = new Date(raw);
+        if (Number.isNaN(parsed.getTime())) return raw;
+        return parsed.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+      };
+      const line = (label: string, value: string, bold = false) => `
+        <div class="row ${bold ? 'bold' : ''}">
+          <span>${escapeHtml(label)}</span>
+          <span>${escapeHtml(value)}</span>
+        </div>
+      `;
+
+      const slipsHtml = receipts
+        .map((receipt) => {
+          const logoHtml = receiptCompany.logoUrl
+            ? `<img src="${escapeHtml(receiptCompany.logoUrl)}" alt="Company logo" class="logo" />`
+            : '';
+          return `
+            <section class="receipt">
+              <div class="center">
+                ${logoHtml}
+                <p class="title">${escapeHtml(receiptCompany.name || 'BMS Collection Center')}</p>
+                ${receiptCompany.address ? `<p class="small">${escapeHtml(receiptCompany.address)}</p>` : ''}
+                ${receiptCompany.contactNo ? `<p class="small">Contact: ${escapeHtml(receiptCompany.contactNo)}</p>` : ''}
+                <p class="small bold">OFFICIAL COLLECTION RECEIPT</p>
+                <p class="small">${escapeHtml(receipt.product_label || 'Micro Credit')}</p>
+              </div>
+              <hr class="divider" />
+              ${line('Bill No', receipt.bill_no)}
+              ${line('Date', formatDate(receipt.payment_date))}
+              ${line('Reference', receipt.reference)}
+              ${line('Customer', receipt.customer_name || '-', true)}
+              ${line('Customer No', receipt.customer_no || '-')}
+              ${line('Product', receipt.loan_product || '-')}
+              <hr class="divider" />
+              <div class="paid-box">
+                <p class="small">AMOUNT PAID TODAY</p>
+                <p class="paid">LKR ${formatAmount(receipt.paid_amount)}</p>
+              </div>
+              ${line('Principal paid', formatAmount(receipt.principal_paid))}
+              ${line('Interest paid', formatAmount(receipt.interest_paid))}
+              ${line('Penalty paid', formatAmount(receipt.penalty_paid))}
+              ${line('Arrears (before)', formatAmount(receipt.arrears_before))}
+              ${line('Arrears (after)', formatAmount(receipt.arrears_after))}
+              ${line('Total paid to date', formatAmount(receipt.total_paid_cumulative), true)}
+              ${line('Outstanding balance', formatAmount(receipt.outstanding), true)}
+              ${line('Installment', formatAmount(receipt.installment_amount))}
+              ${line('Next due date', formatDate(receipt.next_due_date))}
+              <hr class="divider" />
+              ${line('Pay type', String(receipt.payment_type || '').replaceAll('_', ' ').toUpperCase())}
+              ${receipt.payment_reference ? line('Reference no', receipt.payment_reference) : ''}
+              ${receipt.note ? line('Note', receipt.note) : ''}
+              <p class="thanks">Thank you — keep this receipt<br/>${
+                receipt.printed_at ? new Date(receipt.printed_at).toLocaleString() : new Date().toLocaleString()
+              }</p>
+            </section>
+          `;
+        })
+        .join('');
+
+      const html = `
+        <!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <title>Bulk Collection Receipts</title>
+            <style>
+              * { box-sizing: border-box; margin: 0; padding: 0; }
+              body { font-family: "Courier New", monospace; background: #fff; color: #000; }
+              .receipt {
+                width: 72mm;
+                max-width: 72mm;
+                margin: 0 auto 12px auto;
+                border: 1px dashed #94a3b8;
+                padding: 6px;
+                page-break-after: always;
+              }
+              .receipt:last-child { page-break-after: auto; }
+              .center { text-align: center; }
+              .title { font-size: 12px; font-weight: 700; text-transform: uppercase; }
+              .small { font-size: 10px; margin-top: 2px; }
+              .bold { font-weight: 700; }
+              .logo { height: 54px; width: 54px; object-fit: contain; margin: 0 auto 2px auto; }
+              .divider { border: none; border-top: 1px dashed #000; margin: 6px 0; }
+              .row { display: flex; justify-content: space-between; gap: 8px; margin: 2px 0; font-size: 11px; }
+              .row span:last-child { text-align: right; max-width: 58%; word-break: break-word; }
+              .paid-box { border: 1px solid #000; padding: 6px; margin: 6px 0; text-align: center; }
+              .paid { font-size: 14px; font-weight: 700; margin-top: 2px; }
+              .thanks { text-align: center; font-size: 9px; margin-top: 10px; color: #334155; }
+              @media print {
+                @page { size: 80mm auto; margin: 3mm; }
+                body { margin: 0; padding: 0; }
+                .receipt { border: none; margin: 0 auto; padding: 0; }
+              }
+            </style>
+          </head>
+          <body>
+            ${slipsHtml}
+            <script>window.onload = function(){ window.focus(); window.print(); }</script>
+          </body>
+        </html>
+      `;
+
+      printWindow.document.open();
+      printWindow.document.write(html);
+      printWindow.document.close();
+    },
+    [receiptCompany]
+  );
+
+  const submitBulkCollection = async () => {
+    if (!bulkCollectModal.groupId || !bulkCollectModal.centerId) {
+      setNoticeModal({ open: true, title: 'Missing Group', message: 'Group details are missing for bulk collection.' });
+      return;
+    }
+
+    const selectedRows = bulkCollectModal.members
+      .filter((member) => member.selected)
+      .map((member) => ({
+        ...member,
+        amountNumber: Number(member.amount || 0),
+      }))
+      .filter((member) => Number.isFinite(member.amountNumber) && member.amountNumber > 0);
+
+    if (!selectedRows.length) {
+      setNoticeModal({ open: true, title: 'Validation', message: 'Select at least one member with a valid amount.' });
+      return;
+    }
+
+    if (bulkCollectModal.paymentType !== 'cash' && !bulkCollectModal.paymentReference.trim()) {
+      setNoticeModal({
+        open: true,
+        title: 'Validation',
+        message: 'Reference is required for check and bank transfer payments.',
+      });
+      return;
+    }
+
+    const browserOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    if (browserOffline) {
+      setNoticeModal({
+        open: true,
+        title: 'Offline Not Supported',
+        message: 'Bulk collection requires an internet connection right now. Please reconnect and try again.',
+      });
+      return;
+    }
+
+    setBulkCollectSaving(true);
+    try {
+      const successRows: Array<{ loanCode: string; customerNo: string; customerName: string; amount: number; dueDate: string }> = [];
+      const successReceipts: CollectionReceipt[] = [];
+      let nextCollections = [...collections];
+      let nextLoans = [...loans];
+      let failedCount = 0;
+
+      for (const member of selectedRows) {
+        try {
+          const response = await axios.post(
+            `${API_BASE}/microfinance/collections`,
+            {
+              loan_request_id: member.loanId,
+              collection_date: bulkCollectModal.date,
+              collected_amount: member.amountNumber,
+              payment_type: bulkCollectModal.paymentType,
+              payment_reference: bulkCollectModal.paymentReference || undefined,
+              note: bulkCollectModal.note || undefined,
+            },
+            { headers }
+          );
+
+          const savedCollection = response?.data?.data;
+          if (savedCollection?.mf_loan_request_id) {
+            const normalizedCollection = normalizeCollectionRow(savedCollection as Record<string, unknown>);
+            nextCollections = [...nextCollections, normalizedCollection];
+            nextLoans = nextLoans.map((loan) =>
+              loan.id === normalizedCollection.mf_loan_request_id
+                ? { ...loan, last_pay_date: normalizedCollection.collection_date || loan.last_pay_date }
+                : loan
+            );
+          }
+
+          const loanDates = response?.data?.loan_dates;
+          const breakdown = response?.data?.breakdown || {};
+          if (loanDates?.due_date || loanDates?.next_payment_date) {
+            nextLoans = nextLoans.map((loan) => {
+              if (loan.id !== member.loanId) return loan;
+              return {
+                ...loan,
+                due_date: loanDates.due_date || loan.due_date,
+                next_payment_date: loanDates.next_payment_date || loan.next_payment_date,
+                arrears_balance:
+                  typeof breakdown.arrears_outstanding_after !== 'undefined'
+                    ? Number(breakdown.arrears_outstanding_after || 0) - Number(breakdown.extra_payment_after || 0)
+                    : loan.arrears_balance,
+              };
+            });
+          }
+
+          const serverReceipt = response?.data?.receipt as CollectionReceipt | undefined;
+          const activeLoan = nextLoans.find((loan) => loan.id === member.loanId) || loans.find((loan) => loan.id === member.loanId);
+          const totalPaidCumulative = nextCollections
+            .filter((row) => Number(row.mf_loan_request_id || 0) === member.loanId)
+            .reduce((sum, row) => sum + Number(row.collected_amount || 0), 0);
+          const fallbackReceipt: CollectionReceipt = {
+            bill_no: `BILL-MIC-${member.loanId}-${Date.now()}`,
+            product_type: 'microfinance',
+            product_label: 'Micro Credit',
+            reference: member.loanCode,
+            source_id: member.loanId,
+            customer_name: member.customerName,
+            customer_no: member.customerNo || null,
+            loan_product: 'Micro Loan',
+            payment_date: bulkCollectModal.date,
+            payment_type: bulkCollectModal.paymentType,
+            payment_reference: bulkCollectModal.paymentReference || null,
+            paid_amount: member.amountNumber,
+            principal_paid: Number(breakdown.capital_amount ?? 0),
+            interest_paid: Number(breakdown.interest_amount ?? 0),
+            penalty_paid: Number(breakdown.penalty_amount ?? 0),
+            arrears_before: Number(breakdown.arrears_outstanding_before ?? 0),
+            arrears_after: Math.max(
+              Number(breakdown.arrears_outstanding_after ?? 0) - Number(breakdown.extra_payment_after ?? 0),
+              0
+            ),
+            outstanding: Math.max(Number(activeLoan?.refundable_amount || 0) - totalPaidCumulative, 0),
+            total_paid_cumulative: totalPaidCumulative,
+            installment_amount: Number(activeLoan?.installment_amount || member.installmentAmount || 0),
+            next_due_date: loanDates?.due_date || activeLoan?.due_date || member.dueDate || null,
+            note: bulkCollectModal.note || null,
+            collection_id: Number(savedCollection?.id || 0) || null,
+            printed_at: new Date().toISOString(),
+          };
+          successReceipts.push(serverReceipt || fallbackReceipt);
+
+          successRows.push({
+            loanCode: member.loanCode,
+            customerNo: member.customerNo,
+            customerName: member.customerName,
+            amount: member.amountNumber,
+            dueDate: member.dueDate,
+          });
+        } catch {
+          failedCount += 1;
+        }
+      }
+
+      if (!successRows.length) {
+        setNoticeModal({
+          open: true,
+          title: 'Collection Error',
+          message: 'No member collection could be saved. Please try again.',
+        });
+        return;
+      }
+
+      setCollections(nextCollections);
+      setLoans(nextLoans);
+      await cacheMfCollectionData(scopeKey, nextLoans, nextCollections);
+      setCacheMeta((prev) => ({ ...prev, available: true, cachedAt: new Date().toISOString() }));
+      await refreshAuthUserSnapshot();
+      closeBulkCollectModal();
+
+      printBulkMemberReceipts(successReceipts);
+
+      setNoticeModal({
+        open: true,
+        title: 'Bulk Collection Completed',
+        message:
+          failedCount > 0
+            ? `${successRows.length} member collections saved. ${failedCount} failed. Member receipts opened for print.`
+            : `${successRows.length} member collections saved successfully. Member receipts opened for print.`,
+      });
+    } finally {
+      setBulkCollectSaving(false);
+    }
+  };
+
   const penaltyPreview = useMemo(() => {
     if (!collectModal.open) {
       return { lateDays: 0, penaltyAmount: 0 };
@@ -1479,6 +1877,7 @@ export default function CollectionManagementPage() {
 
       await cacheMfCollectionData(scopeKey, nextLoans, nextCollections);
       setCacheMeta((prev) => ({ ...prev, available: true, cachedAt: new Date().toISOString() }));
+      await refreshAuthUserSnapshot();
 
       const serverReceipt = response?.data?.receipt as CollectionReceipt | undefined;
       const receipt =
@@ -1580,20 +1979,19 @@ export default function CollectionManagementPage() {
             bg: 'from-indigo-50 to-sky-50',
           },
         ]
-      : [
-          ...(canViewOfficeCollection && !isCollectionOfficer
-            ? [
-                {
-                  id: 'office' as const,
-                  widgetKey: 'mf_collections_widget_mode_office',
-                  title: 'Office Collection',
-                  subtitle: 'Collect direct/office installments',
-                  color: 'from-amber-500 to-orange-500',
-                  bg: 'from-amber-50 to-orange-50',
-                },
-              ]
-            : []),
-        ]),
+      : []),
+    ...(canViewOfficeCollection
+      ? [
+          {
+            id: 'office' as const,
+            widgetKey: 'mf_collections_widget_mode_office',
+            title: 'Office Collection',
+            subtitle: 'Collect direct/office installments',
+            color: 'from-amber-500 to-orange-500',
+            bg: 'from-amber-50 to-orange-50',
+          },
+        ]
+      : []),
   ];
 
   const visibleCards = cards.filter((card) => !hiddenWidgetKeys.has(card.widgetKey));
@@ -1639,7 +2037,7 @@ export default function CollectionManagementPage() {
   );
 
   useEffect(() => {
-    const isOfficeModeBlocked = activeMode === 'office' && (!canViewOfficeCollection || isCollectionOfficer);
+    const isOfficeModeBlocked = activeMode === 'office' && !canViewOfficeCollection;
     const isCenterRouteModeBlocked =
       (activeMode === 'center' || activeMode === 'route') && !canViewCenterRouteCollections;
 
@@ -1647,7 +2045,7 @@ export default function CollectionManagementPage() {
       const fallbackMode = visibleCards[0]?.id || cards[0]?.id || 'today';
       setActiveMode(fallbackMode);
     }
-  }, [activeMode, canViewOfficeCollection, canViewCenterRouteCollections, isCollectionOfficer, cards, visibleCards]);
+  }, [activeMode, canViewOfficeCollection, canViewCenterRouteCollections, cards, visibleCards]);
 
   if (!token || loading || loadingWidgets) {
     return (
@@ -2116,6 +2514,8 @@ export default function CollectionManagementPage() {
                           {isColumnVisible('center_loan_count') && renderColumnHeader('center_loan_count', 'Loan Count')}
                           {isColumnVisible('center_total_installment') && renderColumnHeader('center_total_installment', 'Total Installment')}
                           {isColumnVisible('center_next_due_date') && renderColumnHeader('center_next_due_date', 'Next Due Date')}
+                          {isColumnVisible('center_group_bulk_collection_action') &&
+                            renderColumnHeader('center_group_bulk_collection_action', 'Action')}
                         </tr>
                       ) : (
                         <tr>
@@ -2197,6 +2597,20 @@ export default function CollectionManagementPage() {
                               {isColumnVisible('center_loan_count') && <td className="px-3 py-2">{row.loanCount}</td>}
                               {isColumnVisible('center_total_installment') && <td className="px-3 py-2">{row.totalInstallment.toFixed(2)}</td>}
                               {isColumnVisible('center_next_due_date') && <td className="px-3 py-2">{formatDateDisplay(row.nextDueDate)}</td>}
+                              {isColumnVisible('center_group_bulk_collection_action') && (
+                                <td className="px-3 py-2">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openBulkCollectModal(row);
+                                    }}
+                                    className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-500 text-white text-xs font-semibold hover:from-cyan-600 hover:to-blue-600"
+                                  >
+                                    Bulk Collection
+                                  </button>
+                                </td>
+                              )}
                             </tr>
                           ))
                         : centerCollections.map((row) => (
@@ -2383,6 +2797,174 @@ export default function CollectionManagementPage() {
             </div>
           )}
         </div>
+
+        {bulkCollectModal.open && (
+          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-900/55 backdrop-blur-sm px-4 py-4 sm:py-6">
+            <div className="my-auto w-full max-w-5xl max-h-[calc(100vh-2rem)] overflow-hidden rounded-3xl border border-cyan-100 bg-white shadow-[0_30px_90px_-35px_rgba(15,23,42,0.75)]">
+              <div className="relative bg-gradient-to-r from-cyan-600 via-sky-500 to-blue-500 px-5 py-5 text-white">
+                <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-white/20 blur-2xl"></div>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-white/85">Group Collection Desk</p>
+                    <h3 className="text-xl font-extrabold mt-1">Bulk Collection</h3>
+                    <p className="mt-1 text-sm text-white/90 break-words">
+                      {bulkCollectModal.centerName || '-'} | {bulkCollectModal.groupName || '-'} ({bulkCollectModal.groupCode || '-'})
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeBulkCollectModal}
+                    className="px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 border border-white/30 text-white text-sm font-semibold"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-[calc(100vh-14rem)] overflow-y-auto p-4 sm:p-5 space-y-4 text-black bg-gradient-to-b from-cyan-50/35 to-white">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold uppercase text-slate-600">Collection Date</label>
+                    <input
+                      type="date"
+                      className="mt-1 w-full px-3 py-2.5 rounded-xl border border-cyan-100 bg-white"
+                      value={bulkCollectModal.date}
+                      onChange={(e) => setBulkCollectModal((prev) => ({ ...prev, date: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold uppercase text-slate-600">Pay Type</label>
+                    <select
+                      className="mt-1 w-full px-3 py-2.5 rounded-xl border border-cyan-100 bg-white"
+                      value={bulkCollectModal.paymentType}
+                      onChange={(e) =>
+                        setBulkCollectModal((prev) => ({
+                          ...prev,
+                          paymentType: e.target.value as 'cash' | 'check' | 'bank_transfer',
+                        }))
+                      }
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="check">Check</option>
+                      <option value="bank_transfer">Bank Transfer</option>
+                    </select>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-xs font-semibold uppercase text-slate-600">Reference</label>
+                    <input
+                      className="mt-1 w-full px-3 py-2.5 rounded-xl border border-cyan-100 bg-white"
+                      value={bulkCollectModal.paymentReference}
+                      onChange={(e) =>
+                        setBulkCollectModal((prev) => ({
+                          ...prev,
+                          paymentReference: e.target.value,
+                        }))
+                      }
+                      placeholder="Cheque no / TXN ID / Bank reference"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold uppercase text-slate-600">Note</label>
+                  <textarea
+                    className="mt-1 w-full px-3 py-2.5 rounded-xl border border-cyan-100 bg-white"
+                    rows={2}
+                    value={bulkCollectModal.note}
+                    onChange={(e) => setBulkCollectModal((prev) => ({ ...prev, note: e.target.value }))}
+                    placeholder="Optional note for the whole group collection"
+                  />
+                </div>
+
+                <div className="overflow-x-auto rounded-2xl border border-cyan-100">
+                  <table className="min-w-full text-sm text-left text-slate-700 bg-white">
+                    <thead className="bg-gradient-to-r from-slate-100 to-cyan-50 text-slate-800">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold">Select</th>
+                        <th className="px-3 py-2 font-semibold">Loan Code</th>
+                        <th className="px-3 py-2 font-semibold">Customer No</th>
+                        <th className="px-3 py-2 font-semibold">Member Name</th>
+                        <th className="px-3 py-2 font-semibold">Due Date</th>
+                        <th className="px-3 py-2 font-semibold text-right">Installment</th>
+                        <th className="px-3 py-2 font-semibold text-right">Outstanding</th>
+                        <th className="px-3 py-2 font-semibold text-right">Collect Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulkCollectModal.members.map((member) => (
+                        <tr
+                          key={`bulk-member-${member.loanId}`}
+                          className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors"
+                        >
+                          <td className="px-3 py-2">
+                            <input
+                              type="checkbox"
+                              checked={member.selected}
+                              onChange={(e) =>
+                                setBulkCollectModal((prev) => ({
+                                  ...prev,
+                                  members: prev.members.map((row) =>
+                                    row.loanId === member.loanId ? { ...row, selected: e.target.checked } : row
+                                  ),
+                                }))
+                              }
+                            />
+                          </td>
+                          <td className="px-3 py-2 font-semibold text-slate-900">{member.loanCode || '-'}</td>
+                          <td className="px-3 py-2">{member.customerNo || '-'}</td>
+                          <td className="px-3 py-2">{member.customerName}</td>
+                          <td className="px-3 py-2">{formatDateDisplay(member.dueDate)}</td>
+                          <td className="px-3 py-2 text-right">{member.installmentAmount.toFixed(2)}</td>
+                          <td className="px-3 py-2 text-right text-rose-700 font-semibold">{member.outstandingAmount.toFixed(2)}</td>
+                          <td className="px-3 py-2">
+                            <input
+                              className="w-28 ml-auto block px-2 py-1.5 rounded-lg border border-cyan-100 bg-white text-right"
+                              value={member.amount}
+                              onChange={(e) =>
+                                setBulkCollectModal((prev) => ({
+                                  ...prev,
+                                  members: prev.members.map((row) =>
+                                    row.loanId === member.loanId ? { ...row, amount: e.target.value } : row
+                                  ),
+                                }))
+                              }
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="border-t border-cyan-100 bg-white px-4 sm:px-5 py-4 flex flex-col-reverse sm:flex-row sm:justify-between gap-2">
+                <p className="text-xs text-slate-500">
+                  Selected Members:{' '}
+                  <span className="font-semibold text-slate-700">
+                    {bulkCollectModal.members.filter((member) => member.selected).length}
+                  </span>
+                </p>
+                <div className="flex flex-col-reverse sm:flex-row gap-2">
+                  <button
+                    type="button"
+                    onClick={closeBulkCollectModal}
+                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold hover:bg-slate-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitBulkCollection}
+                    disabled={bulkCollectSaving}
+                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-500 text-white text-sm font-semibold disabled:opacity-60"
+                  >
+                    {bulkCollectSaving ? 'Saving...' : 'Complete Collection'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {collectModal.open && (
           <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-900/55 backdrop-blur-sm px-4 py-4 sm:py-6">
