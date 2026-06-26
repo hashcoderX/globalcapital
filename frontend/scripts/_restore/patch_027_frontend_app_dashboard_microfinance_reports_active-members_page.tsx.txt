@@ -1,0 +1,64 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/reports/active-members/page.tsx
+@@
+   const summary = useMemo(() => {
+@@
+   }, [filteredRows]);
++
++  const summaryCards = [
++    {
++      key: 'mf_active_members_widget_summary_member_count',
++      label: 'Active Members',
++      value: String(summary.memberCount),
++      valueClass: 'text-slate-900',
++    },
++    {
++      key: 'mf_active_members_widget_summary_loan_amount',
++      label: 'Loan Amount',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.loanAmount),
++      valueClass: 'text-slate-900',
++    },
++    {
++      key: 'mf_active_members_widget_summary_refundable',
++      label: 'Refundable',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.refundable),
++      valueClass: 'text-slate-900',
++    },
++    {
++      key: 'mf_active_members_widget_summary_collected',
++      label: 'Collected',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected),
++      valueClass: 'text-emerald-700',
++    },
++    {
++      key: 'mf_active_members_widget_summary_pending',
++      label: 'Pending',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending),
++      valueClass: 'text-rose-700',
++    },
++  ];
++
++  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
++  const showActionToolbar = !hiddenWidgetKeys.has('mf_active_members_widget_action_toolbar');
++
++  const tableColumns = [
++    { key: 'loanId', label: 'Loan ID' },
++    { key: 'customerNo', label: 'Customer No' },
++    { key: 'customer', label: 'Customer' },
++    { key: 'nic', label: 'NIC' },
++    { key: 'contact', label: 'Contact' },
++    { key: 'fieldOfficer', label: 'Field Officer' },
++    { key: 'status', label: 'Status' },
++    { key: 'loanAmount', label: 'Loan Amount' },
++    { key: 'refundable', label: 'Refundable' },
++    { key: 'collected', label: 'Collected' },
++    { key: 'pending', label: 'Pending' },
++    { key: 'dueDate', label: 'Due Date' },
++  ];
++  const visibleTableColumns = tableColumns.filter(
++    (column) => !hiddenWidgetKeys.has(`mf_active_members_widget_col_${column.key}`)
++  );
+@@
+-  if (!token || loading) {
++  if (!token || loading || loadingWidgets) {
+*** End Patch

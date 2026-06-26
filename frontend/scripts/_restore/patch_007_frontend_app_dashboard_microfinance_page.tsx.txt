@@ -1,0 +1,51 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/page.tsx
+@@
+   useEffect(() => {
+@@
+     loadDashboardStats();
+   }, [token, isScopedUser, authUser]);
++
++  const quickStatsCards = [
++    {
++      key: 'mf_widget_quick_active_loans',
++      label: 'Active Loans',
++      value: statsLoading ? '...' : stats.activeLoans.toLocaleString(),
++      icon: '💰',
++      color: 'from-green-500 to-emerald-500',
++    },
++    {
++      key: 'mf_widget_quick_total_collections',
++      label: 'Total Collections',
++      value: statsLoading
++        ? '...'
++        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
++            stats.totalCollections
++          ),
++      icon: '📊',
++      color: 'from-blue-500 to-cyan-500',
++    },
++    {
++      key: 'mf_widget_quick_pending_payments',
++      label: 'Pending Payments',
++      value: statsLoading ? '...' : stats.pendingPayments.toLocaleString(),
++      icon: '⏳',
++      color: 'from-yellow-500 to-orange-500',
++    },
++    {
++      key: 'mf_widget_quick_default_rate',
++      label: 'Default Rate',
++      value: statsLoading ? '...' : `${stats.defaultRate.toFixed(2)}%`,
++      icon: '📉',
++      color: 'from-red-500 to-pink-500',
++    },
++  ];
++
++  const visibleQuickStatsCards = quickStatsCards.filter((stat) => !hiddenWidgetKeys.has(stat.key));
+ 
+-  if (!token) {
++  if (!token || loadingWidgets) {
+     return (
+       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
+         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+*** End Patch

@@ -1,0 +1,13 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/page.tsx
+@@
+-  const visibleReportModules = reportModules.filter((report) =>
+-    (isAdminUser || hasAnyPermissionToken(report.permissionTokens)) && !hiddenWidgetKeys.has(report.key)
+-  );
++  const visibleReportModules = reportModules.filter((report) => !hiddenWidgetKeys.has(report.key));
+@@
+-  const visibleSummaryReportCards = summaryReportCards.filter((item) =>
+-    (isAdminUser || hasAnyPermissionName(item.permissionNames)) && !hiddenWidgetKeys.has(item.key)
+-  );
++  const visibleSummaryReportCards = summaryReportCards.filter((item) => !hiddenWidgetKeys.has(item.key));
+*** End Patch

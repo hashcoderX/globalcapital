@@ -1,0 +1,53 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/payments/page.tsx
+@@
+   const visibleLoanHistoryCards = loanHistoryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
++  const isWidgetVisible = (key: string) => !hiddenWidgetKeys.has(key);
++
++  const mainTableColumns = [
++    { key: 'date', label: 'Date & Time' },
++    { key: 'loanCode', label: 'Loan Code' },
++    { key: 'customerNo', label: 'Customer No' },
++    { key: 'customer', label: 'Customer' },
++    { key: 'customerNic', label: 'Customer NIC' },
++    { key: 'fieldOfficer', label: 'Field Officer' },
++    { key: 'type', label: 'Type' },
++    { key: 'reference', label: 'Reference' },
++    { key: 'collected', label: 'Collected' },
++    { key: 'capital', label: 'Capital' },
++    { key: 'interest', label: 'Interest' },
++    { key: 'penalty', label: 'Penalty' },
++    { key: 'note', label: 'Note' },
++    { key: 'record', label: 'Record' },
++    { key: 'deletedBy', label: 'Deleted By' },
++    ...(canDeletePayments ? [{ key: 'action', label: 'Action' }] : []),
++  ];
++
++  const visibleMainTableColumns = mainTableColumns.filter((column) =>
++    isWidgetVisible(`mf_payments_widget_col_${column.key}`)
++  );
++
++  const historyTableColumns = [
++    { key: 'date', label: 'Date & Time' },
++    { key: 'loanCode', label: 'Loan Code' },
++    { key: 'customer', label: 'Customer' },
++    { key: 'fieldOfficer', label: 'Field Officer' },
++    { key: 'type', label: 'Type' },
++    { key: 'reference', label: 'Reference' },
++    { key: 'collected', label: 'Collected' },
++    { key: 'capital', label: 'Capital' },
++    { key: 'interest', label: 'Interest' },
++    { key: 'penalty', label: 'Penalty' },
++    { key: 'balance', label: 'Balance' },
++    { key: 'note', label: 'Note' },
++    { key: 'record', label: 'Record' },
++    { key: 'deletedBy', label: 'Deleted By' },
++    ...(canDeletePayments ? [{ key: 'action', label: 'Action' }] : []),
++  ];
++
++  const visibleHistoryTableColumns = historyTableColumns.filter((column) =>
++    isWidgetVisible(`mf_payments_widget_history_col_${column.key}`)
++  );
+@@
+   const totalPages = Math.max(1, Math.ceil(filteredPayments.length / pageSize));
+*** End Patch

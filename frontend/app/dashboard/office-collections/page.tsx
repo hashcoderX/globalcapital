@@ -58,6 +58,7 @@ type CollectibleAccount = {
   next_payment_date?: string | null;
   balance: number;
   status: string;
+  can_collect?: boolean;
   label: string;
 };
 
@@ -100,6 +101,8 @@ function typeStyles(type: CollectibleAccount["type"]) {
 }
 
 function statusLabel(status: string): string {
+  const normalized = String(status || "").toLowerCase().trim();
+  if (normalized === "closed") return "Complete";
   return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -371,8 +374,11 @@ export default function OfficeCollectionsPage() {
   );
 
   const openCollectModal = (account: CollectibleAccount) => {
+    if (account.can_collect === false) {
+      return;
+    }
     setSelected(account);
-    setPaymentAmount(String(account.installment_amount || account.due_amount || ""));
+    setPaymentAmount(String(account.due_amount || account.installment_amount || ""));
     setPaymentDate(new Date().toISOString().slice(0, 10));
     setPaymentType("cash");
     setPaymentReference("");
@@ -794,6 +800,7 @@ export default function OfficeCollectionsPage() {
                   <tbody className="divide-y divide-slate-100">
                     {filteredAccounts.map((account) => {
                       const styles = typeStyles(account.type);
+                      const canCollect = account.can_collect !== false;
                       return (
                         <tr
                           key={`${account.type}-${account.source_id}`}
@@ -860,8 +867,8 @@ export default function OfficeCollectionsPage() {
                             if (column.key === "status") {
                               return (
                                 <td key={column.key} className="py-3.5 pr-4 whitespace-nowrap">
-                                  <span className="inline-flex rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800">
-                                    {statusLabel(account.status)}
+                                    <span className={`inline-flex rounded-lg px-2 py-0.5 text-xs font-semibold ${canCollect ? "bg-slate-100 text-slate-800" : "bg-emerald-100 text-emerald-800"}`}>
+                                    {canCollect ? statusLabel(account.status) : "Complete"}
                                   </span>
                                 </td>
                               );
@@ -870,11 +877,16 @@ export default function OfficeCollectionsPage() {
                               <td key={column.key} className="py-3.5 pr-4 text-right whitespace-nowrap">
                                 <button
                                   type="button"
+                                    disabled={!canCollect}
                                   onClick={() => openCollectModal(account)}
-                                  className={`inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r ${styles.gradient} px-3 py-2 text-xs font-bold text-white shadow-sm hover:opacity-95`}
+                                    className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold shadow-sm ${
+                                      canCollect
+                                        ? `bg-gradient-to-r ${styles.gradient} text-white hover:opacity-95`
+                                        : "bg-slate-200 text-slate-500 cursor-not-allowed"
+                                    }`}
                                 >
                                   <HandCoins className="h-3.5 w-3.5" />
-                                  Collect
+                                    {canCollect ? "Collect" : "Completed"}
                                 </button>
                               </td>
                             );

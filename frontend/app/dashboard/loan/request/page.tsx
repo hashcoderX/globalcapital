@@ -20,6 +20,9 @@ type CustomerDetails = {
   nic: string;
   mobile: string;
   address: string;
+  bankName: string;
+  bankBranch: string;
+  bankAccountNo: string;
   businessName: string;
   monthlyIncome: string;
   additionalIncome: string;
@@ -150,6 +153,9 @@ export default function NewLoanRequestPage() {
     nic: "",
     mobile: "",
     address: "",
+    bankName: "",
+    bankBranch: "",
+    bankAccountNo: "",
     businessName: "",
     monthlyIncome: "",
     additionalIncome: "",
@@ -468,6 +474,9 @@ export default function NewLoanRequestPage() {
     customerDetails.nic.trim() &&
     customerDetails.mobile.trim() &&
     customerDetails.address.trim() &&
+    customerDetails.bankName.trim() &&
+    customerDetails.bankBranch.trim() &&
+    customerDetails.bankAccountNo.trim() &&
     customerDetails.monthlyIncome.trim() &&
     customerDetails.incomeSource.trim();
 
@@ -508,6 +517,9 @@ export default function NewLoanRequestPage() {
       if (!customerDetails.nic.trim()) return "Customer NIC / Passport is required.";
       if (!customerDetails.mobile.trim()) return "Customer Mobile Number is required.";
       if (!customerDetails.address.trim()) return "Customer Address is required.";
+      if (!customerDetails.bankName.trim()) return "Bank Name is required.";
+      if (!customerDetails.bankBranch.trim()) return "Bank Branch is required.";
+      if (!customerDetails.bankAccountNo.trim()) return "Bank Account No is required.";
       const monthlyIncome = Number(customerDetails.monthlyIncome);
       if (!Number.isFinite(monthlyIncome) || monthlyIncome <= 0) return "Customer monthly income is required.";
       if (!customerDetails.incomeSource.trim()) return "Primary income source is required.";
@@ -642,7 +654,16 @@ export default function NewLoanRequestPage() {
       });
 
       const requestNo = response.data?.data?.request_no;
-      setSubmitMessage(requestNo ? `Loan request submitted successfully (${requestNo}).` : "Loan request submitted successfully.");
+      const portalCredentials = response.data?.customer_portal_credentials || null;
+      let message = requestNo
+        ? `Loan request submitted successfully (${requestNo}).`
+        : "Loan request submitted successfully.";
+      if (portalCredentials?.is_new_account && portalCredentials?.email && portalCredentials?.password) {
+        message += ` Customer portal account created. Email: ${portalCredentials.email} | Temporary Password: ${portalCredentials.password}`;
+      } else if (portalCredentials?.email) {
+        message += ` Customer portal account linked. Email: ${portalCredentials.email}`;
+      }
+      setSubmitMessage(message);
       setIsSubmitted(true);
       setDocuments([]);
       setStepNotice("");
@@ -992,6 +1013,42 @@ export default function NewLoanRequestPage() {
                           setCustomerDetails((prev) => ({ ...prev, mobile: e.target.value }))
                         }
                         placeholder="e.g. 0771234567"
+                        className={fieldClass}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="customer-bank-name">Bank name *</FieldLabel>
+                      <input
+                        id="customer-bank-name"
+                        value={customerDetails.bankName}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, bankName: e.target.value }))
+                        }
+                        placeholder="e.g. Bank of Ceylon"
+                        className={fieldClass}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="customer-bank-branch">Bank branch *</FieldLabel>
+                      <input
+                        id="customer-bank-branch"
+                        value={customerDetails.bankBranch}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, bankBranch: e.target.value }))
+                        }
+                        placeholder="e.g. Eheliyagoda Branch"
+                        className={fieldClass}
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <FieldLabel htmlFor="customer-bank-account-no">Bank account no *</FieldLabel>
+                      <input
+                        id="customer-bank-account-no"
+                        value={customerDetails.bankAccountNo}
+                        onChange={(e) =>
+                          setCustomerDetails((prev) => ({ ...prev, bankAccountNo: e.target.value }))
+                        }
+                        placeholder="Enter account number"
                         className={fieldClass}
                       />
                     </div>

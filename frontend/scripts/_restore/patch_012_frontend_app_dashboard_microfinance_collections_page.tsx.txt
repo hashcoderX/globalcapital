@@ -1,0 +1,17 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/collections/page.tsx
+@@
+   useEffect(() => {
+     const storedToken = localStorage.getItem('token');
+     if (!storedToken) {
+       router.push('/');
+       return;
+     }
+     setToken(storedToken);
++    void fetchWidgetPreferences(storedToken);
+ 
+     const storedUser = localStorage.getItem('auth_user');
+@@
+-  }, [router]);
++  }, [fetchWidgetPreferences, router]);
+*** End Patch

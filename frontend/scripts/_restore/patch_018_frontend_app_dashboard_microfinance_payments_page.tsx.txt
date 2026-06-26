@@ -1,0 +1,78 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/payments/page.tsx
+@@
+ export default function MicrofinancePaymentsPage() {
+   const router = useRouter();
+   const [token, setToken] = useState('');
+   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+   const [loading, setLoading] = useState(true);
++  const [loadingWidgets, setLoadingWidgets] = useState(true);
++  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
+   const [payments, setPayments] = useState<PaymentRow[]>([]);
+@@
+   const headers = useMemo(
+@@
+     [token]
+   );
++
++  const fetchWidgetPreferences = async (authToken: string) => {
++    setLoadingWidgets(true);
++    try {
++      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
++        headers: {
++          Authorization: `Bearer ${authToken}`,
++          Accept: 'application/json',
++        },
++      });
++      const rows = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
++      const nextHidden = new Set<string>();
++      for (const row of rows) {
++        const key = String(row?.widget_key || '').trim();
++        if (!key.startsWith('mf_payments_widget_')) continue;
++        if (row?.is_visible === false) nextHidden.add(key);
++      }
++      setHiddenWidgetKeys(nextHidden);
++    } catch {
++      setHiddenWidgetKeys(new Set());
++    } finally {
++      setLoadingWidgets(false);
++    }
++  };
++
++  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
++    if (!token) return false;
++    try {
++      await axios.patch(
++        `${API_BASE}/dashboard/widgets`,
++        { widget_key: widgetKey, is_visible: isVisible },
++        { headers }
++      );
++      return true;
++    } catch {
++      return false;
++    }
++  };
++
++  const hideWidget = async (widgetKey: string) => {
++    const previous = new Set(hiddenWidgetKeys);
++    const next = new Set(hiddenWidgetKeys);
++    next.add(widgetKey);
++    setHiddenWidgetKeys(next);
++
++    const ok = await saveWidgetPreference(widgetKey, false);
++    if (!ok) {
++      setHiddenWidgetKeys(previous);
++      setAlertModal({
++        open: true,
++        title: 'Widget Update Failed',
++        message: 'Failed to hide this card. Please try again.',
++      });
++    }
++  };
+@@
+     setToken(storedToken);
++    void fetchWidgetPreferences(storedToken);
+@@
+-  }, [router]);
++  }, [router]);
+*** End Patch

@@ -1,0 +1,108 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/reports/charges/page.tsx
+@@
+         <div className="overflow-x-auto rounded-2xl border border-cyan-100 bg-white">
+           <table className="min-w-full text-sm">
+             <thead className="bg-cyan-50 text-slate-700">
+               <tr>
+-                <th className="px-3 py-2 text-left font-semibold">Date</th>
+-                <th className="px-3 py-2 text-left font-semibold">Status</th>
+-                <th className="px-3 py-2 text-left font-semibold">Loan Code</th>
+-                <th className="px-3 py-2 text-left font-semibold">Customer</th>
+-                <th className="px-3 py-2 text-left font-semibold">Field Officer</th>
+-                <th className="px-3 py-2 text-left font-semibold">Mode</th>
+-                <th className="px-3 py-2 text-right font-semibold">Document</th>
+-                <th className="px-3 py-2 text-right font-semibold">Stamp</th>
+-                <th className="px-3 py-2 text-right font-semibold">Insurance</th>
+-                <th className="px-3 py-2 text-right font-semibold">Total</th>
++                {visibleTableColumns.map((column) => (
++                  <th
++                    key={column.key}
++                    className={`px-3 py-2 font-semibold ${['document', 'stamp', 'insurance', 'total'].includes(column.key) ? 'text-right' : 'text-left'}`}
++                  >
++                    <div className="flex items-center gap-2">
++                      <span>{column.label}</span>
++                      <button
++                        type="button"
++                        onClick={() => void hideWidget(`mf_charges_widget_col_${column.key}`)}
++                        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 transition hover:bg-rose-50 hover:text-rose-700"
++                        aria-label={`Hide ${column.label} column`}
++                      >
++                        ×
++                      </button>
++                    </div>
++                  </th>
++                ))}
+               </tr>
+             </thead>
+             <tbody>
++              {visibleTableColumns.length === 0 && (
++                <tr>
++                  <td className="px-3 py-4 text-center text-amber-700" colSpan={1}>
++                    All table columns are hidden. Restore from dashboard with admin approval.
++                  </td>
++                </tr>
++              )}
+               {filteredRows.map((row) => (
+                 <tr key={row.id} className="border-t border-cyan-50">
+-                  <td className="px-3 py-2 text-slate-700">{formatDateTime(row.date)}</td>
+-                  <td className="px-3 py-2 text-slate-700 uppercase">{row.status || '-'}</td>
+-                  <td className="px-3 py-2 text-slate-800 font-semibold">{row.loanCode}</td>
+-                  <td className="px-3 py-2 text-slate-700">{row.customerNo} - {row.customerName}</td>
+-                  <td className="px-3 py-2 text-slate-700">{row.fieldOfficer}</td>
+-                  <td className="px-3 py-2 text-slate-700 capitalize">{row.chargePaymentMode}</td>
+-                  <td className="px-3 py-2 text-right text-slate-700">{formatMoney(row.documentCharges)}</td>
+-                  <td className="px-3 py-2 text-right text-slate-700">{formatMoney(row.stampCharges)}</td>
+-                  <td className="px-3 py-2 text-right text-slate-700">{formatMoney(row.insuranceCharges)}</td>
+-                  <td className="px-3 py-2 text-right font-semibold text-cyan-700">{formatMoney(row.totalCharges)}</td>
++                  {visibleTableColumns.map((column) => {
++                    if (column.key === 'date') return <td key={column.key} className="px-3 py-2 text-slate-700">{formatDateTime(row.date)}</td>;
++                    if (column.key === 'status') return <td key={column.key} className="px-3 py-2 text-slate-700 uppercase">{row.status || '-'}</td>;
++                    if (column.key === 'loanCode') return <td key={column.key} className="px-3 py-2 text-slate-800 font-semibold">{row.loanCode}</td>;
++                    if (column.key === 'customer') return <td key={column.key} className="px-3 py-2 text-slate-700">{row.customerNo} - {row.customerName}</td>;
++                    if (column.key === 'fieldOfficer') return <td key={column.key} className="px-3 py-2 text-slate-700">{row.fieldOfficer}</td>;
++                    if (column.key === 'mode') return <td key={column.key} className="px-3 py-2 text-slate-700 capitalize">{row.chargePaymentMode}</td>;
++                    if (column.key === 'document') return <td key={column.key} className="px-3 py-2 text-right text-slate-700">{formatMoney(row.documentCharges)}</td>;
++                    if (column.key === 'stamp') return <td key={column.key} className="px-3 py-2 text-right text-slate-700">{formatMoney(row.stampCharges)}</td>;
++                    if (column.key === 'insurance') return <td key={column.key} className="px-3 py-2 text-right text-slate-700">{formatMoney(row.insuranceCharges)}</td>;
++                    if (column.key === 'total') return <td key={column.key} className="px-3 py-2 text-right font-semibold text-cyan-700">{formatMoney(row.totalCharges)}</td>;
++                    return null;
++                  })}
+                 </tr>
+               ))}
+             </tbody>
+           </table>
+         </div>
+@@
+         {!loading && filteredRows.length === 0 && (
+           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+             No charge records found for the selected filters.
+           </div>
+         )}
++
++        {widgetNotice.open && (
++          <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
++            <div
++              className="absolute inset-0 bg-black/35 backdrop-blur-sm"
++              onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
++            />
++            <div className="relative w-full max-w-sm rounded-2xl border border-cyan-100 bg-white p-5 shadow-xl">
++              <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
++              <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
++              <div className="mt-4 flex justify-end">
++                <button
++                  type="button"
++                  onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
++                  className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
++                >
++                  OK
++                </button>
++              </div>
++            </div>
++          </div>
++        )}
+       </div>
+     </div>
+   );
+ }
+*** End Patch

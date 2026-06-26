@@ -41,6 +41,7 @@ use App\Http\Controllers\Api\FinanceController;
 use App\Http\Controllers\Api\FinanceProductTypeController;
 use App\Http\Controllers\Api\LoanRequestController;
 use App\Http\Controllers\Api\OfficeCollectionController;
+use App\Http\Controllers\Api\AiAssistantController;
 use App\Http\Controllers\Reports\BranchCollectionReportController;
 use App\Http\Controllers\Reports\BranchPerformanceReportController;
 use App\Http\Controllers\Reports\BranchRepaymentReportController;
@@ -132,15 +133,23 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
     Route::delete('dashboard/widgets', [UserDashboardWidgetController::class, 'reset']);
     Route::post('dashboard/widgets/authorize-admin', [UserDashboardWidgetController::class, 'authorizeAdminAction']);
     Route::post('dashboard/widgets/restore-employee', [UserDashboardWidgetController::class, 'restoreEmployeeWidgets']);
+    Route::get('dashboard/widgets/employee-hidden', [UserDashboardWidgetController::class, 'employeeHiddenWidgets']);
     Route::get('notifications', [UserNotificationController::class, 'index']);
     Route::get('notifications/preview', [UserNotificationController::class, 'preview']);
     Route::patch('notifications/{notification}/read', [UserNotificationController::class, 'markRead']);
     Route::patch('notifications/{notification}/important', [UserNotificationController::class, 'toggleImportant']);
     Route::patch('notifications/read-all', [UserNotificationController::class, 'markAllRead']);
     Route::delete('notifications/read', [UserNotificationController::class, 'clearRead']);
+    Route::post('ai/assistant/chat', [AiAssistantController::class, 'chat']);
 
     Route::get('system/status', [CompanyController::class, 'getSystemStatus']);
     Route::post('system/status', [CompanyController::class, 'updateSystemStatus']);
+    Route::get('system/sms-gateway', [CompanyController::class, 'getSmsGatewayConfig']);
+    Route::post('system/sms-gateway', [CompanyController::class, 'updateSmsGatewayConfig']);
+    Route::post('system/sms-gateway/test', [CompanyController::class, 'testSmsGateway']);
+    Route::get('system/whatsapp-gateway', [CompanyController::class, 'getWhatsappGatewayConfig']);
+    Route::post('system/whatsapp-gateway', [CompanyController::class, 'updateWhatsappGatewayConfig']);
+    Route::post('system/whatsapp-gateway/test', [CompanyController::class, 'testWhatsappGateway']);
     Route::post('system/reset', [CompanyController::class, 'resetSystem']);
     Route::get('manager-candidates', [CompanyController::class, 'managerCandidates']);
     Route::apiResource('companies', CompanyController::class);
@@ -176,6 +185,7 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
 
         Route::apiResource('departments', DepartmentController::class);
         Route::apiResource('designations', DesignationController::class);
+        Route::get('employees/designation-widget-template', [EmployeeController::class, 'designationWidgetTemplateSummary']);
         Route::apiResource('employees', EmployeeController::class);
         Route::post('employees/{employee}/wallet', [EmployeeController::class, 'createWallet']);
         Route::put('employees/{employee}/wallet', [EmployeeController::class, 'updateWallet']);
@@ -229,6 +239,9 @@ Route::middleware(['auth:sanctum', 'system.online'])->group(function () {
         Route::put('employees/{employee}/allowances-deductions/{allowanceDeduction}', [EmployeeAllowanceDeductionController::class, 'update']);
         Route::delete('employees/{employee}/allowances-deductions/{allowanceDeduction}', [EmployeeAllowanceDeductionController::class, 'destroy']);
 
+        Route::get('attendance/fingerprint-config', [AttendanceController::class, 'fingerprintConfig']);
+        Route::put('attendance/fingerprint-config', [AttendanceController::class, 'updateFingerprintConfig']);
+        Route::post('attendance/fingerprint-sync', [AttendanceController::class, 'syncFingerprintLogs']);
         Route::apiResource('attendance', AttendanceController::class);
         Route::post('attendance/mark', [AttendanceController::class, 'markBasic']);
         Route::post('attendance/mark-out', [AttendanceController::class, 'markOut']);

@@ -1,0 +1,166 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/payments/page.tsx
+@@
+                 <div className="overflow-x-auto rounded-2xl border border-cyan-100 shadow-[0_12px_30px_-20px_rgba(8,47,73,0.5)]">
+                   <table className="min-w-full text-sm text-left text-slate-700 bg-white">
+                     <thead className="sticky top-0 z-10 bg-gradient-to-r from-cyan-50 to-sky-50 text-slate-700">
+                       <tr>
+-                        <th className="px-3 py-2 font-semibold">Date & Time</th>
+-                        <th className="px-3 py-2 font-semibold">Loan Code</th>
+-                        <th className="px-3 py-2 font-semibold">Customer</th>
+-                        <th className="px-3 py-2 font-semibold">Field Officer</th>
+-                        <th className="px-3 py-2 font-semibold">Type</th>
+-                        <th className="px-3 py-2 font-semibold">Reference</th>
+-                        <th className="px-3 py-2 font-semibold">Collected</th>
+-                        <th className="px-3 py-2 font-semibold">Capital</th>
+-                        <th className="px-3 py-2 font-semibold">Interest</th>
+-                        <th className="px-3 py-2 font-semibold">Penalty</th>
+-                        <th className="px-3 py-2 font-semibold">Balance</th>
+-                        <th className="px-3 py-2 font-semibold">Note</th>
+-                        <th className="px-3 py-2 font-semibold">Record</th>
+-                        <th className="px-3 py-2 font-semibold">Deleted By</th>
+-                        {canDeletePayments && <th className="px-3 py-2 font-semibold">Action</th>}
++                        {visibleHistoryTableColumns.map((column) => (
++                          <th key={column.key} className="px-3 py-2 font-semibold">
++                            <div className="flex items-center gap-2">
++                              <span>{column.label}</span>
++                              <button
++                                type="button"
++                                onClick={() => void hideWidget(`mf_payments_widget_history_col_${column.key}`)}
++                                className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 transition hover:bg-rose-50 hover:text-rose-700"
++                                aria-label={`Hide ${column.label} history column`}
++                              >
++                                ×
++                              </button>
++                            </div>
++                          </th>
++                        ))}
+                       </tr>
+                     </thead>
+                     <tbody>
++                      {visibleHistoryTableColumns.length === 0 && (
++                        <tr>
++                          <td className="px-3 py-4 text-center text-amber-700" colSpan={1}>
++                            All history table columns are hidden. Restore from dashboard with admin approval.
++                          </td>
++                        </tr>
++                      )}
+                       {selectedLoanTimeline.map((row) => (
+                         <tr key={row.id} className="border-b border-cyan-100/80 last:border-b-0 odd:bg-white even:bg-cyan-50/25 hover:bg-cyan-50/60 transition-colors">
+-                          <td className="px-3 py-2">{formatDisplayDateTime(row.date, row.created_at)}</td>
+-                          <td className="px-3 py-2 font-semibold text-slate-900">{row.customer_no}</td>
+-                          <td className="px-3 py-2">{row.customer_name}</td>
+-                          <td className="px-3 py-2">{row.field_officer}</td>
+-                          <td className="px-3 py-2">
+-                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${
+-                              row.kind === 'issue'
+-                                ? 'border-violet-200 bg-violet-50 text-violet-800'
+-                                : 'border-cyan-200 bg-cyan-50 text-cyan-800'
+-                            }`}>
+-                              {String(row.payment_type || '-').replace('_', ' ')}
+-                            </span>
+-                          </td>
+-                          <td className="px-3 py-2">{row.payment_reference}</td>
+-                          <td className={`px-3 py-2 font-semibold ${row.kind === 'issue' ? 'text-violet-700' : 'text-emerald-700'}`}>
+-                            {Number(row.collected_amount || 0).toFixed(2)}
+-                          </td>
+-                          <td className="px-3 py-2">{Number(row.capital_amount || 0).toFixed(2)}</td>
+-                          <td className="px-3 py-2">{Number(row.interest_amount || 0).toFixed(2)}</td>
+-                          <td className="px-3 py-2">{Number(row.penalty_amount || 0).toFixed(2)}</td>
+-                          <td className="px-3 py-2 font-semibold text-rose-700">{Number(row.balance || 0).toFixed(2)}</td>
+-                          <td className="px-3 py-2">{row.note}</td>
+-                          <td className="px-3 py-2">
+-                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${row.is_deleted ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+-                              {row.is_deleted ? 'Deleted' : 'Active'}
+-                            </span>
+-                          </td>
+-                          <td className="px-3 py-2 text-xs text-slate-600">
+-                            {row.is_deleted
+-                              ? `${row.deleted_by_name || '-'}${row.deletion_reason ? ` (${row.deletion_reason})` : ''}`
+-                              : '-'}
+-                          </td>
+-                          {canDeletePayments && (
+-                            <td className="px-3 py-2">
+-                              {row.is_deleted ? (
+-                                <span className="text-xs text-slate-400">-</span>
+-                              ) : (
+-                                <button
+-                                  type="button"
+-                                  onClick={() => openDeleteConfirm(row.id)}
+-                                  disabled={deletingInvoiceId === row.id}
+-                                  className="rounded-lg bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
+-                                >
+-                                  {deletingInvoiceId === row.id ? 'Deleting...' : 'Delete'}
+-                                </button>
+-                              )}
+-                            </td>
+-                          )}
++                          {visibleHistoryTableColumns.map((column) => {
++                            if (column.key === 'date') return <td key={column.key} className="px-3 py-2">{formatDisplayDateTime(row.date, row.created_at)}</td>;
++                            if (column.key === 'loanCode') return <td key={column.key} className="px-3 py-2 font-semibold text-slate-900">{row.customer_no}</td>;
++                            if (column.key === 'customer') return <td key={column.key} className="px-3 py-2">{row.customer_name}</td>;
++                            if (column.key === 'fieldOfficer') return <td key={column.key} className="px-3 py-2">{row.field_officer}</td>;
++                            if (column.key === 'type') {
++                              return (
++                                <td key={column.key} className="px-3 py-2">
++                                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${
++                                    row.kind === 'issue'
++                                      ? 'border-violet-200 bg-violet-50 text-violet-800'
++                                      : 'border-cyan-200 bg-cyan-50 text-cyan-800'
++                                  }`}>
++                                    {String(row.payment_type || '-').replace('_', ' ')}
++                                  </span>
++                                </td>
++                              );
++                            }
++                            if (column.key === 'reference') return <td key={column.key} className="px-3 py-2">{row.payment_reference}</td>;
++                            if (column.key === 'collected') return <td key={column.key} className={`px-3 py-2 font-semibold ${row.kind === 'issue' ? 'text-violet-700' : 'text-emerald-700'}`}>{Number(row.collected_amount || 0).toFixed(2)}</td>;
++                            if (column.key === 'capital') return <td key={column.key} className="px-3 py-2">{Number(row.capital_amount || 0).toFixed(2)}</td>;
++                            if (column.key === 'interest') return <td key={column.key} className="px-3 py-2">{Number(row.interest_amount || 0).toFixed(2)}</td>;
++                            if (column.key === 'penalty') return <td key={column.key} className="px-3 py-2">{Number(row.penalty_amount || 0).toFixed(2)}</td>;
++                            if (column.key === 'balance') return <td key={column.key} className="px-3 py-2 font-semibold text-rose-700">{Number(row.balance || 0).toFixed(2)}</td>;
++                            if (column.key === 'note') return <td key={column.key} className="px-3 py-2">{row.note}</td>;
++                            if (column.key === 'record') {
++                              return (
++                                <td key={column.key} className="px-3 py-2">
++                                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${row.is_deleted ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
++                                    {row.is_deleted ? 'Deleted' : 'Active'}
++                                  </span>
++                                </td>
++                              );
++                            }
++                            if (column.key === 'deletedBy') {
++                              return (
++                                <td key={column.key} className="px-3 py-2 text-xs text-slate-600">
++                                  {row.is_deleted
++                                    ? `${row.deleted_by_name || '-'}${row.deletion_reason ? ` (${row.deletion_reason})` : ''}`
++                                    : '-'}
++                                </td>
++                              );
++                            }
++                            if (column.key === 'action') {
++                              return (
++                                <td key={column.key} className="px-3 py-2">
++                                  {row.is_deleted ? (
++                                    <span className="text-xs text-slate-400">-</span>
++                                  ) : (
++                                    <button
++                                      type="button"
++                                      onClick={() => openDeleteConfirm(row.id)}
++                                      disabled={deletingInvoiceId === row.id}
++                                      className="rounded-lg bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
++                                    >
++                                      {deletingInvoiceId === row.id ? 'Deleting...' : 'Delete'}
++                                    </button>
++                                  )}
++                                </td>
++                              );
++                            }
++                            return null;
++                          })}
+                         </tr>
+                       ))}
+                     </tbody>
+                   </table>
+                 </div>
+*** End Patch

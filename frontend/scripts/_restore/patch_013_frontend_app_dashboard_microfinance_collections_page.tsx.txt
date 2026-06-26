@@ -1,0 +1,84 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/collections/page.tsx
+@@
+   const cards = [
+     ...(canViewCenterRouteCollections
+       ? [
+           {
+             id: 'center' as const,
++            widgetKey: 'mf_collections_widget_mode_center',
+             title: 'Center Collection',
+             subtitle: 'Collect installments center-wise',
+             color: 'from-emerald-500 to-teal-500',
+             bg: 'from-emerald-50 to-teal-50',
+           },
+           {
+             id: 'route' as const,
++            widgetKey: 'mf_collections_widget_mode_route',
+             title: 'Route Collection',
+             subtitle: 'Collect installments route-wise',
+             color: 'from-blue-500 to-cyan-500',
+             bg: 'from-blue-50 to-cyan-50',
+@@
+       ? [
+           {
+             id: 'today' as const,
++            widgetKey: 'mf_collections_widget_mode_today',
+             title: 'Debt Today',
+             subtitle: 'Loans due for collection today',
+             color: 'from-rose-500 to-orange-500',
+             bg: 'from-rose-50 to-orange-50',
+           },
+           {
+             id: 'next' as const,
++            widgetKey: 'mf_collections_widget_mode_next',
+             title: 'Next Collection',
+             subtitle: 'Loans scheduled for next day collection',
+             color: 'from-indigo-500 to-sky-500',
+             bg: 'from-indigo-50 to-sky-50',
+@@
+                 {
+                   id: 'office' as const,
++                  widgetKey: 'mf_collections_widget_mode_office',
+                   title: 'Office Collection',
+                   subtitle: 'Collect direct/office installments',
+                   color: 'from-amber-500 to-orange-500',
+                   bg: 'from-amber-50 to-orange-50',
+@@
+         ]),
+   ];
++
++  const visibleCards = cards.filter((card) => !hiddenWidgetKeys.has(card.widgetKey));
++
++  const summaryCards = [
++    {
++      key: 'mf_collections_widget_summary_records',
++      label: 'Collection Records',
++      value: String(displayRecordCount),
++    },
++    {
++      key: 'mf_collections_widget_summary_installment_total',
++      label: 'Total Installment',
++      value: displayInstallmentTotal.toFixed(2),
++    },
++    {
++      key: 'mf_collections_widget_summary_due_date',
++      label: 'With Due Date',
++      value: String(displayDueDateCount),
++    },
++  ];
++
++  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+@@
+     if (isOfficeModeBlocked || isCenterRouteModeBlocked) {
+-      const fallbackMode = cards[0]?.id || 'today';
++      const fallbackMode = visibleCards[0]?.id || cards[0]?.id || 'today';
+       setActiveMode(fallbackMode);
+     }
+-  }, [activeMode, canViewOfficeCollection, canViewCenterRouteCollections, isCollectionOfficer, cards]);
++  }, [activeMode, canViewOfficeCollection, canViewCenterRouteCollections, isCollectionOfficer, cards, visibleCards]);
+ 
+-  if (!token || loading) {
++  if (!token || loading || loadingWidgets) {
+     return (
+*** End Patch

@@ -1,0 +1,132 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/payments/page.tsx
+@@
+           <div className="flex items-center justify-between gap-3 flex-wrap">
+             <h2 className="text-xl font-black text-slate-900">
+               {selectedLoan
+                 ? `Payment History - ${selectedLoan.customer_no} | ${selectedLoan.customer_name}`
+                 : 'Payment Transactions'}
+             </h2>
+-            <div className="relative min-w-[280px]">
+-              <input
+-                className="w-full pl-9 pr-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-black shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-200"
+-                placeholder="Search by loan, customer, field officer, type, reference"
+-                value={query}
+-                onChange={(e) => setQuery(e.target.value)}
+-              />
+-              <span className="absolute left-3 top-2.5 text-slate-400 text-sm">⌕</span>
+-            </div>
++            {isWidgetVisible('mf_payments_widget_filter_search') && (
++              <div className="relative min-w-[280px]">
++                <button
++                  type="button"
++                  onClick={() => void hideWidget('mf_payments_widget_filter_search')}
++                  className="absolute -right-2 -top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                  aria-label="Hide search filter"
++                >
++                  ×
++                </button>
++                <input
++                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-black shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-200"
++                  placeholder="Search by loan, customer, field officer, type, reference"
++                  value={query}
++                  onChange={(e) => setQuery(e.target.value)}
++                />
++                <span className="absolute left-3 top-2.5 text-slate-400 text-sm">⌕</span>
++              </div>
++            )}
+           </div>
++          {!isWidgetVisible('mf_payments_widget_filter_search') && (
++            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
++              Search filter is hidden. Restore from dashboard with admin approval.
++            </div>
++          )}
+ 
+-          <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50/70 to-sky-50/60 p-3">
++          {isWidgetVisible('mf_payments_widget_filter_primary') && (
++            <div className="relative mt-3 grid grid-cols-1 md:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50/70 to-sky-50/60 p-3">
++              <button
++                type="button"
++                onClick={() => void hideWidget('mf_payments_widget_filter_primary')}
++                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                aria-label="Hide primary filters"
++              >
++                ×
++              </button>
+             <div>
+@@
+             <div className="flex items-end">
+@@
+             </div>
+-          </div>
++            </div>
++          )}
++          {!isWidgetVisible('mf_payments_widget_filter_primary') && (
++            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
++              Primary filters are hidden. Restore from dashboard with admin approval.
++            </div>
++          )}
+ 
+-          {canDeletePayments && (
++          {canDeletePayments && isWidgetVisible('mf_payments_widget_filter_deleted_toggle') && (
+             <div className="mt-2 flex items-center justify-end">
++              <button
++                type="button"
++                onClick={() => void hideWidget('mf_payments_widget_filter_deleted_toggle')}
++                className="mr-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                aria-label="Hide deleted records filter"
++              >
++                ×
++              </button>
+               <label className="inline-flex items-center gap-2 rounded-xl border border-cyan-100 bg-cyan-50/60 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-cyan-800">
+@@
+               </label>
+             </div>
+           )}
++          {canDeletePayments && !isWidgetVisible('mf_payments_widget_filter_deleted_toggle') && (
++            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
++              Deleted-record toggle is hidden. Restore from dashboard with admin approval.
++            </div>
++          )}
+ 
+-          <div className="mt-2 grid grid-cols-1 md:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-gradient-to-br from-white to-cyan-50/30 p-3">
++          {isWidgetVisible('mf_payments_widget_filter_advanced') && (
++            <div className="relative mt-2 grid grid-cols-1 md:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-gradient-to-br from-white to-cyan-50/30 p-3">
++              <button
++                type="button"
++                onClick={() => void hideWidget('mf_payments_widget_filter_advanced')}
++                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                aria-label="Hide advanced filters"
++              >
++                ×
++              </button>
+             <div>
+@@
+             <div>
+@@
+             </div>
+-          </div>
++            </div>
++          )}
++          {!isWidgetVisible('mf_payments_widget_filter_advanced') && (
++            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
++              Advanced filters are hidden. Restore from dashboard with admin approval.
++            </div>
++          )}
+ 
+-          {showLoanLookup && (
++          {showLoanLookup && isWidgetVisible('mf_payments_widget_filter_matching_loans') && (
+             <div className="mt-3 rounded-2xl border border-cyan-100 bg-cyan-50/60 p-3">
++              <button
++                type="button"
++                onClick={() => void hideWidget('mf_payments_widget_filter_matching_loans')}
++                className="mb-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                aria-label="Hide matching loans panel"
++              >
++                ×
++              </button>
+               <p className="text-xs font-semibold text-cyan-800 uppercase tracking-wide mb-2">Matching Loans</p>
+@@
+             </div>
+           )}
+*** End Patch

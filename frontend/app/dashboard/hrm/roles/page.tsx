@@ -224,11 +224,6 @@ export default function RolesAddPage() {
   const [rolesLoading, setRolesLoading] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingDeleteRole, setPendingDeleteRole] = useState<Role | null>(null);
-  const [permissionsModalOpen, setPermissionsModalOpen] = useState(false);
-  const [editingPermissionsRole, setEditingPermissionsRole] = useState<Role | null>(null);
-  const [editingPermissionKeys, setEditingPermissionKeys] = useState<string[]>([]);
-  const [permissionsModalSearch, setPermissionsModalSearch] = useState('');
-  const [savingPermissions, setSavingPermissions] = useState(false);
   const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
   const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
 
@@ -428,35 +423,6 @@ export default function RolesAddPage() {
       .sort((a, b) => `${a.module} ${a.section}`.localeCompare(`${b.module} ${b.section}`));
   }, [permissionTemplates, permissionSearch]);
 
-  const groupedPermissionsForModal = useMemo(() => {
-    const keyword = permissionsModalSearch.trim().toLowerCase();
-
-    const filtered = keyword
-      ? permissionTemplates.filter((item) => {
-          const text = `${item.module} ${item.section} ${item.action} ${item.route} ${item.description}`.toLowerCase();
-          return text.includes(keyword);
-        })
-      : permissionTemplates;
-
-    const groupMap = new Map<string, PermissionTemplate[]>();
-
-    filtered.forEach((item) => {
-      const key = `${item.module}::${item.section}`;
-      const bucket = groupMap.get(key) || [];
-      bucket.push(item);
-      groupMap.set(key, bucket);
-    });
-
-    return Array.from(groupMap.entries())
-      .map(([groupKey, items]) => ({
-        groupKey,
-        module: items[0]?.module || 'General',
-        section: items[0]?.section || 'General',
-        items: [...items].sort((a, b) => a.action.localeCompare(b.action)),
-      }))
-      .sort((a, b) => `${a.module} ${a.section}`.localeCompare(`${b.module} ${b.section}`));
-  }, [permissionTemplates, permissionsModalSearch]);
-
   const allFilteredKeys = useMemo(
     () => groupedPermissions.flatMap((group) => group.items.map((item) => item.key)),
     [groupedPermissions]
@@ -465,16 +431,6 @@ export default function RolesAddPage() {
   const allFilteredSelected = useMemo(
     () => allFilteredKeys.length > 0 && allFilteredKeys.every((key) => selectedPermissionKeys.includes(key)),
     [allFilteredKeys, selectedPermissionKeys]
-  );
-
-  const modalFilteredKeys = useMemo(
-    () => groupedPermissionsForModal.flatMap((group) => group.items.map((item) => item.key)),
-    [groupedPermissionsForModal]
-  );
-
-  const modalAllFilteredSelected = useMemo(
-    () => modalFilteredKeys.length > 0 && modalFilteredKeys.every((key) => editingPermissionKeys.includes(key)),
-    [modalFilteredKeys, editingPermissionKeys]
   );
 
   const filteredRoles = useMemo(() => {
@@ -499,11 +455,10 @@ export default function RolesAddPage() {
   );
   const showRoleColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_role`);
   const showDescriptionColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_description`);
-  const showPermissionsColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_permissions`);
   const showStatusColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_status`);
   const showActionsColumn = !hiddenWidgetKeys.includes(`${widgetPrefix}col_actions`);
   const showAnyRoleTableColumn =
-    showRoleColumn || showDescriptionColumn || showPermissionsColumn || showStatusColumn || showActionsColumn;
+    showRoleColumn || showDescriptionColumn || showStatusColumn || showActionsColumn;
 
   useEffect(() => {
     if (rolesPage > rolesTotalPages) {
@@ -625,86 +580,6 @@ export default function RolesAddPage() {
     }
 
     return Array.from(new Set(resolvedIds));
-  };
-
-  const openPermissionsModal = (role: Role) => {
-    const assignedNames = new Set(
-      (role.permissions || [])
-        .map((permission) => String(permission.name || '').toLowerCase().trim())
-        .filter(Boolean)
-    );
-
-    const matchedKeys = permissionTemplates
-      .filter((tpl) => assignedNames.has(String(tpl.name || '').toLowerCase().trim()))
-      .map((tpl) => tpl.key);
-
-    setEditingPermissionsRole(role);
-    setEditingPermissionKeys(matchedKeys);
-    setPermissionsModalSearch('');
-    setPermissionsModalOpen(true);
-  };
-
-  const closePermissionsModal = () => {
-    setPermissionsModalOpen(false);
-    setEditingPermissionsRole(null);
-    setEditingPermissionKeys([]);
-    setPermissionsModalSearch('');
-  };
-
-  const toggleModalPermission = (key: string) => {
-    setEditingPermissionKeys((prev) =>
-      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]
-    );
-  };
-
-  const toggleModalGroup = (keys: string[]) => {
-    if (keys.length === 0) return;
-
-    setEditingPermissionKeys((prev) => {
-      const allSelected = keys.every((key) => prev.includes(key));
-      if (allSelected) {
-        return prev.filter((key) => !keys.includes(key));
-      }
-      return Array.from(new Set([...prev, ...keys]));
-    });
-  };
-
-  const toggleAllModalFiltered = () => {
-    if (modalFilteredKeys.length === 0) return;
-
-    setEditingPermissionKeys((prev) => {
-      if (modalAllFilteredSelected) {
-        return prev.filter((key) => !modalFilteredKeys.includes(key));
-      }
-      return Array.from(new Set([...prev, ...modalFilteredKeys]));
-    });
-  };
-
-  const saveRolePermissions = async () => {
-    if (!editingPermissionsRole) return;
-
-    setSavingPermissions(true);
-    setFormError('');
-    setFormSuccess('');
-
-    try {
-      const permissionIds = await resolvePermissionIdsForKeys(editingPermissionKeys);
-
-      await axios.put(
-        `${apiBase}/roles/${editingPermissionsRole.id}/permissions`,
-        { permissions: permissionIds },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      await fetchRoles();
-      setFormSuccess(`Permissions updated for role "${editingPermissionsRole.name}".`);
-      closePermissionsModal();
-      openNotice('Success', `Permissions updated for role "${editingPermissionsRole.name}".`);
-    } catch (error: unknown) {
-      setFormError(extractApiMessage(error, 'Failed to update role permissions.'));
-    } finally {
-      setSavingPermissions(false);
-    }
   };
 
   const resetForm = () => {
@@ -1289,24 +1164,6 @@ export default function RolesAddPage() {
                           </div>
                         </th>
                       )}
-                      {showPermissionsColumn && (
-                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
-                          <div className="flex items-center gap-2">
-                            <span>Permissions</span>
-                            <WidgetCloseGate>
-                              <button
-                                type="button"
-                                onClick={() => hideWidget(`${widgetPrefix}col_permissions`)}
-                                className="h-6 w-6 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300"
-                                aria-label="Hide permissions column"
-                                title="Hide column"
-                              >
-                                ×
-                              </button>
-                            </WidgetCloseGate>
-                          </div>
-                        </th>
-                      )}
                       {showStatusColumn && (
                         <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-600">
                           <div className="flex items-center gap-2">
@@ -1352,7 +1209,6 @@ export default function RolesAddPage() {
                           colSpan={
                             (showRoleColumn ? 1 : 0) +
                             (showDescriptionColumn ? 1 : 0) +
-                            (showPermissionsColumn ? 1 : 0) +
                             (showStatusColumn ? 1 : 0) +
                             (showActionsColumn ? 1 : 0) || 1
                           }
@@ -1370,13 +1226,6 @@ export default function RolesAddPage() {
                           {showDescriptionColumn && (
                             <td className="px-6 py-4 text-gray-800">{role.description || '—'}</td>
                           )}
-                          {showPermissionsColumn && (
-                            <td className="px-6 py-4">
-                              <span className="inline-flex rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200 px-2.5 py-0.5 text-xs font-bold">
-                                {role.permissions?.length || 0}
-                              </span>
-                            </td>
-                          )}
                           {showStatusColumn && (
                             <td className="px-6 py-4">
                               <span
@@ -1393,14 +1242,6 @@ export default function RolesAddPage() {
                           {showActionsColumn && (
                             <td className="px-6 py-4 whitespace-nowrap">
                               <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => openPermissionsModal(role)}
-                                className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800 transition hover:border-blue-300 hover:bg-blue-100"
-                              >
-                                <Shield className="h-3.5 w-3.5" />
-                                Permissions
-                              </button>
                               <button
                                 type="button"
                                 onClick={() => handleDeleteRole(role)}
@@ -1498,125 +1339,6 @@ export default function RolesAddPage() {
                 className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
               >
                 OK
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {permissionsModalOpen && editingPermissionsRole && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={closePermissionsModal} />
-          <div className="relative w-full max-w-5xl rounded-2xl bg-white shadow-2xl border border-gray-200 max-h-[92vh] overflow-hidden flex flex-col">
-            <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-5 shrink-0">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-lg font-bold text-white">Edit role permissions</h3>
-                  <p className="text-sm text-blue-50 mt-1">
-                    {editingPermissionsRole.name} · {editingPermissionKeys.length} selected
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={closePermissionsModal}
-                  className="w-10 h-10 bg-white/20 rounded-xl text-white hover:bg-white/30"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-
-            <div className="p-5 overflow-y-auto flex-1">
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <label className="text-sm font-semibold text-gray-700">Permissions</label>
-                <button
-                  type="button"
-                  onClick={toggleAllModalFiltered}
-                  className="px-3 py-1.5 text-xs rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 font-semibold"
-                >
-                  {modalAllFilteredSelected ? 'Clear visible' : 'Select visible'}
-                </button>
-              </div>
-
-              <div className="relative mb-3">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  type="text"
-                  value={permissionsModalSearch}
-                  onChange={(e) => setPermissionsModalSearch(e.target.value)}
-                  placeholder="Search action, route, or section…"
-                  className={`${inputClass} pl-10`}
-                />
-              </div>
-
-              <div className="max-h-[50vh] overflow-y-auto rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-3">
-                {groupedPermissionsForModal.map((group) => {
-                  const groupKeys = group.items.map((item) => item.key);
-                  const groupAllSelected =
-                    groupKeys.length > 0 && groupKeys.every((key) => editingPermissionKeys.includes(key));
-
-                  return (
-                    <div key={group.groupKey} className="rounded-xl border border-gray-200 bg-white p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <div>
-                          <p className="text-sm font-semibold text-gray-900">
-                            {group.module} / {group.section}
-                          </p>
-                          <p className="text-xs text-gray-500">{group.items.length} permission(s)</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => toggleModalGroup(groupKeys)}
-                          className="px-2.5 py-1 text-xs rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 font-semibold"
-                        >
-                          {groupAllSelected ? 'Clear' : 'Select all'}
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        {group.items.map((item) => (
-                          <label
-                            key={item.key}
-                            className="flex items-start gap-3 rounded-lg p-2 hover:bg-blue-50/50 cursor-pointer"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={editingPermissionKeys.includes(item.key)}
-                              onChange={() => toggleModalPermission(item.key)}
-                              className="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            />
-                            <div className="min-w-0">
-                              <p className="text-sm font-medium text-gray-900">{item.action}</p>
-                              <p className="text-xs text-gray-600 truncate">{item.route || item.description}</p>
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {groupedPermissionsForModal.length === 0 && (
-                  <p className="text-sm text-gray-500 text-center py-6">No permissions loaded.</p>
-                )}
-              </div>
-            </div>
-
-            <div className="p-5 border-t border-gray-100 flex justify-end gap-2 shrink-0 bg-white">
-              <button
-                type="button"
-                onClick={closePermissionsModal}
-                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={saveRolePermissions}
-                disabled={savingPermissions}
-                className="px-4 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 text-white font-semibold disabled:opacity-60"
-              >
-                {savingPermissions ? 'Saving…' : 'Save permissions'}
               </button>
             </div>
           </div>

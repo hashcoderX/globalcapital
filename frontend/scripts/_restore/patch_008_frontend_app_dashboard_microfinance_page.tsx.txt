@@ -1,0 +1,176 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/page.tsx
+@@
+         {/* Module Cards */}
+         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
+-          {visibleModules.map((module, index) => (
++          {visibleModules.map((module) => (
+             <div
+-              key={index}
++              key={module.key}
+               onClick={() => {
+                 if (module.name === 'Loan Management') {
+                   router.push('/dashboard/microfinance/loans');
+@@
+               <div className={`absolute inset-0 bg-gradient-to-br ${module.bgColor} opacity-0 group-hover:opacity-100 transition-opacity duration-500`}></div>
+ 
+               {/* Content */}
+               <div className="relative p-6">
++                <button
++                  type="button"
++                  onClick={(event) => {
++                    event.stopPropagation();
++                    void hideWidget(module.key);
++                  }}
++                  className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                  aria-label={`Hide ${module.name} widget`}
++                >
++                  ×
++                </button>
+                 <div className="flex items-start justify-between mb-4">
+@@
+               <div className="absolute top-8 right-6 w-1 h-1 bg-white/20 rounded-full opacity-0 group-hover:opacity-100 animate-ping animation-delay-300"></div>
+             </div>
+           ))}
+         </div>
++        {visibleModules.length === 0 && (
++          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
++            All microfinance module cards are hidden. Restore them from the dashboard with admin approval.
++          </div>
++        )}
+@@
+           <div className="mb-8 rounded-2xl border border-cyan-100 bg-white/80 p-5">
+@@
+             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+               {visibleSummaryReportCards.map((item) => (
+-                <div key={item.label} className="rounded-xl border border-cyan-100 bg-white p-4">
++                <div key={item.key} className="relative rounded-xl border border-cyan-100 bg-white p-4">
++                  <button
++                    type="button"
++                    onClick={() => void hideWidget(item.key)}
++                    className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                    aria-label={`Hide ${item.label} summary card`}
++                  >
++                    ×
++                  </button>
+                   <div className={`h-1.5 w-20 rounded-full bg-gradient-to-r ${item.tone} mb-3`}></div>
+                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+                   <p className="text-lg font-extrabold text-slate-900 mt-1">{item.value}</p>
+@@
+           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+-            {visibleReportModules.map((report, index) => (
++            {visibleReportModules.map((report) => (
+               <div
+-                key={index}
++                key={report.key}
+                 className="group relative bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 border border-white/20 overflow-hidden transform hover:-translate-y-2"
+               >
+                 <div className={`absolute inset-0 bg-gradient-to-br ${report.bgColor} opacity-0 group-hover:opacity-100 transition-opacity duration-500`}></div>
+ 
+                 <div className="relative p-6">
++                  <button
++                    type="button"
++                    onClick={() => void hideWidget(report.key)}
++                    className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                    aria-label={`Hide ${report.name} report card`}
++                  >
++                    ×
++                  </button>
+                   <div className="flex items-start justify-between mb-4">
+@@
+             ))}
+           </div>
++          {visibleReportModules.length === 0 && (
++            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
++              All report cards are hidden. Restore them from the dashboard with admin approval.
++            </div>
++          )}
+         </div>
+ 
+         {/* Quick Stats Section */}
+         <div className="mt-10 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 md:gap-5">
+-          {[
+-            {
+-              label: 'Active Loans',
+-              value: statsLoading ? '...' : stats.activeLoans.toLocaleString(),
+-              icon: '💰',
+-              color: 'from-green-500 to-emerald-500',
+-            },
+-            {
+-              label: 'Total Collections',
+-              value: statsLoading
+-                ? '...'
+-                : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
+-                    stats.totalCollections
+-                  ),
+-              icon: '📊',
+-              color: 'from-blue-500 to-cyan-500',
+-            },
+-            {
+-              label: 'Pending Payments',
+-              value: statsLoading ? '...' : stats.pendingPayments.toLocaleString(),
+-              icon: '⏳',
+-              color: 'from-yellow-500 to-orange-500',
+-            },
+-            {
+-              label: 'Default Rate',
+-              value: statsLoading ? '...' : `${stats.defaultRate.toFixed(2)}%`,
+-              icon: '📉',
+-              color: 'from-red-500 to-pink-500',
+-            },
+-          ].map((stat, index) => (
++          {visibleQuickStatsCards.map((stat) => (
+             <div
+-              key={index}
+-              className="bg-white/75 backdrop-blur-sm rounded-xl shadow-lg border border-white/20 px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-5 overflow-hidden"
++              key={stat.key}
++              className="relative bg-white/75 backdrop-blur-sm rounded-xl shadow-lg border border-white/20 px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-5 overflow-hidden"
+             >
++              <button
++                type="button"
++                onClick={() => void hideWidget(stat.key)}
++                className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                aria-label={`Hide ${stat.label} quick stat card`}
++              >
++                ×
++              </button>
+               <div className="flex items-center justify-between gap-3">
+                 <div className="min-w-0">
+                   <p className="text-sm md:text-[15px] leading-5 font-medium text-gray-600">{stat.label}</p>
+@@
+               </div>
+             </div>
+           ))}
+         </div>
++        {visibleQuickStatsCards.length === 0 && (
++          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
++            All quick stat cards are hidden. Restore them from the dashboard with admin approval.
++          </div>
++        )}
+       </main>
++
++      {widgetNotice.open && (
++        <div className="fixed inset-0 z-[95] flex items-center justify-center p-4">
++          <div
++            className="absolute inset-0 bg-black/35 backdrop-blur-sm"
++            onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
++          />
++          <div className="relative w-full max-w-sm rounded-2xl border border-cyan-100 bg-white p-5 shadow-xl">
++            <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
++            <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
++            <div className="mt-4 flex justify-end">
++              <button
++                type="button"
++                onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
++                className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
++              >
++                OK
++              </button>
++            </div>
++          </div>
++        </div>
++      )}
+     </div>
+   );
+ }
+*** End Patch

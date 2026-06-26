@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 class Customer extends Model
 {
@@ -16,7 +17,7 @@ class Customer extends Model
         'permanent_address', 'current_address', 'photo_path',
         'employment_type', 'employer_name', 'job_title', 'monthly_income', 'other_income_sources',
         'existing_loans', 'monthly_loan_obligations', 'credit_score',
-        'created_by', 'status',
+        'created_by', 'status', 'user_id',
     ];
 
     protected $appends = [
@@ -48,6 +49,11 @@ class Customer extends Model
     public function savingsAccounts(): HasMany
     {
         return $this->hasMany(SavingsAccount::class);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
     }
 
     public static function generateUniqueCustomerCode(): string

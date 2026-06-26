@@ -5,7 +5,13 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getApiBaseUrl } from '@/lib/api';
 
-type NotificationType = 'system' | 'task' | 'approval' | 'finance' | 'reminder';
+type NotificationType =
+  | 'system'
+  | 'task'
+  | 'approval'
+  | 'finance'
+  | 'reminder'
+  | 'microfinance_loan_request';
 
 type NotificationItem = {
   id: number;
@@ -15,6 +21,18 @@ type NotificationItem = {
   createdAt: string;
   read: boolean;
   important: boolean;
+  actionUrl?: string;
+};
+
+type ApiNotificationRow = {
+  id?: number | string;
+  title?: string;
+  message?: string;
+  type?: string;
+  created_at?: string;
+  is_read?: boolean;
+  is_important?: boolean;
+  action_url?: string | null;
 };
 
 const typeStyles: Record<NotificationType, string> = {
@@ -23,6 +41,16 @@ const typeStyles: Record<NotificationType, string> = {
   approval: 'bg-amber-100 text-amber-700 border-amber-200',
   finance: 'bg-emerald-100 text-emerald-700 border-emerald-200',
   reminder: 'bg-rose-100 text-rose-700 border-rose-200',
+  microfinance_loan_request: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+};
+
+const resolveNotificationType = (value: string): NotificationType => {
+  const normalized = String(value || 'system') as NotificationType;
+  if (normalized in typeStyles) {
+    return normalized;
+  }
+
+  return 'system';
 };
 
 export default function NotificationsPage() {
@@ -64,14 +92,15 @@ export default function NotificationsPage() {
 
       const rows = Array.isArray(response.data?.notifications) ? response.data.notifications : [];
       setNotifications(
-        rows.map((row: any) => ({
+        (rows as ApiNotificationRow[]).map((row) => ({
           id: Number(row.id),
           title: String(row.title || 'Notification'),
           message: String(row.message || ''),
-          type: String(row.type || 'system') as NotificationType,
+          type: resolveNotificationType(String(row.type || 'system')),
           createdAt: String(row.created_at || new Date().toISOString()),
           read: Boolean(row.is_read),
           important: Boolean(row.is_important),
+          actionUrl: typeof row.action_url === 'string' ? row.action_url : undefined,
         }))
       );
       setSummary({
@@ -303,6 +332,14 @@ export default function NotificationsPage() {
                   </div>
 
                   <div className="flex gap-2">
+                    {row.actionUrl && (
+                      <button
+                        onClick={() => router.push(row.actionUrl as string)}
+                        className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                      >
+                        Open
+                      </button>
+                    )}
                     {!row.read && (
                       <button
                         onClick={() => void markAsRead(row.id)}

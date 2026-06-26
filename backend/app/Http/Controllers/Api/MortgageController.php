@@ -16,6 +16,8 @@ use Illuminate\Support\Facades\Storage;
 use App\Models\MortgageSchedule;
 use App\Models\MortgagePayment;
 use App\Models\MortgageDocument;
+use App\Services\SmsGatewayService;
+use App\Services\WhatsappGatewayService;
 use Carbon\Carbon;
 
 class MortgageController extends Controller
@@ -1212,6 +1214,31 @@ class MortgageController extends Controller
                 'is_settled' => $isFullSettlement,
             ];
         });
+
+        $mortgage->loadMissing('customer:id,first_name,last_name,phone');
+        $customerPhone = trim((string) optional($mortgage->customer)->phone);
+        if ($customerPhone !== '') {
+            /** @var SmsGatewayService $smsService */
+            $smsService = app(SmsGatewayService::class);
+            $customerName = trim(
+                ((string) optional($mortgage->customer)->first_name) . ' ' .
+                ((string) optional($mortgage->customer)->last_name)
+            ) ?: 'Customer';
+            $messageContext = [
+                'customer_name' => $customerName,
+                'amount' => number_format((float) $amount, 2, '.', ''),
+                'date' => $paidDate,
+                'reference' => 'MOR-' . (string) $mortgage->id,
+                'module' => 'Mortgage',
+            ];
+            $smsMessage = $smsService->buildCollectionMessage($messageContext);
+            $smsService->send($customerPhone, $smsMessage);
+
+            /** @var WhatsappGatewayService $whatsappService */
+            $whatsappService = app(WhatsappGatewayService::class);
+            $whatsappMessage = $whatsappService->buildCollectionMessage($messageContext);
+            $whatsappService->send($customerPhone, $whatsappMessage);
+        }
 
         return response()->json([
             'id' => $result['payment']->id,

@@ -168,6 +168,47 @@ class UserDashboardWidgetController extends Controller
         ]);
     }
 
+    public function employeeHiddenWidgets(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+
+        $validated = $request->validate([
+            'employee_id' => ['required', 'integer', 'exists:employees,id'],
+        ]);
+
+        $employeeId = (int) $validated['employee_id'];
+
+        $targetUser = User::query()
+            ->where('employee_id', $employeeId)
+            ->first();
+
+        if (!$targetUser) {
+            return response()->json([
+                'employee_id' => $employeeId,
+                'user_id' => null,
+                'hidden_widgets' => [],
+                'hidden_count' => 0,
+            ]);
+        }
+
+        $widgets = UserDashboardWidget::query()
+            ->where('user_id', (int) $targetUser->id)
+            ->where('is_visible', false)
+            ->orderByDesc('hidden_at')
+            ->orderBy('widget_key')
+            ->get(['widget_key', 'hidden_at']);
+
+        return response()->json([
+            'employee_id' => $employeeId,
+            'user_id' => (int) $targetUser->id,
+            'hidden_widgets' => $widgets,
+            'hidden_count' => $widgets->count(),
+        ]);
+    }
+
     public function authorizeAdminAction(Request $request): JsonResponse
     {
         $sessionUser = $request->user();

@@ -20,6 +20,8 @@ use App\Models\Mortgage;
 use App\Models\MortgagePayment;
 use App\Models\EmployeeWalletBankDeposit;
 use App\Models\EmployeeWalletCashHandover;
+use App\Services\SmsGatewayService;
+use App\Services\WhatsappGatewayService;
 use App\Services\SpeedDraftCalculator;
 use Carbon\Carbon;
 use Illuminate\Support\Arr;
@@ -1958,6 +1960,31 @@ class FinanceController extends Controller
 
             return $created;
         });
+
+        $finance->loadMissing('customer:id,first_name,last_name,phone');
+        $customerPhone = trim((string) optional($finance->customer)->phone);
+        if ($customerPhone !== '') {
+            /** @var SmsGatewayService $smsService */
+            $smsService = app(SmsGatewayService::class);
+            $customerName = trim(
+                ((string) optional($finance->customer)->first_name) . ' ' .
+                ((string) optional($finance->customer)->last_name)
+            ) ?: 'Customer';
+            $messageContext = [
+                'customer_name' => $customerName,
+                'amount' => number_format((float) $paymentAmount, 2, '.', ''),
+                'date' => (string) $validated['payment_date'],
+                'reference' => (string) ($finance->id ?? 'FIN'),
+                'module' => 'Finance',
+            ];
+            $smsMessage = $smsService->buildCollectionMessage($messageContext);
+            $smsService->send($customerPhone, $smsMessage);
+
+            /** @var WhatsappGatewayService $whatsappService */
+            $whatsappService = app(WhatsappGatewayService::class);
+            $whatsappMessage = $whatsappService->buildCollectionMessage($messageContext);
+            $whatsappService->send($customerPhone, $whatsappMessage);
+        }
 
         return response()->json([
             'message' => 'Collection posted successfully',

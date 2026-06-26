@@ -25,7 +25,7 @@ interface AttendanceRecord {
   date: string;
   in_time: string | null;
   out_time: string | null;
-  status: 'present' | 'absent' | 'late' | 'half_day';
+  status: 'present' | 'absent' | 'late' | 'half_day'; 
   work_hours: number | null;
   notes: string | null;
   employee: Employee;
@@ -40,13 +40,14 @@ export default function AttendancePage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<'mark' | 'upload' | 'history'>('mark');
+  const [activeTab, setActiveTab] = useState<'mark' | 'upload' | 'history' | 'machine'>('mark');
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [uploadResult, setUploadResult] = useState<any>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [selectedMarkDate, setSelectedMarkDate] = useState(new Date().toISOString().split('T')[0]);
   const [todayAttendance, setTodayAttendance] = useState<{[key: number]: AttendanceRecord}>({});
   const [showMarkModal, setShowMarkModal] = useState(false);
   const [markingEmployee, setMarkingEmployee] = useState<Employee | null>(null);
@@ -57,6 +58,24 @@ export default function AttendancePage() {
   const [markingOutAttendance, setMarkingOutAttendance] = useState<AttendanceRecord | null>(null);
   const [markOutTimeInput, setMarkOutTimeInput] = useState('');
   const [markOutNotes, setMarkOutNotes] = useState('');
+  const [fingerprintConfig, setFingerprintConfig] = useState({
+    enabled: false,
+    baseUrl: '',
+    logsEndpoint: '/logs',
+    apiKey: '',
+    deviceId: '',
+    requestTimeout: 10,
+  });
+  const [fingerprintSyncDate, setFingerprintSyncDate] = useState(new Date().toISOString().split('T')[0]);
+  const [fingerprintSyncResult, setFingerprintSyncResult] = useState<{
+    created_records?: number;
+    updated_records?: number;
+    skipped_records?: number;
+    errors?: string[];
+  } | null>(null);
+  const [fingerprintLoading, setFingerprintLoading] = useState(false);
+  const [fingerprintSaving, setFingerprintSaving] = useState(false);
+  const [fingerprintSyncing, setFingerprintSyncing] = useState(false);
   const [noticeModal, setNoticeModal] = useState<{ title: string; message: string; tone: NoticeTone } | null>(null);
   const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
   const [widgetNotice, setWidgetNotice] = useState<string | null>(null);
@@ -139,10 +158,16 @@ export default function AttendancePage() {
     } else {
       setToken(storedToken);
       fetchEmployees(storedToken);
-      fetchTodayAttendance(storedToken);
+      fetchTodayAttendance(storedToken, selectedMarkDate);
       fetchWidgetPreferences(storedToken);
+      fetchFingerprintConfig(storedToken);
     }
   }, [router, fetchWidgetPreferences]);
+
+  useEffect(() => {
+    if (!token) return;
+    void fetchTodayAttendance(token, selectedMarkDate);
+  }, [token, selectedMarkDate]);
 
   const fetchEmployees = async (authToken?: string) => {
     const tokenToUse = authToken || token;
@@ -164,16 +189,17 @@ export default function AttendancePage() {
     }
   };
 
-  const fetchTodayAttendance = async (authToken?: string) => {
+  const fetchTodayAttendance = async (authToken?: string, targetDate?: string) => {
     const tokenToUse = authToken || token;
     if (!tokenToUse) return;
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const response = await axios.get(`${apiBase}/hr/attendance?date=${today}`, {
+      const dateToUse = targetDate || selectedMarkDate || new Date().toISOString().split('T')[0];
+      const response = await axios.get(`${apiBase}/hr/attendance?date=${dateToUse}`, {
         headers: { Authorization: `Bearer ${tokenToUse}` },
       });
       const attendanceMap: {[key: number]: AttendanceRecord} = {};
-      response.data.data.forEach((record: AttendanceRecord) => {
+      const rows = Array.isArray(response.data?.data) ? response.data.data : [];
+      rows.forEach((record: AttendanceRecord) => {
         attendanceMap[record.employee_id] = record;
       });
       setTodayAttendance(attendanceMap);
@@ -185,6 +211,7 @@ export default function AttendancePage() {
   const markAttendance = async (
     employeeId: number,
     status: 'present' | 'absent' | 'late' | 'half_day',
+    date: string,
     inTime?: string,
     outTime?: string,
     notes?: string
@@ -194,7 +221,8 @@ export default function AttendancePage() {
     try {
       const payload: any = { 
         employee_id: employeeId, 
-        status 
+        status,
+        date
       };
       
       if (inTime) payload.in_time = inTime;
@@ -208,7 +236,7 @@ export default function AttendancePage() {
       );
       openNoticeModal('success', 'Attendance Marked', `Marked ${status} successfully.`);
       // Refresh today's attendance data
-      fetchTodayAttendance();
+      fetchTodayAttendance(undefined, selectedMarkDate);
       // Close modal if open
       setShowMarkModal(false);
       resetMarkForm();
@@ -249,7 +277,14 @@ export default function AttendancePage() {
   const handleMarkSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!markingEmployee) return;
-    markAttendance(markingEmployee.id, markStatus, markInTime || undefined, undefined, markNotes || undefined);
+    markAttendance(
+      markingEmployee.id,
+      markStatus,
+      selectedMarkDate,
+      markInTime || undefined,
+      undefined,
+      markNotes || undefined
+    );
   };
 
   const openMarkOutModal = (attendance: AttendanceRecord) => {
@@ -280,7 +315,7 @@ export default function AttendancePage() {
       );
       openNoticeModal('success', 'Marked Out', 'Marked out successfully.');
       // Refresh today's attendance data
-      fetchTodayAttendance();
+      fetchTodayAttendance(undefined, selectedMarkDate);
       setShowMarkOutModal(false);
     } catch (error: any) {
       console.error('Error marking out:', error);
@@ -328,7 +363,7 @@ export default function AttendancePage() {
         'Upload Completed',
         `Upload processed. Created ${response.data.created_records || 0}, Updated ${response.data.updated_records || 0}.`
       );
-      fetchTodayAttendance();
+      fetchTodayAttendance(undefined, selectedMarkDate);
     } catch (error: any) {
       console.error('Error uploading CSV:', error);
       openNoticeModal('error', 'Upload Failed', 'Failed to upload CSV: ' + (error.response?.data?.error || error.message));
@@ -355,6 +390,84 @@ export default function AttendancePage() {
       openNoticeModal('error', 'History Error', 'Failed to fetch attendance history.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchFingerprintConfig = async (authToken?: string) => {
+    const tokenToUse = authToken || token;
+    if (!tokenToUse) return;
+    try {
+      setFingerprintLoading(true);
+      const response = await axios.get(`${apiBase}/hr/attendance/fingerprint-config`, {
+        headers: { Authorization: `Bearer ${tokenToUse}` },
+      });
+      const config = response.data?.config || {};
+      setFingerprintConfig({
+        enabled: Boolean(config.enabled),
+        baseUrl: String(config.base_url || ''),
+        logsEndpoint: String(config.logs_endpoint || '/logs'),
+        apiKey: String(config.api_key || ''),
+        deviceId: String(config.device_id || ''),
+        requestTimeout: Number(config.request_timeout || 10),
+      });
+    } catch (error) {
+      console.error('Error fetching fingerprint config:', error);
+      openNoticeModal('error', 'Fingerprint Config', 'Failed to load fingerprint machine configuration.');
+    } finally {
+      setFingerprintLoading(false);
+    }
+  };
+
+  const saveFingerprintConfig = async () => {
+    if (!token) return;
+    try {
+      setFingerprintSaving(true);
+      await axios.put(
+        `${apiBase}/hr/attendance/fingerprint-config`,
+        {
+          enabled: fingerprintConfig.enabled,
+          base_url: fingerprintConfig.baseUrl.trim(),
+          logs_endpoint: fingerprintConfig.logsEndpoint.trim() || '/logs',
+          api_key: fingerprintConfig.apiKey.trim() || null,
+          device_id: fingerprintConfig.deviceId.trim() || null,
+          request_timeout: Number(fingerprintConfig.requestTimeout || 10),
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      openNoticeModal('success', 'Fingerprint Config', 'Fingerprint machine configuration saved.');
+    } catch (error: any) {
+      console.error('Error saving fingerprint config:', error);
+      const msg = error?.response?.data?.message || 'Failed to save fingerprint machine configuration.';
+      openNoticeModal('error', 'Fingerprint Config', msg);
+    } finally {
+      setFingerprintSaving(false);
+    }
+  };
+
+  const syncFingerprintLogs = async () => {
+    if (!token) return;
+    try {
+      setFingerprintSyncing(true);
+      setFingerprintSyncResult(null);
+      const response = await axios.post(
+        `${apiBase}/hr/attendance/fingerprint-sync`,
+        { date: fingerprintSyncDate },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setFingerprintSyncResult({
+        created_records: response.data?.created_records || 0,
+        updated_records: response.data?.updated_records || 0,
+        skipped_records: response.data?.skipped_records || 0,
+        errors: Array.isArray(response.data?.errors) ? response.data.errors : [],
+      });
+      openNoticeModal('success', 'Fingerprint Sync', response.data?.message || 'Fingerprint sync completed.');
+      await fetchTodayAttendance(undefined, selectedMarkDate);
+    } catch (error: any) {
+      console.error('Error syncing fingerprint logs:', error);
+      const msg = error?.response?.data?.message || 'Failed to sync logs from fingerprint machine.';
+      openNoticeModal('error', 'Fingerprint Sync', msg);
+    } finally {
+      setFingerprintSyncing(false);
     }
   };
 
@@ -531,6 +644,16 @@ export default function AttendancePage() {
             >
               View History
             </button>
+            <button
+              onClick={() => setActiveTab('machine')}
+              className={`px-6 py-2 rounded-full font-medium transition-all duration-300 ${
+                activeTab === 'machine'
+                  ? 'bg-gradient-to-r from-orange-500 to-red-500 text-white shadow-lg'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Fingerprint Machine
+            </button>
           </div>
         </div>
         )}
@@ -560,9 +683,17 @@ export default function AttendancePage() {
                   onChange={(e) => setSearch(e.target.value)}
                   className="w-full md:w-80 px-4 py-2 rounded-full border border-white/20 bg-white/70 backdrop-blur-sm text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500"
                 />
+                <input
+                  type="date"
+                  value={selectedMarkDate}
+                  onChange={(e) => setSelectedMarkDate(e.target.value)}
+                  className="px-4 py-2 rounded-full border border-white/20 bg-white/70 backdrop-blur-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  aria-label="Attendance date"
+                  title="Attendance date"
+                />
               </div>
               <div className="text-sm text-gray-600">
-                {loading ? 'Updating attendance...' : `${filteredEmployees.length} employees listed`}
+                {loading ? 'Updating attendance...' : `${filteredEmployees.length} employees listed for ${selectedMarkDate}`}
               </div>
             </div>
             )}
@@ -592,7 +723,7 @@ export default function AttendancePage() {
                       {showQuickPhoneCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Phone</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_phone`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
                       {showQuickInCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>In Time</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_in`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
                       {showQuickOutCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Out Time</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_out`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
-                      {showQuickStatusCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Today's Status</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_status`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
+                      {showQuickStatusCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Status ({selectedMarkDate})</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_status`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
                       {showQuickActionsCol && <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider"><div className="flex items-center gap-2"><span>Actions</span><WidgetCloseGate><button type="button" onClick={() => hideWidget(`${widgetPrefix}quick_col_actions`)} className="h-5 w-5 rounded-full border border-white/60 bg-white text-gray-600 hover:text-rose-600">×</button></WidgetCloseGate></div></th>}
                     </tr>
                   </thead>
@@ -868,6 +999,152 @@ export default function AttendancePage() {
             )}
           </div>
         )}
+
+        {activeTab === 'machine' && !hiddenWidgetKeys.includes(`${widgetPrefix}fingerprint_section`) && (
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/20 p-8 relative">
+            <WidgetCloseGate>
+              <button
+                type="button"
+                onClick={() => hideWidget(`${widgetPrefix}fingerprint_section`)}
+                className="absolute top-3 right-3 h-8 w-8 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-rose-600 hover:border-rose-300 shadow-sm"
+                aria-label="Hide fingerprint config widget"
+                title="Hide widget"
+              >
+                ×
+              </button>
+            </WidgetCloseGate>
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">Fingerprint Machine Configuration</h3>
+            <p className="text-gray-600 mb-6">
+              Connect attendance with your fingerprint machine over the same network. Configure machine access, then run sync.
+            </p>
+
+            {fingerprintLoading ? (
+              <div className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
+                Loading machine configuration...
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <label className="flex items-center gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={fingerprintConfig.enabled}
+                      onChange={(e) => setFingerprintConfig((prev) => ({ ...prev, enabled: e.target.checked }))}
+                    />
+                    <span className="text-sm font-medium text-orange-800">Enable fingerprint sync</span>
+                  </label>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Machine Base URL</label>
+                    <input
+                      type="text"
+                      value={fingerprintConfig.baseUrl}
+                      onChange={(e) => setFingerprintConfig((prev) => ({ ...prev, baseUrl: e.target.value }))}
+                      placeholder="http://192.168.1.50:8080"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Logs Endpoint</label>
+                    <input
+                      type="text"
+                      value={fingerprintConfig.logsEndpoint}
+                      onChange={(e) => setFingerprintConfig((prev) => ({ ...prev, logsEndpoint: e.target.value }))}
+                      placeholder="/logs"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">API Key (optional)</label>
+                    <input
+                      type="text"
+                      value={fingerprintConfig.apiKey}
+                      onChange={(e) => setFingerprintConfig((prev) => ({ ...prev, apiKey: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Device ID (optional)</label>
+                    <input
+                      type="text"
+                      value={fingerprintConfig.deviceId}
+                      onChange={(e) => setFingerprintConfig((prev) => ({ ...prev, deviceId: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Timeout (seconds)</label>
+                    <input
+                      type="number"
+                      min={3}
+                      max={60}
+                      value={fingerprintConfig.requestTimeout}
+                      onChange={(e) =>
+                        setFingerprintConfig((prev) => ({ ...prev, requestTimeout: Number(e.target.value || 10) }))
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-3">
+                  <button
+                    onClick={saveFingerprintConfig}
+                    disabled={fingerprintSaving}
+                    className="px-6 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-full font-medium hover:from-orange-600 hover:to-red-600 transition-all duration-300 disabled:opacity-50"
+                  >
+                    {fingerprintSaving ? 'Saving...' : 'Save Configuration'}
+                  </button>
+                </div>
+
+                <div className="mt-8 rounded-2xl border border-orange-200 bg-orange-50/60 p-5">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-3">Sync Logs</h4>
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Sync Date</label>
+                      <input
+                        type="date"
+                        value={fingerprintSyncDate}
+                        onChange={(e) => setFingerprintSyncDate(e.target.value)}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+                    <button
+                      onClick={syncFingerprintLogs}
+                      disabled={fingerprintSyncing}
+                      className="px-6 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-full font-medium hover:from-emerald-600 hover:to-teal-600 transition-all duration-300 disabled:opacity-50"
+                    >
+                      {fingerprintSyncing ? 'Syncing...' : 'Sync from Machine'}
+                    </button>
+                  </div>
+
+                  {fingerprintSyncResult && (
+                    <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm">
+                      <p className="text-emerald-800 font-semibold">Sync Result</p>
+                      <p className="text-emerald-700">Created: {fingerprintSyncResult.created_records || 0}</p>
+                      <p className="text-emerald-700">Updated: {fingerprintSyncResult.updated_records || 0}</p>
+                      <p className="text-amber-700">Skipped: {fingerprintSyncResult.skipped_records || 0}</p>
+                      {fingerprintSyncResult.errors && fingerprintSyncResult.errors.length > 0 && (
+                        <div className="mt-2">
+                          <p className="text-red-700 font-semibold">Errors:</p>
+                          <ul className="list-disc list-inside text-red-600">
+                            {fingerprintSyncResult.errors.map((error, index) => (
+                              <li key={index}>{error}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </main>
 
       {/* Feedback Modal */}
@@ -912,6 +1189,18 @@ export default function AttendancePage() {
               </h3>
               <form onSubmit={handleMarkSubmit}>
                 <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Attendance Date
+                    </label>
+                    <input
+                      type="date"
+                      value={selectedMarkDate}
+                      onChange={(e) => setSelectedMarkDate(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      required
+                    />
+                  </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Status

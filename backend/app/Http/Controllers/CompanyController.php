@@ -10,6 +10,8 @@ use App\Models\Department;
 use App\Models\Designation;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\SmsGatewayService;
+use App\Services\WhatsappGatewayService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -81,6 +83,176 @@ class CompanyController extends Controller
                 'message' => $isOnline ? 'System is now online.' : 'System is now offline for non-admin users.',
                 'is_online' => $isOnline,
             ]);
+        }
+
+        public function getSmsGatewayConfig(Request $request)
+        {
+            $user = $request->user();
+            if (!$user || !$user->isSystemAdmin()) {
+                return response()->json([
+                    'message' => 'Only admins can view SMS gateway configuration.'
+                ], 403);
+            }
+
+            $service = app(SmsGatewayService::class);
+            return response()->json([
+                'config' => $service->sanitizedConfigForApi(),
+            ]);
+        }
+
+        public function updateSmsGatewayConfig(Request $request)
+        {
+            $user = $request->user();
+            if (!$user || !$user->isSystemAdmin()) {
+                return response()->json([
+                    'message' => 'Only admins can update SMS gateway configuration.'
+                ], 403);
+            }
+
+            $validated = $request->validate([
+                'enabled' => 'required|boolean',
+                'provider_name' => 'nullable|string|max:120',
+                'endpoint_url' => 'nullable|string|max:255',
+                'http_method' => 'nullable|in:GET,POST',
+                'auth_type' => 'nullable|in:none,bearer,basic,api_key',
+                'username' => 'nullable|string|max:120',
+                'password' => 'nullable|string|max:255',
+                'auth_token' => 'nullable|string|max:255',
+                'api_key_header' => 'nullable|string|max:120',
+                'api_key_value' => 'nullable|string|max:255',
+                'sender_id' => 'nullable|string|max:100',
+                'timeout_seconds' => 'nullable|integer|min:3|max:60',
+                'message_template' => 'nullable|string|max:500',
+            ]);
+
+            $service = app(SmsGatewayService::class);
+            $config = [
+                'enabled' => (bool) ($validated['enabled'] ?? false),
+                'provider_name' => trim((string) ($validated['provider_name'] ?? '')),
+                'endpoint_url' => trim((string) ($validated['endpoint_url'] ?? '')),
+                'http_method' => strtoupper((string) ($validated['http_method'] ?? 'POST')),
+                'auth_type' => strtolower((string) ($validated['auth_type'] ?? 'none')),
+                'username' => (string) ($validated['username'] ?? ''),
+                'password' => (string) ($validated['password'] ?? ''),
+                'auth_token' => (string) ($validated['auth_token'] ?? ''),
+                'api_key_header' => trim((string) ($validated['api_key_header'] ?? 'X-API-Key')),
+                'api_key_value' => (string) ($validated['api_key_value'] ?? ''),
+                'sender_id' => trim((string) ($validated['sender_id'] ?? '')),
+                'timeout_seconds' => (int) ($validated['timeout_seconds'] ?? 10),
+                'message_template' => trim((string) ($validated['message_template'] ?? '')),
+            ];
+            $service->saveConfig($config);
+
+            return response()->json([
+                'message' => 'SMS gateway configuration saved.',
+                'config' => $service->sanitizedConfigForApi(),
+            ]);
+        }
+
+        public function testSmsGateway(Request $request)
+        {
+            $user = $request->user();
+            if (!$user || !$user->isSystemAdmin()) {
+                return response()->json([
+                    'message' => 'Only admins can test SMS gateway.'
+                ], 403);
+            }
+
+            $validated = $request->validate([
+                'phone' => 'required|string|max:30',
+                'message' => 'nullable|string|max:500',
+            ]);
+
+            $service = app(SmsGatewayService::class);
+            $message = trim((string) ($validated['message'] ?? 'Test SMS from Global Capital system.'));
+            $result = $service->send((string) $validated['phone'], $message);
+
+            return response()->json($result, $result['ok'] ? 200 : 422);
+        }
+
+        public function getWhatsappGatewayConfig(Request $request)
+        {
+            $user = $request->user();
+            if (!$user || !$user->isSystemAdmin()) {
+                return response()->json([
+                    'message' => 'Only admins can view WhatsApp gateway configuration.'
+                ], 403);
+            }
+
+            $service = app(WhatsappGatewayService::class);
+            return response()->json([
+                'config' => $service->sanitizedConfigForApi(),
+            ]);
+        }
+
+        public function updateWhatsappGatewayConfig(Request $request)
+        {
+            $user = $request->user();
+            if (!$user || !$user->isSystemAdmin()) {
+                return response()->json([
+                    'message' => 'Only admins can update WhatsApp gateway configuration.'
+                ], 403);
+            }
+
+            $validated = $request->validate([
+                'enabled' => 'required|boolean',
+                'provider_name' => 'nullable|string|max:120',
+                'endpoint_url' => 'nullable|string|max:255',
+                'http_method' => 'nullable|in:GET,POST',
+                'auth_type' => 'nullable|in:none,bearer,basic,api_key',
+                'username' => 'nullable|string|max:120',
+                'password' => 'nullable|string|max:255',
+                'auth_token' => 'nullable|string|max:255',
+                'api_key_header' => 'nullable|string|max:120',
+                'api_key_value' => 'nullable|string|max:255',
+                'sender_id' => 'nullable|string|max:100',
+                'timeout_seconds' => 'nullable|integer|min:3|max:60',
+                'message_template' => 'nullable|string|max:500',
+            ]);
+
+            $service = app(WhatsappGatewayService::class);
+            $config = [
+                'enabled' => (bool) ($validated['enabled'] ?? false),
+                'provider_name' => trim((string) ($validated['provider_name'] ?? '')),
+                'endpoint_url' => trim((string) ($validated['endpoint_url'] ?? '')),
+                'http_method' => strtoupper((string) ($validated['http_method'] ?? 'POST')),
+                'auth_type' => strtolower((string) ($validated['auth_type'] ?? 'none')),
+                'username' => (string) ($validated['username'] ?? ''),
+                'password' => (string) ($validated['password'] ?? ''),
+                'auth_token' => (string) ($validated['auth_token'] ?? ''),
+                'api_key_header' => trim((string) ($validated['api_key_header'] ?? 'X-API-Key')),
+                'api_key_value' => (string) ($validated['api_key_value'] ?? ''),
+                'sender_id' => trim((string) ($validated['sender_id'] ?? '')),
+                'timeout_seconds' => (int) ($validated['timeout_seconds'] ?? 10),
+                'message_template' => trim((string) ($validated['message_template'] ?? '')),
+            ];
+            $service->saveConfig($config);
+
+            return response()->json([
+                'message' => 'WhatsApp gateway configuration saved.',
+                'config' => $service->sanitizedConfigForApi(),
+            ]);
+        }
+
+        public function testWhatsappGateway(Request $request)
+        {
+            $user = $request->user();
+            if (!$user || !$user->isSystemAdmin()) {
+                return response()->json([
+                    'message' => 'Only admins can test WhatsApp gateway.'
+                ], 403);
+            }
+
+            $validated = $request->validate([
+                'phone' => 'required|string|max:30',
+                'message' => 'nullable|string|max:500',
+            ]);
+
+            $service = app(WhatsappGatewayService::class);
+            $message = trim((string) ($validated['message'] ?? 'Test WhatsApp message from Global Capital system.'));
+            $result = $service->send((string) $validated['phone'], $message);
+
+            return response()->json($result, $result['ok'] ? 200 : 422);
         }
 
     private const DEFAULT_SUPER_ADMIN_EMAIL = 'superadmin@softcodelk.com';

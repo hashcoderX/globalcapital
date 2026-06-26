@@ -1,0 +1,82 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/collections/page.tsx
+@@
+-          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+-            <div className="rounded-xl bg-white/85 border border-white shadow-sm p-4">
+-              <p className="text-xs uppercase tracking-wide text-slate-500">Collection Records</p>
+-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{displayRecordCount}</p>
+-            </div>
+-            <div className="rounded-xl bg-white/85 border border-white shadow-sm p-4">
+-              <p className="text-xs uppercase tracking-wide text-slate-500">Total Installment</p>
+-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{displayInstallmentTotal.toFixed(2)}</p>
+-            </div>
+-            <div className="rounded-xl bg-white/85 border border-white shadow-sm p-4">
+-              <p className="text-xs uppercase tracking-wide text-slate-500">With Due Date</p>
+-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{displayDueDateCount}</p>
+-            </div>
+-          </div>
++          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
++            {visibleSummaryCards.map((card) => (
++              <div key={card.key} className="relative rounded-xl bg-white/85 border border-white shadow-sm p-4">
++                <button
++                  type="button"
++                  onClick={() => {
++                    void hideWidget(card.key);
++                  }}
++                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                  aria-label={`Hide ${card.label} card`}
++                >
++                  ×
++                </button>
++                <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
++                <p className="text-2xl font-extrabold text-slate-900 mt-1">{card.value}</p>
++              </div>
++            ))}
++          </div>
++          {visibleSummaryCards.length === 0 && (
++            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
++              All summary cards are hidden. Restore from dashboard with admin approval.
++            </div>
++          )}
+         </div>
+ 
+         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+-          {cards.map((card) => (
++          {visibleCards.map((card) => (
+             <button
+               key={card.id}
+               type="button"
+@@
+             >
++              <span
++                role="button"
++                tabIndex={0}
++                onClick={(event) => {
++                  event.stopPropagation();
++                  void hideWidget(card.widgetKey);
++                }}
++                onKeyDown={(event) => {
++                  if (event.key === 'Enter' || event.key === ' ') {
++                    event.preventDefault();
++                    event.stopPropagation();
++                    void hideWidget(card.widgetKey);
++                  }
++                }}
++                className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                aria-label={`Hide ${card.title} card`}
++              >
++                ×
++              </span>
+               <div className={`absolute -right-6 -top-6 h-20 w-20 rounded-full bg-gradient-to-r ${card.color} opacity-20 blur-xl`}></div>
+               <div className={`inline-flex h-10 w-10 items-center justify-center rounded-xl text-white bg-gradient-to-r ${card.color}`}>
+                 {card.id === 'center' ? 'C' : card.id === 'route' ? 'R' : card.id === 'today' ? 'T' : card.id === 'next' ? 'N' : 'O'}
+@@
+             </button>
+           ))}
+         </div>
++        {visibleCards.length === 0 && (
++          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
++            All collection mode cards are hidden. Restore from dashboard with admin approval.
++          </div>
++        )}
+*** End Patch

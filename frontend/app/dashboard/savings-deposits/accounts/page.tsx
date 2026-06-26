@@ -102,6 +102,7 @@ export default function SavingsOpenAccountPage() {
   const [openingAccount, setOpeningAccount] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [detailsRow, setDetailsRow] = useState<SavingsAccountRow | null>(null);
 
   const [accounts, setAccounts] = useState<SavingsAccountRow[]>([]);
   const [accountCustomerNo, setAccountCustomerNo] = useState('');
@@ -112,6 +113,7 @@ export default function SavingsOpenAccountPage() {
   const [interestType, setInterestType] = useState<SavingsInterestType>(DEFAULT_INTEREST_BY_ACCOUNT.savings);
   const [openingDeposit, setOpeningDeposit] = useState('0');
   const [interestRate, setInterestRate] = useState('4.5');
+  const [interestCalcMonths, setInterestCalcMonths] = useState('12');
   const [openedAt, setOpenedAt] = useState('');
   const [resolvedCustomer, setResolvedCustomer] = useState<CustomerSummary | null>(null);
   const widgetPrefix = 'savings_accounts_widget_';
@@ -182,6 +184,28 @@ export default function SavingsOpenAccountPage() {
     return { total: accounts.length, active, totalBalance };
   }, [accounts]);
 
+  const interestProjection = useMemo(() => {
+    const principal = Number(openingDeposit);
+    const annualRatePercent = Number(interestRate);
+    const periodMonthsRaw = Number(interestCalcMonths);
+
+    const normalizedPrincipal = Number.isFinite(principal) && principal > 0 ? principal : 0;
+    const normalizedRate = Number.isFinite(annualRatePercent) && annualRatePercent > 0 ? annualRatePercent : 0;
+    const normalizedMonths = Number.isFinite(periodMonthsRaw) ? Math.min(Math.max(periodMonthsRaw, 1), 600) : 12;
+
+    const years = normalizedMonths / 12;
+    const earnedInterest = normalizedPrincipal * (normalizedRate / 100) * years;
+    const maturityAmount = normalizedPrincipal + earnedInterest;
+    const monthlyInterest = normalizedMonths > 0 ? earnedInterest / normalizedMonths : 0;
+
+    return {
+      months: normalizedMonths,
+      earnedInterest,
+      maturityAmount,
+      monthlyInterest,
+    };
+  }, [openingDeposit, interestRate, interestCalcMonths]);
+
   const canProceedStep1 = Boolean(resolvedCustomer);
   const canProceedStep2 =
     Number.isFinite(Number(openingDeposit)) &&
@@ -243,8 +267,25 @@ export default function SavingsOpenAccountPage() {
       const response = await axios.get(`/api/customers/by-code/${encodeURIComponent(code)}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
-      setResolvedCustomer(response.data as CustomerSummary);
-      setAccountCustomerNo(String(response.data?.customer_code || code));
+
+      const payload = response.data as {
+        found?: boolean;
+        data?: CustomerSummary | null;
+      };
+      const customer = payload?.data ?? (response.data as CustomerSummary | null);
+      const found = typeof payload?.found === 'boolean'
+        ? payload.found
+        : Boolean(customer && (customer.id || customer.customer_code));
+
+      if (!found || !customer) {
+        setResolvedCustomer(null);
+        setErrorMessage('Customer not found. Register the customer first.');
+        setSuccessMessage('');
+        return;
+      }
+
+      setResolvedCustomer(customer);
+      setAccountCustomerNo(String(customer.customer_code || code));
       setSuccessMessage('Customer verified successfully.');
       setErrorMessage('');
       setActiveStep(2);
@@ -322,8 +363,10 @@ export default function SavingsOpenAccountPage() {
 
   const openAccount = async () => {
     if (!token) return;
+    const resolvedCustomerId = Number(resolvedCustomer?.id || 0);
+    const hasResolvedCustomerId = Number.isInteger(resolvedCustomerId) && resolvedCustomerId > 0;
     const customerNo = accountCustomerNo.trim() || String(resolvedCustomer?.customer_code || '').trim();
-    if (!customerNo) {
+    if (!hasResolvedCustomerId && !customerNo) {
       setErrorMessage('Select a customer before opening an account.');
       setActiveStep(1);
       return;
@@ -348,7 +391,8 @@ export default function SavingsOpenAccountPage() {
       await axios.post(
         '/api/savings-accounts',
         {
-          customer_no: customerNo,
+          customer_id: hasResolvedCustomerId ? resolvedCustomerId : undefined,
+          customer_no: customerNo || undefined,
           account_type: accountType,
           interest_type: interestType,
           opening_deposit: depositValue,
@@ -364,7 +408,14 @@ export default function SavingsOpenAccountPage() {
       await loadAccounts(token);
     } catch (error: unknown) {
       if (axios.isAxiosError(error)) {
-        setErrorMessage(String(error.response?.data?.message || 'Failed to open account.'));
+        const message =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : 'Failed to open account.';
+        const firstValidationError = Object.values(error.response?.data?.errors || {})
+          .flat()
+          .find((value) => typeof value === 'string');
+        setErrorMessage(firstValidationError ? `${message} ${firstValidationError}` : message);
       } else {
         setErrorMessage('Failed to open account.');
       }
@@ -384,6 +435,7 @@ export default function SavingsOpenAccountPage() {
     { key: 'interest', label: 'Interest' },
     { key: 'rate', label: 'Rate' },
     { key: 'balance', label: 'Balance' },
+    { key: 'details', label: 'Details' },
   ] as const;
   const visibleTableColumns = tableColumns.filter(
     (column) => !hiddenWidgetKeys.has(`${widgetPrefix}col_${column.key}`)
@@ -717,7 +769,7 @@ export default function SavingsOpenAccountPage() {
                     </div>
                     <div>
                       <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 mb-2">
-                        Interest rate (%)
+                        Interest rate (% per year)
                       </label>
                       <input
                         value={interestRate}
@@ -881,6 +933,36 @@ export default function SavingsOpenAccountPage() {
                   <p className="text-xl font-extrabold text-orange-900 mt-1 tabular-nums">LKR {amount(openingDeposit)}</p>
                   <p className="text-xs text-slate-600 mt-1">@ {interestRate}% p.a.</p>
                 </div>
+                <div className="rounded-xl border border-orange-100 bg-white p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] font-bold uppercase text-orange-700">Interest calculator</p>
+                    <span className="text-[10px] font-semibold text-slate-500">Simple estimate</span>
+                  </div>
+                  <div className="mt-2">
+                    <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Period (months)</label>
+                    <input
+                      value={interestCalcMonths}
+                      onChange={(e) => setInterestCalcMonths(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-orange-200 bg-orange-50/50 px-2.5 py-1.5 text-sm font-semibold text-slate-900"
+                      placeholder="12"
+                    />
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg bg-slate-50 px-2.5 py-2">
+                      <p className="text-[10px] uppercase font-bold text-slate-500">Est. interest</p>
+                      <p className="mt-1 font-bold text-slate-900 tabular-nums">LKR {amount(interestProjection.earnedInterest)}</p>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2.5 py-2">
+                      <p className="text-[10px] uppercase font-bold text-slate-500">Maturity</p>
+                      <p className="mt-1 font-bold text-emerald-700 tabular-nums">LKR {amount(interestProjection.maturityAmount)}</p>
+                    </div>
+                    <div className="col-span-2 rounded-lg bg-amber-50 px-2.5 py-2">
+                      <p className="text-[10px] uppercase font-bold text-amber-700">Avg monthly interest</p>
+                      <p className="mt-1 font-bold text-amber-900 tabular-nums">LKR {amount(interestProjection.monthlyInterest)}</p>
+                      <p className="mt-1 text-[10px] text-slate-500">Based on {interestProjection.months} month(s) at {interestRate}% per annum.</p>
+                    </div>
+                  </div>
+                </div>
               </div>
               <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
                 Step {activeStep} of 3 — complete each section before submitting.
@@ -993,7 +1075,20 @@ export default function SavingsOpenAccountPage() {
                           return <td key={column.key} className="py-3 px-4 text-slate-700">{formatInterestTypeLabel(row.interest_type)}</td>;
                         }
                         if (column.key === 'rate') {
-                          return <td key={column.key} className="py-3 px-4 text-right tabular-nums font-medium">{amount(row.interest_rate)}%</td>;
+                          return <td key={column.key} className="py-3 px-4 text-right tabular-nums font-medium text-black">{amount(row.interest_rate)}%</td>;
+                        }
+                        if (column.key === 'details') {
+                          return (
+                            <td key={column.key} className="py-3 px-4 text-right">
+                              <button
+                                type="button"
+                                onClick={() => setDetailsRow(row)}
+                                className="inline-flex items-center rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-800 hover:bg-orange-100"
+                              >
+                                More details
+                              </button>
+                            </td>
+                          );
                         }
                         return <td key={column.key} className="py-3 px-4 text-right tabular-nums font-bold text-emerald-800">{amount(row.balance)}</td>;
                       })}
@@ -1004,6 +1099,69 @@ export default function SavingsOpenAccountPage() {
             </div>
           )}
         </div>
+        ) : null}
+
+        {detailsRow ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4"
+            onClick={() => setDetailsRow(null)}
+          >
+            <div
+              className="w-full max-w-xl rounded-3xl border border-orange-100 bg-white shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-orange-100 px-5 py-4">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-orange-700">Account details</p>
+                  <h3 className="mt-1 text-lg font-bold text-slate-900">{detailsRow.account_number || 'Savings account'}</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDetailsRow(null)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 text-slate-500 hover:bg-rose-50 hover:text-rose-700"
+                  aria-label="Close details modal"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="space-y-3 px-5 py-4">
+                <div className="rounded-xl border border-orange-100 bg-orange-50/40 px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase text-slate-500">Customer</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {detailsRow.customer?.first_name || '—'} {detailsRow.customer?.last_name || ''}
+                  </p>
+                  <p className="text-xs text-slate-600">{detailsRow.customer?.customer_code || 'No customer code'}</p>
+                </div>
+
+                <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {[
+                    ['Status', String(detailsRow.status || 'active')],
+                    ['Account type', formatAccountTypeLabel(detailsRow.account_type)],
+                    ['Interest type', formatInterestTypeLabel(detailsRow.interest_type)],
+                    ['Interest rate', `${amount(detailsRow.interest_rate)}%`],
+                    ['Opening deposit', `LKR ${amount(detailsRow.opening_deposit)}`],
+                    ['Current balance', `LKR ${amount(detailsRow.balance)}`],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <dt className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</dt>
+                      <dd className="mt-1 text-sm font-semibold text-slate-900">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setDetailsRow(null)}
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         ) : null}
       </div>
     </div>

@@ -14,15 +14,88 @@ use App\Models\MicrofinanceGroup;
 use App\Models\MicrofinanceLoanRequest;
 use App\Models\MicrofinancePenaltySetting;
 use App\Models\MicrofinanceRoute;
+use App\Models\Role;
 use App\Models\User;
+use App\Models\UserNotification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class LoanRequestController extends Controller
 {
+    /**
+     * @return array<int>
+     */
+    private function approvalNotificationRecipientIds(?int $branchId, int $actorUserId): array
+    {
+        $users = User::query()
+            ->with(['designation:id,name', 'roles:id,name'])
+            ->where('id', '!=', $actorUserId)
+            ->get();
+
+        $recipientIds = [];
+
+        foreach ($users as $user) {
+            if (!$this->hasLoanApprovalAccess($user)) {
+                continue;
+            }
+
+            $isSystemAdmin = method_exists($user, 'isSystemAdmin') && $user->isSystemAdmin();
+            if (!$isSystemAdmin && $branchId !== null && (int) ($user->branch_id ?? 0) !== (int) $branchId) {
+                continue;
+            }
+
+            $recipientIds[] = (int) $user->id;
+        }
+
+        return array_values(array_unique($recipientIds));
+    }
+
+    private function notifyLoanRequestCreated(MicrofinanceLoanRequest $loanRequest, Request $request): void
+    {
+        $actorUserId = (int) ($request->user()?->id ?? 0);
+        if ($actorUserId <= 0) {
+            return;
+        }
+
+        $recipientIds = $this->approvalNotificationRecipientIds(
+            $loanRequest->branch_id !== null ? (int) $loanRequest->branch_id : null,
+            $actorUserId
+        );
+
+        if (empty($recipientIds)) {
+            return;
+        }
+
+        $customerName = trim((string) ($loanRequest->customer_name ?? 'Customer'));
+        $loanCode = trim((string) ($loanRequest->loan_code ?? ''));
+        $reference = $loanCode !== '' ? $loanCode : ('MF-' . (int) $loanRequest->id);
+        $requestedAmount = number_format((float) ($loanRequest->loan_amount ?? 0), 2, '.', ',');
+
+        foreach ($recipientIds as $recipientId) {
+            UserNotification::query()->create([
+                'user_id' => $recipientId,
+                'title' => 'New Microfinance Loan Request',
+                'message' => sprintf('%s submitted %s for %s LKR. Review approval queue.', $customerName, $reference, $requestedAmount),
+                'type' => 'microfinance_loan_request',
+                'is_read' => false,
+                'is_important' => true,
+                'action_url' => '/dashboard/microfinance/loans/approvals',
+                'meta' => [
+                    'loan_request_id' => (int) $loanRequest->id,
+                    'loan_code' => $reference,
+                    'customer_no' => (string) ($loanRequest->customer_no ?? ''),
+                    'status' => (string) ($loanRequest->status ?? 'requested'),
+                ],
+            ]);
+        }
+    }
+
     private function buildBaseWalletNo(int $employeeId): string
     {
         return 'EW' . str_pad((string) $employeeId, 6, '0', STR_PAD_LEFT);
@@ -1317,6 +1390,109 @@ class LoanRequestController extends Controller
         ]);
     }
 
+    private function buildCustomerPortalEmail(string $customerCode, int $customerId): string
+    {
+        $base = strtolower(trim($customerCode));
+        $base = preg_replace('/[^a-z0-9]+/', '.', $base ?? '') ?? '';
+        $base = trim($base, '.');
+        if ($base === '') {
+            $base = 'customer.' . $customerId;
+        }
+
+        $domain = 'customers.globalcapital.local';
+        $email = $base . '@' . $domain;
+        $suffix = 1;
+
+        while (User::query()->whereRaw('LOWER(email) = ?', [strtolower($email)])->exists()) {
+            $email = $base . '.' . $suffix . '@' . $domain;
+            $suffix++;
+        }
+
+        return $email;
+    }
+
+    /**
+     * @return array{is_new_account:bool,email:string,password:?string,linked_user_id:int}|null
+     */
+    private function ensureCustomerPortalAccess(Customer $customer, int $assignedByUserId): ?array
+    {
+        $hasCustomerUserColumn = Schema::hasColumn('customers', 'user_id');
+        if ($hasCustomerUserColumn && (int) ($customer->user_id ?? 0) > 0) {
+            $existingLinkedUser = User::query()->find((int) $customer->user_id);
+            if ($existingLinkedUser) {
+                return null;
+            }
+        }
+
+        $existingByEmail = null;
+        if (!empty($customer->email)) {
+            $existingByEmail = User::query()
+                ->whereRaw('LOWER(email) = ?', [strtolower((string) $customer->email)])
+                ->first();
+        }
+
+        if ($existingByEmail) {
+            if ($hasCustomerUserColumn) {
+                $customer->user_id = (int) $existingByEmail->id;
+            }
+            $customer->save();
+
+            return [
+                'is_new_account' => false,
+                'email' => (string) $existingByEmail->email,
+                'password' => null,
+                'linked_user_id' => (int) $existingByEmail->id,
+            ];
+        }
+
+        $email = $this->buildCustomerPortalEmail((string) ($customer->customer_code ?? ''), (int) $customer->id);
+        $phoneDigits = preg_replace('/\D+/', '', (string) ($customer->phone ?? '')) ?? '';
+        $passwordPlain = 'Cus@' . ($phoneDigits !== '' ? substr($phoneDigits, -6) : Str::upper(Str::random(6)));
+
+        $userName = trim(((string) $customer->first_name) . ' ' . ((string) $customer->last_name));
+        if ($userName === '') {
+            $userName = 'Customer ' . (string) ($customer->customer_code ?: $customer->id);
+        }
+
+        $portalUser = User::query()->create([
+            'name' => $userName,
+            'email' => $email,
+            'password' => Hash::make($passwordPlain),
+            'branch_id' => (int) ($customer->branch_id ?? 0) ?: null,
+        ]);
+
+        if (Schema::hasTable('roles') && Schema::hasTable('user_roles')) {
+            $customerRole = Role::query()->firstOrCreate(
+                ['name' => 'Customer Portal'],
+                ['description' => 'Customer login access for loan and savings visibility']
+            );
+
+            if ($assignedByUserId > 0) {
+                $portalUser->roles()->syncWithoutDetaching([
+                    $customerRole->id => [
+                        'assigned_at' => now(),
+                        'assigned_by' => $assignedByUserId,
+                    ],
+                ]);
+            }
+        }
+
+        if (empty($customer->email)) {
+            $customer->email = $email;
+        }
+        if ($hasCustomerUserColumn) {
+            $customer->user_id = (int) $portalUser->id;
+        }
+        $customer->save();
+
+        return [
+            'is_new_account' => true,
+            'email' => $email,
+            'password' => $passwordPlain,
+            'linked_user_id' => (int) $portalUser->id,
+        ];
+    }
+
     public function store(Request $request)
     {
         $validated = $request->validate([
@@ -1337,6 +1513,9 @@ class LoanRequestController extends Controller
             'nic' => 'required|string|max:100',
             'address' => 'required|string',
             'contact_no' => 'required|string|max:100',
+            'bank_name' => 'nullable|string|max:190',
+            'bank_branch' => 'nullable|string|max:190',
+            'bank_account_no' => 'nullable|string|max:80',
             'loan_amount' => 'required|numeric|min:0',
             'reason' => 'nullable|string',
             'refund_option' => 'required|in:day,week,month',
@@ -1409,6 +1588,9 @@ class LoanRequestController extends Controller
         $totalCharges = (float)($validated['document_charges'] ?? 0)
             + (float)($validated['stamp_charges'] ?? 0)
             + (float)($validated['insurance_charges'] ?? 0);
+        $hasBankNameColumn = Schema::hasColumn('mf_loan_requests', 'bank_name');
+        $hasBankBranchColumn = Schema::hasColumn('mf_loan_requests', 'bank_branch');
+        $hasBankAccountNoColumn = Schema::hasColumn('mf_loan_requests', 'bank_account_no');
 
         if ($validated['charge_payment_mode'] === 'deduct_from_loan' && $totalCharges > $loanAmount) {
             return response()->json([
@@ -1428,7 +1610,8 @@ class LoanRequestController extends Controller
                 ->first();
         }
 
-        $loanRequest = DB::transaction(function () use ($request, $validated, $loanAmount, $totalCharges, $managerEmployee, $scope, $routeId, $centerId, $groupId) {
+        $customerPortalCredentials = null;
+        $loanRequest = DB::transaction(function () use ($request, $validated, $loanAmount, $totalCharges, $managerEmployee, $scope, $routeId, $centerId, $groupId, &$customerPortalCredentials, $hasBankNameColumn, $hasBankBranchColumn, $hasBankAccountNoColumn) {
             $resolvedBranchId = $validated['branch_id']
                 ?? optional($managerEmployee)->branch_id
                 ?? optional($request->user())->branch_id;
@@ -1446,7 +1629,7 @@ class LoanRequestController extends Controller
             $branchId = $resolvedBranchId ?? optional($request->user())->branch_id ?? 1;
             $createdBy = optional($request->user())->id ?? 1;
 
-            $loanRequest = MicrofinanceLoanRequest::create([
+            $loanPayload = [
                 'branch_id' => $resolvedBranchId,
                 'loan_scope' => $scope,
                 'mf_route_id' => $routeId,
@@ -1481,12 +1664,23 @@ class LoanRequestController extends Controller
                 'loan_request_date' => $validated['loan_request_date'],
                 'status' => 'requested',
                 'created_by' => optional($request->user())->id,
-            ]);
+            ];
+            if ($hasBankNameColumn) {
+                $loanPayload['bank_name'] = !empty($validated['bank_name']) ? $validated['bank_name'] : null;
+            }
+            if ($hasBankBranchColumn) {
+                $loanPayload['bank_branch'] = !empty($validated['bank_branch']) ? $validated['bank_branch'] : null;
+            }
+            if ($hasBankAccountNoColumn) {
+                $loanPayload['bank_account_no'] = !empty($validated['bank_account_no']) ? $validated['bank_account_no'] : null;
+            }
+            $loanRequest = MicrofinanceLoanRequest::create($loanPayload);
 
             $existingCustomer = Customer::query()
                 ->where('nic_passport', $validated['nic'])
                 ->first();
 
+            $customerRecord = null;
             if ($existingCustomer) {
                 $existingCustomer->update([
                     'customer_code' => $validated['customer_code'] !== '' ? $validated['customer_code'] : $existingCustomer->customer_code,
@@ -1497,6 +1691,7 @@ class LoanRequestController extends Controller
                     'current_address' => $validated['address'],
                     'status' => 'active',
                 ]);
+                $customerRecord = $existingCustomer->fresh();
             } else {
                 $safeNic = strtolower((string)$validated['nic']);
                 $safeNic = preg_replace('/[^a-z0-9]/', '', $safeNic);
@@ -1504,7 +1699,7 @@ class LoanRequestController extends Controller
                     $safeNic = 'customer' . $loanRequest->id;
                 }
 
-                Customer::create([
+                $customerRecord = Customer::create([
                     'tenant_id' => $tenantId,
                     'branch_id' => $branchId,
                     'customer_code' => $validated['customer_code'],
@@ -1520,6 +1715,10 @@ class LoanRequestController extends Controller
                     'created_by' => $createdBy,
                     'status' => 'active',
                 ]);
+            }
+
+            if ($customerRecord) {
+                $customerPortalCredentials = $this->ensureCustomerPortalAccess($customerRecord, (int) $createdBy);
             }
 
             foreach ($validated['guarantors'] ?? [] as $guarantor) {
@@ -1542,16 +1741,25 @@ class LoanRequestController extends Controller
             return $loanRequest;
         });
 
-        return response()->json(
-            $loanRequest->load([
-                'route:id,name,code',
-                'center:id,name,code',
-                'group:id,name,code',
-                'guarantors',
-                'documents',
-            ]),
-            201
-        );
+        try {
+            $this->notifyLoanRequestCreated($loanRequest, $request);
+        } catch (\Throwable $exception) {
+            Log::warning('Failed to create microfinance approval notifications', [
+                'loan_request_id' => (int) $loanRequest->id,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        $payload = $loanRequest->load([
+            'route:id,name,code',
+            'center:id,name,code',
+            'group:id,name,code',
+            'guarantors',
+            'documents',
+        ])->toArray();
+        $payload['customer_portal_credentials'] = $customerPortalCredentials;
+
+        return response()->json($payload, 201);
     }
 
     public function update(Request $request, MicrofinanceLoanRequest $loanRequest)
@@ -1575,6 +1783,9 @@ class LoanRequestController extends Controller
             'nick_name' => 'nullable|string|max:255',
             'address' => 'required|string',
             'contact_no' => 'required|string|max:100',
+            'bank_name' => 'nullable|string|max:190',
+            'bank_branch' => 'nullable|string|max:190',
+            'bank_account_no' => 'nullable|string|max:80',
             'reason' => 'nullable|string',
             'loan_amount' => 'required|numeric|min:0',
             'refund_option' => 'required|in:day,week,month',
@@ -1637,6 +1848,9 @@ class LoanRequestController extends Controller
         $totalCharges = (float) ($validated['document_charges'] ?? 0)
             + (float) ($validated['stamp_charges'] ?? 0)
             + (float) ($validated['insurance_charges'] ?? 0);
+        $hasBankNameColumn = Schema::hasColumn('mf_loan_requests', 'bank_name');
+        $hasBankBranchColumn = Schema::hasColumn('mf_loan_requests', 'bank_branch');
+        $hasBankAccountNoColumn = Schema::hasColumn('mf_loan_requests', 'bank_account_no');
 
         if ($validated['charge_payment_mode'] === 'deduct_from_loan' && $totalCharges > $loanAmount) {
             return response()->json([
@@ -1644,7 +1858,7 @@ class LoanRequestController extends Controller
             ], 422);
         }
 
-        $loanRequest->fill([
+        $updatePayload = [
             'loan_scope' => $scope,
             'mf_route_id' => $routeId,
             'mf_center_id' => $centerId,
@@ -1676,7 +1890,17 @@ class LoanRequestController extends Controller
                 ? max($loanAmount - $totalCharges, 0)
                 : $loanAmount,
             'loan_request_date' => $validated['loan_request_date'] ?? $loanRequest->loan_request_date,
-        ]);
+        ];
+        if ($hasBankNameColumn) {
+            $updatePayload['bank_name'] = array_key_exists('bank_name', $validated) ? ($validated['bank_name'] ?? null) : $loanRequest->bank_name;
+        }
+        if ($hasBankBranchColumn) {
+            $updatePayload['bank_branch'] = array_key_exists('bank_branch', $validated) ? ($validated['bank_branch'] ?? null) : $loanRequest->bank_branch;
+        }
+        if ($hasBankAccountNoColumn) {
+            $updatePayload['bank_account_no'] = array_key_exists('bank_account_no', $validated) ? ($validated['bank_account_no'] ?? null) : $loanRequest->bank_account_no;
+        }
+        $loanRequest->fill($updatePayload);
 
         if (array_key_exists('loan_end_date', $validated)) {
             $loanRequest->loan_end_date = $validated['loan_end_date'] ?? null;

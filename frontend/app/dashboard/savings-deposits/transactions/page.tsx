@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import axios from 'axios';
 import { ArrowLeft, Wallet, TrendingDown, TrendingUp } from 'lucide-react';
 import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
@@ -38,6 +38,7 @@ function amount(v: unknown): string {
 
 export default function SavingsTransactionsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [token, setToken] = useState('');
   const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
   const [widgetNotice, setWidgetNotice] = useState('');
@@ -162,6 +163,15 @@ export default function SavingsTransactionsPage() {
     if (!token) return;
     loadAccounts(token);
   }, [token]);
+
+  useEffect(() => {
+    const accountIdFromQuery = Number(searchParams.get('account_id') || 0);
+    if (!Number.isInteger(accountIdFromQuery) || accountIdFromQuery <= 0) {
+      return;
+    }
+
+    setSelectedAccountId(String(accountIdFromQuery));
+  }, [searchParams]);
 
   useEffect(() => {
     if (!token || !selectedAccountId) {

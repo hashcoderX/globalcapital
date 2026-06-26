@@ -1,0 +1,63 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/reports/arrears/page.tsx
+@@
+   const summary = useMemo(() => {
+@@
+   }, [filteredRows]);
++
++  const summaryCards = [
++    {
++      key: 'mf_arrears_widget_summary_accounts',
++      label: 'Accounts',
++      value: String(summary.accountCount),
++      valueClass: 'text-slate-900',
++    },
++    {
++      key: 'mf_arrears_widget_summary_overdue_arrears',
++      label: 'Overdue / Arrears',
++      value: `${summary.overdueCount} / ${summary.arrearsCount}`,
++      valueClass: 'text-amber-700',
++    },
++    {
++      key: 'mf_arrears_widget_summary_pending',
++      label: 'Pending Amount',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending),
++      valueClass: 'text-rose-700',
++    },
++    {
++      key: 'mf_arrears_widget_summary_arrears_amount',
++      label: 'Arrears Amount',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.arrears),
++      valueClass: 'text-orange-700',
++    },
++    {
++      key: 'mf_arrears_widget_summary_paid_amount',
++      label: 'Paid Amount',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.paid),
++      valueClass: 'text-emerald-700',
++    },
++  ];
++
++  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
++  const showActionToolbar = !hiddenWidgetKeys.has('mf_arrears_widget_action_toolbar');
++
++  const tableColumns = [
++    { key: 'loanId', label: 'Loan ID' },
++    { key: 'loanCode', label: 'Loan Code' },
++    { key: 'customer', label: 'Customer' },
++    { key: 'fieldOfficer', label: 'Field Officer' },
++    { key: 'dueDate', label: 'Due Date' },
++    { key: 'overdueDays', label: 'Overdue Days' },
++    { key: 'totalPayable', label: 'Total Payable' },
++    { key: 'paid', label: 'Paid' },
++    { key: 'pending', label: 'Pending' },
++    { key: 'arrears', label: 'Arrears' },
++    { key: 'status', label: 'Status' },
++  ];
++  const visibleTableColumns = tableColumns.filter(
++    (column) => !hiddenWidgetKeys.has(`mf_arrears_widget_col_${column.key}`)
++  );
+@@
+-  if (!token || loading) {
++  if (!token || loading || loadingWidgets) {
+*** End Patch

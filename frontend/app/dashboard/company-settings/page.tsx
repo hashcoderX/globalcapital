@@ -17,6 +17,8 @@ import {
   Globe,
   Mail,
   MapPin,
+  MessageCircle,
+  MessageSquare,
   Pencil,
   Phone,
   Power,
@@ -31,7 +33,7 @@ import {
 import CompanyAccountingPanel from '@/app/components/accounting/CompanyAccountingPanel';
 import { resolveStorageAssetUrl } from '@/lib/api';
 
-type SettingsSection = 'profile' | 'accounting' | 'templates' | 'holidays' | 'system';
+type SettingsSection = 'profile' | 'accounting' | 'templates' | 'holidays' | 'system' | 'sms' | 'whatsapp';
 
 const inputClass =
   'w-full rounded-xl border border-cyan-200/80 bg-white px-3.5 py-2.5 text-sm text-black shadow-sm transition focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-200/80 placeholder:text-slate-400 [color-scheme:light]';
@@ -44,6 +46,8 @@ const SECTION_TABS: { key: SettingsSection; label: string; icon: typeof Building
   { key: 'templates', label: 'Document templates', icon: FileText },
   { key: 'holidays', label: 'Global holidays', icon: CalendarDays },
   { key: 'system', label: 'System admin', icon: Settings },
+  { key: 'sms', label: 'SMS gateway', icon: MessageSquare },
+  { key: 'whatsapp', label: 'WhatsApp gateway', icon: MessageCircle },
 ];
 
 type Company = {
@@ -114,6 +118,46 @@ export default function CompanySettingsPage() {
   const [systemOnline, setSystemOnline] = useState(true);
   const [systemStatusLoading, setSystemStatusLoading] = useState(false);
   const [updatingSystemStatus, setUpdatingSystemStatus] = useState(false);
+  const [smsConfigLoading, setSmsConfigLoading] = useState(false);
+  const [smsConfigSaving, setSmsConfigSaving] = useState(false);
+  const [smsTesting, setSmsTesting] = useState(false);
+  const [smsConfig, setSmsConfig] = useState({
+    enabled: false,
+    provider_name: '',
+    endpoint_url: '',
+    http_method: 'POST',
+    auth_type: 'none',
+    username: '',
+    password: '',
+    auth_token: '',
+    api_key_header: 'X-API-Key',
+    api_key_value: '',
+    sender_id: '',
+    timeout_seconds: 10,
+    message_template: '',
+  });
+  const [smsTestPhone, setSmsTestPhone] = useState('');
+  const [smsTestMessage, setSmsTestMessage] = useState('');
+  const [whatsappConfigLoading, setWhatsappConfigLoading] = useState(false);
+  const [whatsappConfigSaving, setWhatsappConfigSaving] = useState(false);
+  const [whatsappTesting, setWhatsappTesting] = useState(false);
+  const [whatsappConfig, setWhatsappConfig] = useState({
+    enabled: false,
+    provider_name: '',
+    endpoint_url: '',
+    http_method: 'POST',
+    auth_type: 'none',
+    username: '',
+    password: '',
+    auth_token: '',
+    api_key_header: 'X-API-Key',
+    api_key_value: '',
+    sender_id: '',
+    timeout_seconds: 10,
+    message_template: '',
+  });
+  const [whatsappTestPhone, setWhatsappTestPhone] = useState('');
+  const [whatsappTestMessage, setWhatsappTestMessage] = useState('');
   const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
   const [showResetCredentialsModal, setShowResetCredentialsModal] = useState(false);
   const [resetConfirmText, setResetConfirmText] = useState('');
@@ -289,8 +333,198 @@ export default function CompanySettingsPage() {
   useEffect(() => {
     if (!token) return;
     fetchSystemStatus(token);
+    fetchSmsGatewayConfig(token);
+    fetchWhatsappGatewayConfig(token);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  const fetchSmsGatewayConfig = async (authToken: string) => {
+    setSmsConfigLoading(true);
+    try {
+      const response = await axios.get(`/api/system/sms-gateway`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const config = response.data?.config || {};
+      setSmsConfig({
+        enabled: Boolean(config.enabled),
+        provider_name: String(config.provider_name || ''),
+        endpoint_url: String(config.endpoint_url || ''),
+        http_method: String(config.http_method || 'POST').toUpperCase() === 'GET' ? 'GET' : 'POST',
+        auth_type: ['none', 'bearer', 'basic', 'api_key'].includes(String(config.auth_type || 'none'))
+          ? String(config.auth_type || 'none')
+          : 'none',
+        username: String(config.username || ''),
+        password: String(config.password || ''),
+        auth_token: String(config.auth_token || ''),
+        api_key_header: String(config.api_key_header || 'X-API-Key'),
+        api_key_value: String(config.api_key_value || ''),
+        sender_id: String(config.sender_id || ''),
+        timeout_seconds: Number(config.timeout_seconds || 10),
+        message_template: String(config.message_template || ''),
+      });
+    } catch {
+      // Ignore for non-admin users or unavailable endpoint.
+    } finally {
+      setSmsConfigLoading(false);
+    }
+  };
+
+  const fetchWhatsappGatewayConfig = async (authToken: string) => {
+    setWhatsappConfigLoading(true);
+    try {
+      const response = await axios.get(`/api/system/whatsapp-gateway`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const config = response.data?.config || {};
+      setWhatsappConfig({
+        enabled: Boolean(config.enabled),
+        provider_name: String(config.provider_name || ''),
+        endpoint_url: String(config.endpoint_url || ''),
+        http_method: String(config.http_method || 'POST').toUpperCase() === 'GET' ? 'GET' : 'POST',
+        auth_type: ['none', 'bearer', 'basic', 'api_key'].includes(String(config.auth_type || 'none'))
+          ? String(config.auth_type || 'none')
+          : 'none',
+        username: String(config.username || ''),
+        password: String(config.password || ''),
+        auth_token: String(config.auth_token || ''),
+        api_key_header: String(config.api_key_header || 'X-API-Key'),
+        api_key_value: String(config.api_key_value || ''),
+        sender_id: String(config.sender_id || ''),
+        timeout_seconds: Number(config.timeout_seconds || 10),
+        message_template: String(config.message_template || ''),
+      });
+    } catch {
+      // Ignore for non-admin users or unavailable endpoint.
+    } finally {
+      setWhatsappConfigLoading(false);
+    }
+  };
+
+  const handleSaveSmsGateway = async () => {
+    if (!token) return;
+    setSmsConfigSaving(true);
+    setNotice(null);
+    try {
+      const response = await axios.post(
+        `/api/system/sms-gateway`,
+        {
+          enabled: smsConfig.enabled,
+          provider_name: smsConfig.provider_name.trim(),
+          endpoint_url: smsConfig.endpoint_url.trim(),
+          http_method: smsConfig.http_method,
+          auth_type: smsConfig.auth_type,
+          username: smsConfig.username.trim(),
+          password: smsConfig.password,
+          auth_token: smsConfig.auth_token,
+          api_key_header: smsConfig.api_key_header.trim(),
+          api_key_value: smsConfig.api_key_value,
+          sender_id: smsConfig.sender_id.trim(),
+          timeout_seconds: Number(smsConfig.timeout_seconds || 10),
+          message_template: smsConfig.message_template.trim(),
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const saved = response.data?.config || {};
+      setSmsConfig((prev) => ({
+        ...prev,
+        enabled: Boolean(saved.enabled),
+      }));
+      setNotice({ type: 'success', text: response.data?.message || 'SMS gateway settings saved.' });
+    } catch (error: any) {
+      setNotice({ type: 'error', text: error?.response?.data?.message || 'Failed to save SMS gateway settings.' });
+    } finally {
+      setSmsConfigSaving(false);
+    }
+  };
+
+  const handleTestSmsGateway = async () => {
+    if (!token) return;
+    if (!smsTestPhone.trim()) {
+      setNotice({ type: 'error', text: 'Enter a phone number for SMS test.' });
+      return;
+    }
+
+    setSmsTesting(true);
+    setNotice(null);
+    try {
+      const response = await axios.post(
+        `/api/system/sms-gateway/test`,
+        {
+          phone: smsTestPhone.trim(),
+          message: smsTestMessage.trim() || 'Test SMS from Global Capital system.',
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setNotice({ type: 'success', text: response.data?.message || 'SMS test sent successfully.' });
+    } catch (error: any) {
+      setNotice({ type: 'error', text: error?.response?.data?.message || 'Failed to send SMS test.' });
+    } finally {
+      setSmsTesting(false);
+    }
+  };
+
+  const handleSaveWhatsappGateway = async () => {
+    if (!token) return;
+    setWhatsappConfigSaving(true);
+    setNotice(null);
+    try {
+      const response = await axios.post(
+        `/api/system/whatsapp-gateway`,
+        {
+          enabled: whatsappConfig.enabled,
+          provider_name: whatsappConfig.provider_name.trim(),
+          endpoint_url: whatsappConfig.endpoint_url.trim(),
+          http_method: whatsappConfig.http_method,
+          auth_type: whatsappConfig.auth_type,
+          username: whatsappConfig.username.trim(),
+          password: whatsappConfig.password,
+          auth_token: whatsappConfig.auth_token,
+          api_key_header: whatsappConfig.api_key_header.trim(),
+          api_key_value: whatsappConfig.api_key_value,
+          sender_id: whatsappConfig.sender_id.trim(),
+          timeout_seconds: Number(whatsappConfig.timeout_seconds || 10),
+          message_template: whatsappConfig.message_template.trim(),
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const saved = response.data?.config || {};
+      setWhatsappConfig((prev) => ({
+        ...prev,
+        enabled: Boolean(saved.enabled),
+      }));
+      setNotice({ type: 'success', text: response.data?.message || 'WhatsApp gateway settings saved.' });
+    } catch (error: any) {
+      setNotice({ type: 'error', text: error?.response?.data?.message || 'Failed to save WhatsApp gateway settings.' });
+    } finally {
+      setWhatsappConfigSaving(false);
+    }
+  };
+
+  const handleTestWhatsappGateway = async () => {
+    if (!token) return;
+    if (!whatsappTestPhone.trim()) {
+      setNotice({ type: 'error', text: 'Enter a phone number for WhatsApp test.' });
+      return;
+    }
+
+    setWhatsappTesting(true);
+    setNotice(null);
+    try {
+      const response = await axios.post(
+        `/api/system/whatsapp-gateway/test`,
+        {
+          phone: whatsappTestPhone.trim(),
+          message: whatsappTestMessage.trim() || 'Test WhatsApp message from Global Capital system.',
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setNotice({ type: 'success', text: response.data?.message || 'WhatsApp test sent successfully.' });
+    } catch (error: any) {
+      setNotice({ type: 'error', text: error?.response?.data?.message || 'Failed to send WhatsApp test.' });
+    } finally {
+      setWhatsappTesting(false);
+    }
+  };
 
   useEffect(() => {
     if (!logoFile) return;
@@ -804,6 +1038,8 @@ export default function CompanySettingsPage() {
                       fetchCompanies(token);
                       fetchHolidays(token);
                       fetchSystemStatus(token);
+                      fetchSmsGatewayConfig(token);
+                      fetchWhatsappGatewayConfig(token);
                     }
                   }}
                   disabled={loading}
@@ -1384,7 +1620,6 @@ export default function CompanySettingsPage() {
                         </div>
                       </div>
                     </div>
-
                     <div className="rounded-2xl border border-rose-200 bg-gradient-to-br from-rose-50 to-red-50/50 p-5">
                       <div className="flex items-start gap-3">
                         <AlertTriangle className="h-5 w-5 text-rose-700 shrink-0 mt-0.5" />
@@ -1404,6 +1639,420 @@ export default function CompanySettingsPage() {
                           </button>
                         </div>
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeSection === 'sms' && (
+                  <div className="space-y-5">
+                    <div className="rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-50/80 to-cyan-50/50 px-4 py-3">
+                      <p className="text-sm font-bold text-slate-900">SMS gateway integration</p>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Configure your SMS provider and send automatic SMS for every collection transaction.
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl border border-indigo-100 bg-white p-5 shadow-sm">
+                      <div className="flex items-center gap-2 mb-3">
+                        <MessageSquare className="h-5 w-5 text-indigo-700" />
+                        <h3 className="font-bold text-slate-900">Gateway settings</h3>
+                      </div>
+
+                      {smsConfigLoading ? (
+                        <p className="text-sm text-slate-500">Loading SMS configuration…</p>
+                      ) : (
+                        <div className="space-y-4">
+                          <label className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={smsConfig.enabled}
+                              onChange={(e) => setSmsConfig({ ...smsConfig, enabled: e.target.checked })}
+                              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <span className="text-sm font-medium text-slate-700">Enable SMS sending on collections</span>
+                          </label>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                              <label className={labelClass}>Provider name</label>
+                              <input
+                                value={smsConfig.provider_name}
+                                onChange={(e) => setSmsConfig({ ...smsConfig, provider_name: e.target.value })}
+                                className={inputClass}
+                                placeholder="e.g. NotifyLK"
+                              />
+                            </div>
+                            <div>
+                              <label className={labelClass}>Endpoint URL *</label>
+                              <input
+                                value={smsConfig.endpoint_url}
+                                onChange={(e) => setSmsConfig({ ...smsConfig, endpoint_url: e.target.value })}
+                                className={inputClass}
+                                placeholder="https://sms.example.com/api/send"
+                              />
+                            </div>
+                            <div>
+                              <label className={labelClass}>HTTP method</label>
+                              <select
+                                value={smsConfig.http_method}
+                                onChange={(e) => setSmsConfig({ ...smsConfig, http_method: e.target.value })}
+                                className={inputClass}
+                              >
+                                <option value="POST">POST</option>
+                                <option value="GET">GET</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className={labelClass}>Auth type</label>
+                              <select
+                                value={smsConfig.auth_type}
+                                onChange={(e) => setSmsConfig({ ...smsConfig, auth_type: e.target.value })}
+                                className={inputClass}
+                              >
+                                <option value="none">None</option>
+                                <option value="bearer">Bearer token</option>
+                                <option value="basic">Basic auth</option>
+                                <option value="api_key">API key header</option>
+                              </select>
+                            </div>
+
+                            {smsConfig.auth_type === 'bearer' && (
+                              <div className="md:col-span-2">
+                                <label className={labelClass}>Bearer token</label>
+                                <input
+                                  value={smsConfig.auth_token}
+                                  onChange={(e) => setSmsConfig({ ...smsConfig, auth_token: e.target.value })}
+                                  className={inputClass}
+                                  placeholder="Paste API bearer token"
+                                />
+                              </div>
+                            )}
+
+                            {smsConfig.auth_type === 'basic' && (
+                              <>
+                                <div>
+                                  <label className={labelClass}>Username</label>
+                                  <input
+                                    value={smsConfig.username}
+                                    onChange={(e) => setSmsConfig({ ...smsConfig, username: e.target.value })}
+                                    className={inputClass}
+                                  />
+                                </div>
+                                <div>
+                                  <label className={labelClass}>Password</label>
+                                  <input
+                                    type="password"
+                                    value={smsConfig.password}
+                                    onChange={(e) => setSmsConfig({ ...smsConfig, password: e.target.value })}
+                                    className={inputClass}
+                                  />
+                                </div>
+                              </>
+                            )}
+
+                            {smsConfig.auth_type === 'api_key' && (
+                              <>
+                                <div>
+                                  <label className={labelClass}>API key header</label>
+                                  <input
+                                    value={smsConfig.api_key_header}
+                                    onChange={(e) => setSmsConfig({ ...smsConfig, api_key_header: e.target.value })}
+                                    className={inputClass}
+                                  />
+                                </div>
+                                <div>
+                                  <label className={labelClass}>API key value</label>
+                                  <input
+                                    value={smsConfig.api_key_value}
+                                    onChange={(e) => setSmsConfig({ ...smsConfig, api_key_value: e.target.value })}
+                                    className={inputClass}
+                                  />
+                                </div>
+                              </>
+                            )}
+
+                            <div>
+                              <label className={labelClass}>Sender ID</label>
+                              <input
+                                value={smsConfig.sender_id}
+                                onChange={(e) => setSmsConfig({ ...smsConfig, sender_id: e.target.value })}
+                                className={inputClass}
+                                placeholder="GLOBALCAP"
+                              />
+                            </div>
+                            <div>
+                              <label className={labelClass}>Timeout (seconds)</label>
+                              <input
+                                type="number"
+                                min={3}
+                                max={60}
+                                value={smsConfig.timeout_seconds}
+                                onChange={(e) => setSmsConfig({ ...smsConfig, timeout_seconds: Number(e.target.value || 10) })}
+                                className={inputClass}
+                              />
+                            </div>
+                            <div className="md:col-span-2">
+                              <label className={labelClass}>Collection SMS template</label>
+                              <textarea
+                                rows={3}
+                                value={smsConfig.message_template}
+                                onChange={(e) => setSmsConfig({ ...smsConfig, message_template: e.target.value })}
+                                className={inputClass}
+                                placeholder="Dear {{customer_name}}, we received your {{module}} payment of LKR {{amount}} on {{date}}. Ref: {{reference}}"
+                              />
+                              <p className="mt-1 text-[11px] text-slate-500">
+                                Placeholders: {'{{customer_name}}'}, {'{{amount}}'}, {'{{date}}'}, {'{{reference}}'}, {'{{module}}'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleSaveSmsGateway}
+                              disabled={smsConfigSaving}
+                              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                            >
+                              <Save className="h-4 w-4" />
+                              {smsConfigSaving ? 'Saving…' : 'Save SMS settings'}
+                            </button>
+                          </div>
+
+                          <div className="rounded-xl border border-cyan-100 bg-cyan-50/60 p-4">
+                            <p className="text-xs font-bold text-slate-700 mb-2">Send test SMS</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <input
+                                value={smsTestPhone}
+                                onChange={(e) => setSmsTestPhone(e.target.value)}
+                                className={inputClass}
+                                placeholder="Recipient phone number"
+                              />
+                              <input
+                                value={smsTestMessage}
+                                onChange={(e) => setSmsTestMessage(e.target.value)}
+                                className={inputClass}
+                                placeholder="Optional test message"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleTestSmsGateway}
+                              disabled={smsTesting}
+                              className="mt-3 inline-flex items-center gap-2 rounded-xl border border-cyan-200 bg-white px-4 py-2 text-sm font-bold text-cyan-800 hover:bg-cyan-50 disabled:opacity-60"
+                            >
+                              <MessageSquare className="h-4 w-4" />
+                              {smsTesting ? 'Sending…' : 'Send test SMS'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {activeSection === 'whatsapp' && (
+                  <div className="space-y-5">
+                    <div className="rounded-2xl border border-emerald-100 bg-gradient-to-r from-emerald-50/80 to-cyan-50/50 px-4 py-3">
+                      <p className="text-sm font-bold text-slate-900">WhatsApp gateway integration</p>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Configure your WhatsApp provider and send automatic WhatsApp messages for every collection transaction.
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm">
+                      <div className="flex items-center gap-2 mb-3">
+                        <MessageCircle className="h-5 w-5 text-emerald-700" />
+                        <h3 className="font-bold text-slate-900">Gateway settings</h3>
+                      </div>
+
+                      {whatsappConfigLoading ? (
+                        <p className="text-sm text-slate-500">Loading WhatsApp configuration…</p>
+                      ) : (
+                        <div className="space-y-4">
+                          <label className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={whatsappConfig.enabled}
+                              onChange={(e) => setWhatsappConfig({ ...whatsappConfig, enabled: e.target.checked })}
+                              className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                            />
+                            <span className="text-sm font-medium text-slate-700">Enable WhatsApp sending on collections</span>
+                          </label>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                              <label className={labelClass}>Provider name</label>
+                              <input
+                                value={whatsappConfig.provider_name}
+                                onChange={(e) => setWhatsappConfig({ ...whatsappConfig, provider_name: e.target.value })}
+                                className={inputClass}
+                                placeholder="e.g. WATI"
+                              />
+                            </div>
+                            <div>
+                              <label className={labelClass}>Endpoint URL *</label>
+                              <input
+                                value={whatsappConfig.endpoint_url}
+                                onChange={(e) => setWhatsappConfig({ ...whatsappConfig, endpoint_url: e.target.value })}
+                                className={inputClass}
+                                placeholder="https://api.example.com/whatsapp/send"
+                              />
+                            </div>
+                            <div>
+                              <label className={labelClass}>HTTP method</label>
+                              <select
+                                value={whatsappConfig.http_method}
+                                onChange={(e) => setWhatsappConfig({ ...whatsappConfig, http_method: e.target.value })}
+                                className={inputClass}
+                              >
+                                <option value="POST">POST</option>
+                                <option value="GET">GET</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className={labelClass}>Auth type</label>
+                              <select
+                                value={whatsappConfig.auth_type}
+                                onChange={(e) => setWhatsappConfig({ ...whatsappConfig, auth_type: e.target.value })}
+                                className={inputClass}
+                              >
+                                <option value="none">None</option>
+                                <option value="bearer">Bearer token</option>
+                                <option value="basic">Basic auth</option>
+                                <option value="api_key">API key header</option>
+                              </select>
+                            </div>
+
+                            {whatsappConfig.auth_type === 'bearer' && (
+                              <div className="md:col-span-2">
+                                <label className={labelClass}>Bearer token</label>
+                                <input
+                                  value={whatsappConfig.auth_token}
+                                  onChange={(e) => setWhatsappConfig({ ...whatsappConfig, auth_token: e.target.value })}
+                                  className={inputClass}
+                                  placeholder="Paste API bearer token"
+                                />
+                              </div>
+                            )}
+
+                            {whatsappConfig.auth_type === 'basic' && (
+                              <>
+                                <div>
+                                  <label className={labelClass}>Username</label>
+                                  <input
+                                    value={whatsappConfig.username}
+                                    onChange={(e) => setWhatsappConfig({ ...whatsappConfig, username: e.target.value })}
+                                    className={inputClass}
+                                  />
+                                </div>
+                                <div>
+                                  <label className={labelClass}>Password</label>
+                                  <input
+                                    type="password"
+                                    value={whatsappConfig.password}
+                                    onChange={(e) => setWhatsappConfig({ ...whatsappConfig, password: e.target.value })}
+                                    className={inputClass}
+                                  />
+                                </div>
+                              </>
+                            )}
+
+                            {whatsappConfig.auth_type === 'api_key' && (
+                              <>
+                                <div>
+                                  <label className={labelClass}>API key header</label>
+                                  <input
+                                    value={whatsappConfig.api_key_header}
+                                    onChange={(e) => setWhatsappConfig({ ...whatsappConfig, api_key_header: e.target.value })}
+                                    className={inputClass}
+                                  />
+                                </div>
+                                <div>
+                                  <label className={labelClass}>API key value</label>
+                                  <input
+                                    value={whatsappConfig.api_key_value}
+                                    onChange={(e) => setWhatsappConfig({ ...whatsappConfig, api_key_value: e.target.value })}
+                                    className={inputClass}
+                                  />
+                                </div>
+                              </>
+                            )}
+
+                            <div>
+                              <label className={labelClass}>Sender ID</label>
+                              <input
+                                value={whatsappConfig.sender_id}
+                                onChange={(e) => setWhatsappConfig({ ...whatsappConfig, sender_id: e.target.value })}
+                                className={inputClass}
+                                placeholder="GLOBALCAP"
+                              />
+                            </div>
+                            <div>
+                              <label className={labelClass}>Timeout (seconds)</label>
+                              <input
+                                type="number"
+                                min={3}
+                                max={60}
+                                value={whatsappConfig.timeout_seconds}
+                                onChange={(e) => setWhatsappConfig({ ...whatsappConfig, timeout_seconds: Number(e.target.value || 10) })}
+                                className={inputClass}
+                              />
+                            </div>
+                            <div className="md:col-span-2">
+                              <label className={labelClass}>Collection WhatsApp template</label>
+                              <textarea
+                                rows={3}
+                                value={whatsappConfig.message_template}
+                                onChange={(e) => setWhatsappConfig({ ...whatsappConfig, message_template: e.target.value })}
+                                className={inputClass}
+                                placeholder="Dear {{customer_name}}, your {{module}} payment of LKR {{amount}} was received on {{date}}. Ref: {{reference}}"
+                              />
+                              <p className="mt-1 text-[11px] text-slate-500">
+                                Placeholders: {'{{customer_name}}'}, {'{{amount}}'}, {'{{date}}'}, {'{{reference}}'}, {'{{module}}'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleSaveWhatsappGateway}
+                              disabled={whatsappConfigSaving}
+                              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                            >
+                              <Save className="h-4 w-4" />
+                              {whatsappConfigSaving ? 'Saving…' : 'Save WhatsApp settings'}
+                            </button>
+                          </div>
+
+                          <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-4">
+                            <p className="text-xs font-bold text-slate-700 mb-2">Send test WhatsApp</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <input
+                                value={whatsappTestPhone}
+                                onChange={(e) => setWhatsappTestPhone(e.target.value)}
+                                className={inputClass}
+                                placeholder="Recipient phone number"
+                              />
+                              <input
+                                value={whatsappTestMessage}
+                                onChange={(e) => setWhatsappTestMessage(e.target.value)}
+                                className={inputClass}
+                                placeholder="Optional test message"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleTestWhatsappGateway}
+                              disabled={whatsappTesting}
+                              className="mt-3 inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2 text-sm font-bold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60"
+                            >
+                              <MessageCircle className="h-4 w-4" />
+                              {whatsappTesting ? 'Sending…' : 'Send test WhatsApp'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

@@ -1,0 +1,43 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/reports/charges/page.tsx
+@@
+   const summary = useMemo(() => {
+@@
+   }, [filteredRows]);
++
++  const summaryCards = [
++    { key: 'mf_charges_widget_summary_document', label: 'Document Charges', value: summary.document, isCount: false },
++    { key: 'mf_charges_widget_summary_stamp', label: 'Stamp Charges', value: summary.stamp, isCount: false },
++    { key: 'mf_charges_widget_summary_insurance', label: 'Insurance Charges', value: summary.insurance, isCount: false },
++    { key: 'mf_charges_widget_summary_total', label: 'Total Charges', value: summary.total, isCount: false },
++    { key: 'mf_charges_widget_summary_loans_count', label: 'Loans Count', value: filteredRows.length, isCount: true },
++  ];
++  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
++  const showHeaderActions = !hiddenWidgetKeys.has('mf_charges_widget_header_actions');
++  const showFilterPanel = !hiddenWidgetKeys.has('mf_charges_widget_filter_panel');
++
++  const tableColumns = [
++    { key: 'date', label: 'Date' },
++    { key: 'status', label: 'Status' },
++    { key: 'loanCode', label: 'Loan Code' },
++    { key: 'customer', label: 'Customer' },
++    { key: 'fieldOfficer', label: 'Field Officer' },
++    { key: 'mode', label: 'Mode' },
++    { key: 'document', label: 'Document' },
++    { key: 'stamp', label: 'Stamp' },
++    { key: 'insurance', label: 'Insurance' },
++    { key: 'total', label: 'Total' },
++  ];
++  const visibleTableColumns = tableColumns.filter((column) => !hiddenWidgetKeys.has(`mf_charges_widget_col_${column.key}`));
+@@
+-  return (
++  if (!token || loading || loadingWidgets) {
++    return (
++      <div className="min-h-screen bg-gradient-to-br from-sky-50 via-cyan-50 to-blue-50 flex items-center justify-center">
++        <div className="h-12 w-12 animate-spin rounded-full border-4 border-cyan-100 border-t-cyan-600" />
++      </div>
++    );
++  }
++
++  return (
+*** End Patch

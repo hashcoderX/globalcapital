@@ -1,0 +1,86 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/reports/blacklisted-customers/page.tsx
+@@
+ export default function BlacklistedCustomerReportPage() {
+   const router = useRouter();
+   const searchParams = useSearchParams();
+   const [token, setToken] = useState('');
+   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+   const [loading, setLoading] = useState(true);
++  const [loadingWidgets, setLoadingWidgets] = useState(true);
++  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
++  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
++    open: false,
++    title: '',
++    message: '',
++  });
+   const [rows, setRows] = useState<BlacklistedReportRow[]>([]);
+@@
+   const designationName = String(authUser?.designation?.name || '').toLowerCase();
+   const isFieldOfficer = designationName.includes('field') && designationName.includes('officer');
++
++  const fetchWidgetPreferences = async (authToken: string) => {
++    setLoadingWidgets(true);
++    try {
++      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
++        headers: {
++          Authorization: `Bearer ${authToken}`,
++          Accept: 'application/json',
++        },
++      });
++      const list = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
++      const nextHidden = new Set<string>();
++      for (const row of list) {
++        const key = String(row?.widget_key || '').trim();
++        if (!key.startsWith('mf_blacklisted_widget_')) continue;
++        if (row?.is_visible === false) nextHidden.add(key);
++      }
++      setHiddenWidgetKeys(nextHidden);
++    } catch {
++      setHiddenWidgetKeys(new Set());
++    } finally {
++      setLoadingWidgets(false);
++    }
++  };
++
++  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
++    if (!token) return false;
++    try {
++      await axios.patch(
++        `${API_BASE}/dashboard/widgets`,
++        { widget_key: widgetKey, is_visible: isVisible },
++        {
++          headers: {
++            Authorization: `Bearer ${token}`,
++            Accept: 'application/json',
++          },
++        }
++      );
++      return true;
++    } catch {
++      return false;
++    }
++  };
++
++  const hideWidget = async (widgetKey: string) => {
++    const previous = new Set(hiddenWidgetKeys);
++    const next = new Set(hiddenWidgetKeys);
++    next.add(widgetKey);
++    setHiddenWidgetKeys(next);
++
++    const ok = await saveWidgetPreference(widgetKey, false);
++    if (!ok) {
++      setHiddenWidgetKeys(previous);
++      setWidgetNotice({
++        open: true,
++        title: 'Widget Update Failed',
++        message: 'Failed to hide this item. Please try again.',
++      });
++    }
++  };
+@@
+     setToken(storedToken);
++    void fetchWidgetPreferences(storedToken);
+@@
+   }, [router]);
+*** End Patch

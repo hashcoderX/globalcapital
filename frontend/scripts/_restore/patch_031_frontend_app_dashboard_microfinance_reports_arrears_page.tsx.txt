@@ -1,0 +1,203 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/reports/arrears/page.tsx
+@@
+           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3">
+-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+-              <p className="text-xs uppercase tracking-wide text-slate-500">Accounts</p>
+-              <p className="text-xs font-extrabold text-slate-900 mt-1">{summary.accountCount}</p>
+-            </div>
+-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+-              <p className="text-xs uppercase tracking-wide text-slate-500">Overdue / Arrears</p>
+-              <p className="text-xs font-extrabold text-amber-700 mt-1">{summary.overdueCount} / {summary.arrearsCount}</p>
+-            </div>
+-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+-              <p className="text-xs uppercase tracking-wide text-slate-500">Pending Amount</p>
+-              <p className="text-2xl font-extrabold text-rose-700 mt-1">
+-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending)}
+-              </p>
+-            </div>
+-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+-              <p className="text-xs uppercase tracking-wide text-slate-500">Arrears Amount</p>
+-              <p className="text-2xl font-extrabold text-orange-700 mt-1">
+-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.arrears)}
+-              </p>
+-            </div>
+-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+-              <p className="text-xs uppercase tracking-wide text-slate-500">Paid Amount</p>
+-              <p className="text-2xl font-extrabold text-emerald-700 mt-1">
+-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.paid)}
+-              </p>
+-            </div>
++            {visibleSummaryCards.map((card) => (
++              <div key={card.key} className="relative rounded-xl bg-white/90 border border-white shadow-sm p-4">
++                <button
++                  type="button"
++                  onClick={() => void hideWidget(card.key)}
++                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                  aria-label={`Hide ${card.label} card`}
++                >
++                  ×
++                </button>
++                <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
++                <p className={`text-2xl font-extrabold mt-1 ${card.valueClass}`}>{card.value}</p>
++              </div>
++            ))}
+           </div>
++          {visibleSummaryCards.length === 0 && (
++            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
++              All summary cards are hidden. Restore from dashboard with admin approval.
++            </div>
++          )}
+         </div>
+@@
+-            <div className="flex items-end gap-2 flex-wrap">
++            {showActionToolbar && (
++              <div className="relative flex items-end gap-2 flex-wrap">
++              <button
++                type="button"
++                onClick={() => void hideWidget('mf_arrears_widget_action_toolbar')}
++                className="absolute -top-2 -left-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                aria-label="Hide action toolbar"
++              >
++                ×
++              </button>
+               <button
+                 type="button"
+                 onClick={handleDownloadCsv}
+@@
+               >
+                 Reset
+               </button>
+-            </div>
++              </div>
++            )}
+           </div>
++          {!showActionToolbar && (
++            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
++              Toolbar controls are hidden. Restore from dashboard with admin approval.
++            </div>
++          )}
+@@
+                 <thead className="bg-cyan-50/70 text-slate-700">
+                   <tr>
+-                    <th className="px-3 py-2 font-semibold">Loan ID</th>
+-                    <th className="px-3 py-2 font-semibold">Loan Code</th>
+-                    <th className="px-3 py-2 font-semibold">Customer</th>
+-                    <th className="px-3 py-2 font-semibold">Field Officer</th>
+-                    <th className="px-3 py-2 font-semibold">Due Date</th>
+-                    <th className="px-3 py-2 font-semibold">Overdue Days</th>
+-                    <th className="px-3 py-2 font-semibold">Total Payable</th>
+-                    <th className="px-3 py-2 font-semibold">Paid</th>
+-                    <th className="px-3 py-2 font-semibold">Pending</th>
+-                    <th className="px-3 py-2 font-semibold">Arrears</th>
+-                    <th className="px-3 py-2 font-semibold">Status</th>
++                    {visibleTableColumns.map((column) => (
++                      <th key={column.key} className="px-3 py-2 font-semibold">
++                        <div className="flex items-center gap-2">
++                          <span>{column.label}</span>
++                          <button
++                            type="button"
++                            onClick={() => void hideWidget(`mf_arrears_widget_col_${column.key}`)}
++                            className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-[10px] font-bold text-slate-600 transition hover:bg-rose-50 hover:text-rose-700"
++                            aria-label={`Hide ${column.label} column`}
++                          >
++                            ×
++                          </button>
++                        </div>
++                      </th>
++                    ))}
+                   </tr>
+                 </thead>
+                 <tbody>
++                  {visibleTableColumns.length === 0 && (
++                    <tr>
++                      <td className="px-3 py-4 text-center text-amber-700" colSpan={1}>
++                        All table columns are hidden. Restore from dashboard with admin approval.
++                      </td>
++                    </tr>
++                  )}
+                   {filteredRows.map((row) => (
+                     <tr key={row.loanId} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
+-                      <td className="px-3 py-2">{row.loanId || '-'}</td>
+-                      <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
+-                      <td className="px-3 py-2">{row.customerName}</td>
+-                      <td className="px-3 py-2">{row.fieldOfficer}</td>
+-                      <td className="px-3 py-2">{formatDate(row.dueDate)}</td>
+-                      <td className="px-3 py-2 font-semibold text-amber-700">{row.overdueDays}</td>
+-                      <td className="px-3 py-2">{formatMoney(row.totalPayable)}</td>
+-                      <td className="px-3 py-2 text-emerald-700">{formatMoney(row.paidAmount)}</td>
+-                      <td className="px-3 py-2 font-semibold text-rose-700">{formatMoney(row.pendingAmount)}</td>
+-                      <td className="px-3 py-2 font-semibold text-orange-700">{formatMoney(row.arrearsAmount)}</td>
+-                      <td className="px-3 py-2">
+-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${
+-                          row.status === 'Arrears'
+-                            ? 'border-orange-200 bg-orange-50 text-orange-800'
+-                            : row.status === 'Overdue'
+-                            ? 'border-amber-200 bg-amber-50 text-amber-800'
+-                            : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+-                        }`}>
+-                          {row.status}
+-                        </span>
+-                      </td>
++                      {visibleTableColumns.map((column) => {
++                        if (column.key === 'loanId') return <td key={column.key} className="px-3 py-2">{row.loanId || '-'}</td>;
++                        if (column.key === 'loanCode') return <td key={column.key} className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>;
++                        if (column.key === 'customer') return <td key={column.key} className="px-3 py-2">{row.customerName}</td>;
++                        if (column.key === 'fieldOfficer') return <td key={column.key} className="px-3 py-2">{row.fieldOfficer}</td>;
++                        if (column.key === 'dueDate') return <td key={column.key} className="px-3 py-2">{formatDate(row.dueDate)}</td>;
++                        if (column.key === 'overdueDays') return <td key={column.key} className="px-3 py-2 font-semibold text-amber-700">{row.overdueDays}</td>;
++                        if (column.key === 'totalPayable') return <td key={column.key} className="px-3 py-2">{formatMoney(row.totalPayable)}</td>;
++                        if (column.key === 'paid') return <td key={column.key} className="px-3 py-2 text-emerald-700">{formatMoney(row.paidAmount)}</td>;
++                        if (column.key === 'pending') return <td key={column.key} className="px-3 py-2 font-semibold text-rose-700">{formatMoney(row.pendingAmount)}</td>;
++                        if (column.key === 'arrears') return <td key={column.key} className="px-3 py-2 font-semibold text-orange-700">{formatMoney(row.arrearsAmount)}</td>;
++                        if (column.key === 'status') {
++                          return (
++                            <td key={column.key} className="px-3 py-2">
++                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${
++                                row.status === 'Arrears'
++                                  ? 'border-orange-200 bg-orange-50 text-orange-800'
++                                  : row.status === 'Overdue'
++                                  ? 'border-amber-200 bg-amber-50 text-amber-800'
++                                  : 'border-emerald-200 bg-emerald-50 text-emerald-800'
++                              }`}>
++                                {row.status}
++                              </span>
++                            </td>
++                          );
++                        }
++                        return null;
++                      })}
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>
+           )}
+         </div>
++
++        {widgetNotice.open && (
++          <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
++            <div
++              className="absolute inset-0 bg-black/35 backdrop-blur-sm"
++              onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
++            />
++            <div className="relative w-full max-w-sm rounded-2xl border border-cyan-100 bg-white p-5 shadow-xl">
++              <h3 className="text-base font-bold text-slate-900">{widgetNotice.title}</h3>
++              <p className="mt-2 text-sm text-slate-600">{widgetNotice.message}</p>
++              <div className="mt-4 flex justify-end">
++                <button
++                  type="button"
++                  onClick={() => setWidgetNotice({ open: false, title: '', message: '' })}
++                  className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
++                >
++                  OK
++                </button>
++              </div>
++            </div>
++          </div>
++        )}
+       </div>
+     </div>
+   );
+ }
+*** End Patch

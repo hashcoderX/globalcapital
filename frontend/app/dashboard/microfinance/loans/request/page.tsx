@@ -325,6 +325,9 @@ export default function RequestLoanPage() {
     nic: '',
     address: '',
     contact_no: '',
+    bank_name: '',
+    bank_branch: '',
+    bank_account_no: '',
     loan_amount: '',
     reason: '',
     refund_option: 'month',
@@ -863,9 +866,20 @@ export default function RequestLoanPage() {
           return false;
         }
 
-        fillCustomerFromRecord(response.data as ExistingCustomer);
-        setCustomerCodeLookupNotice('');
-        return true;
+        const responseData = response.data;
+        const record = responseData?.data ?? responseData;
+        if (record && typeof record === 'object' && Number(record.id || 0) > 0) {
+          fillCustomerFromRecord(record as ExistingCustomer);
+          setCustomerCodeLookupNotice('');
+          return true;
+        }
+
+        if (showNotFoundNotice) {
+          setCustomerCodeLookupNotice('No registered customer found for this customer number.');
+        } else {
+          setCustomerCodeLookupNotice('');
+        }
+        return false;
       } catch {
         if (customerCodeLookupRequestRef.current !== requestId) {
           return false;
@@ -1050,6 +1064,7 @@ export default function RequestLoanPage() {
       if (!form.contact_no.trim()) {
         return 'Please enter contact number to continue.';
       }
+
     }
 
     if (step === 6) {
@@ -1151,6 +1166,7 @@ export default function RequestLoanPage() {
         },
         { headers }
       );
+      const portalCredentials = loanResponse?.data?.customer_portal_credentials || null;
 
       let customerPhotoUploadFailed = false;
       if (pendingCustomerPhoto && form.customer_code.trim()) {
@@ -1198,10 +1214,18 @@ export default function RequestLoanPage() {
         customerPhotoInputRef.current.value = '';
       }
 
+      const baseSuccessMessage = customerPhotoUploadFailed
+        ? 'Loan request registered, but the customer photo could not be saved. You can upload it again later.'
+        : 'Loan request registered successfully.';
+      let accountMessage = '';
+      if (portalCredentials?.is_new_account && portalCredentials?.email && portalCredentials?.password) {
+        accountMessage = ` Customer portal account created. Email: ${portalCredentials.email} | Temporary Password: ${portalCredentials.password}`;
+      } else if (portalCredentials?.email) {
+        accountMessage = ` Customer portal account is already linked. Email: ${portalCredentials.email}`;
+      }
+
       openModal(
-        customerPhotoUploadFailed
-          ? 'Loan request registered, but the customer photo could not be saved. You can upload it again later.'
-          : 'Loan request registered successfully.',
+        `${baseSuccessMessage}${accountMessage}`,
         customerPhotoUploadFailed ? 'Warning' : 'Success',
         () => {
           router.push('/dashboard/microfinance/loans');
@@ -1528,6 +1552,33 @@ export default function RequestLoanPage() {
                   <div>
                     <label className="fieldLabel">Contact No *</label>
                     <input className="input" placeholder="Enter contact number" value={form.contact_no} onChange={(e) => setForm((p) => ({ ...p, contact_no: e.target.value }))} required />
+                  </div>
+                  <div>
+                    <label className="fieldLabel">Bank Name</label>
+                    <input
+                      className="input"
+                      placeholder="Enter bank name"
+                      value={form.bank_name}
+                      onChange={(e) => setForm((p) => ({ ...p, bank_name: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="fieldLabel">Bank Branch</label>
+                    <input
+                      className="input"
+                      placeholder="Enter bank branch"
+                      value={form.bank_branch}
+                      onChange={(e) => setForm((p) => ({ ...p, bank_branch: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="fieldLabel">Bank Account No</label>
+                    <input
+                      className="input"
+                      placeholder="Enter bank account number"
+                      value={form.bank_account_no}
+                      onChange={(e) => setForm((p) => ({ ...p, bank_account_no: e.target.value }))}
+                    />
                   </div>
                   <div className="md:col-span-3">
                     <label className="fieldLabel">Customer Photo</label>

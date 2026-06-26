@@ -1,0 +1,61 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/page.tsx
+@@
+   useEffect(() => {
+@@
+     loadDashboardStats();
+   }, [token, isScopedUser, authUser]);
+ 
++  const chargeSummaryCards = [
++    {
++      key: 'mf_widget_charges_document',
++      label: 'Document Charges',
++      value: statsLoading
++        ? '...'
++        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
++            chargeTotals.document
++          ),
++      valueClass: 'text-slate-900',
++    },
++    {
++      key: 'mf_widget_charges_stamp',
++      label: 'Stamp Charges',
++      value: statsLoading
++        ? '...'
++        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
++            chargeTotals.stamp
++          ),
++      valueClass: 'text-slate-900',
++    },
++    {
++      key: 'mf_widget_charges_insurance',
++      label: 'Insurance Charges',
++      value: statsLoading
++        ? '...'
++        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
++            chargeTotals.insurance
++          ),
++      valueClass: 'text-slate-900',
++    },
++    {
++      key: 'mf_widget_charges_total',
++      label: 'Total Charges',
++      value: statsLoading
++        ? '...'
++        : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(
++            chargeTotals.total
++          ),
++      valueClass: 'text-cyan-700',
++    },
++    {
++      key: 'mf_widget_charges_loans_count',
++      label: 'Loans Count',
++      value: statsLoading ? '...' : chargeTotals.loans.toLocaleString(),
++      valueClass: 'text-slate-900',
++    },
++  ];
++
++  const visibleChargeSummaryCards = chargeSummaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
++
+   const quickStatsCards = [
+*** End Patch

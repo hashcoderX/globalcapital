@@ -1,9 +1,6 @@
 'use client';
 
-import axios from 'axios';
-import { getApiBaseUrl } from '@/lib/api';
-import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -22,7 +19,6 @@ import {
 } from 'lucide-react';
 
 type HubModule = {
-  key: string;
   title: string;
   description: string;
   tag: string;
@@ -36,7 +32,6 @@ type HubModule = {
 
 const hubModules: HubModule[] = [
   {
-    key: 'account_setup',
     title: 'Account Setup',
     description: 'Configure main, cash, and bank accounts with opening balances for each branch.',
     tag: 'Setup',
@@ -48,7 +43,6 @@ const hubModules: HubModule[] = [
     category: 'operations',
   },
   {
-    key: 'expenses',
     title: 'Expenses',
     description: 'Record and manage branch operating expenses such as rent, utilities, and supplies.',
     tag: 'Operations',
@@ -60,9 +54,8 @@ const hubModules: HubModule[] = [
     category: 'operations',
   },
   {
-    key: 'refunds',
     title: 'Refunds (Cash / Bank Deposit)',
-    description: 'Record and manage refunds in a dedicated module with separate cash and bank entries.',
+    description: 'Choose refund mode and route the refund entry through cash account or bank deposit workflow.',
     tag: 'Refunds',
     path: '/dashboard/accounting/refunds',
     icon: HandCoins,
@@ -72,7 +65,6 @@ const hubModules: HubModule[] = [
     category: 'operations',
   },
   {
-    key: 'financial_overview',
     title: 'Financial Overview',
     description: 'View assets, liabilities, income, expenses, and profit in one structured summary.',
     tag: 'Overview',
@@ -84,7 +76,6 @@ const hubModules: HubModule[] = [
     category: 'financial',
   },
   {
-    key: 'general_ledger',
     title: 'General Ledger',
     description: 'Review ledger entries and account movements across the organization.',
     tag: 'Ledger',
@@ -96,7 +87,6 @@ const hubModules: HubModule[] = [
     category: 'financial',
   },
   {
-    key: 'cash_flow',
     title: 'Cash Flow',
     description: 'Monitor cash inflows and outflows across finance, micro credit, mortgage, and instant loans.',
     tag: 'Cash Flow',
@@ -108,7 +98,6 @@ const hubModules: HubModule[] = [
     category: 'financial',
   },
   {
-    key: 'payment_receive_transfer',
     title: 'Payment Receive & Transfer',
     description: 'Branch manager approval desk for pending wallet deposits, handover acceptance, and transfer to branch cash.',
     tag: 'Approvals',
@@ -120,7 +109,6 @@ const hubModules: HubModule[] = [
     category: 'financial',
   },
   {
-    key: 'all_accounting_reports',
     title: 'All Accounting Reports',
     description: 'Open trial balance, balance sheet, P&L, journal entries, bank book, and more.',
     tag: 'Reports Hub',
@@ -132,7 +120,6 @@ const hubModules: HubModule[] = [
     category: 'reports',
   },
   {
-    key: 'collector_wallet_deposits_report',
     title: 'Collector Wallet Deposits Report',
     description: 'Track field and collection officer deposit transactions with branch/date filters.',
     tag: 'Transactions',
@@ -144,7 +131,6 @@ const hubModules: HubModule[] = [
     category: 'reports',
   },
   {
-    key: 'finance_portfolio_reports',
     title: 'Finance Portfolio Reports',
     description: 'Portfolio KPIs, monthly trends, arrears, and profitability by finance account.',
     tag: 'Finance',
@@ -165,7 +151,6 @@ const categoryMeta = {
 
 export default function AccountingModulePage() {
   const router = useRouter();
-  const widgetPrefix = 'accounting_dashboard_widget_';
   const token = useSyncExternalStore(
     () => () => {},
     () => localStorage.getItem('token') || '',
@@ -173,84 +158,12 @@ export default function AccountingModulePage() {
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<'all' | HubModule['category']>('all');
-  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<string[]>([]);
-  const [widgetNotice, setWidgetNotice] = useState('');
 
   useEffect(() => {
     if (!token) {
       router.push('/');
     }
   }, [router, token]);
-
-  const fetchWidgetPreferences = useCallback(async (authToken: string) => {
-    try {
-      const response = await axios.get(`${getApiBaseUrl()}/dashboard/widgets`, {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          Accept: 'application/json',
-        },
-      });
-
-      const rows = Array.isArray(response.data?.data)
-        ? response.data.data
-        : Array.isArray(response.data?.widgets)
-          ? response.data.widgets
-          : [];
-
-      const hidden = rows
-        .filter(
-          (item: { widget_key?: unknown; is_visible?: unknown }) =>
-            typeof item.widget_key === 'string' &&
-            item.widget_key.startsWith(widgetPrefix) &&
-            (item.is_visible === false || Number(item.is_visible) === 0)
-        )
-        .map((item: { widget_key: string }) => item.widget_key);
-
-      setHiddenWidgetKeys(hidden);
-    } catch {
-      setWidgetNotice('Failed to load widget preferences.');
-    }
-  }, []);
-
-  const saveWidgetPreference = useCallback(
-    async (widgetKey: string, isVisible: boolean) => {
-      if (!token) return;
-      const normalizedKey = String(widgetKey || '').trim();
-      if (!normalizedKey || normalizedKey.length > 120) {
-        setWidgetNotice('Failed to save widget preference.');
-        return;
-      }
-      try {
-        await axios.patch(
-          `${getApiBaseUrl()}/dashboard/widgets`,
-          { widget_key: normalizedKey, is_visible: Boolean(isVisible) },
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              Accept: 'application/json',
-            },
-          }
-        );
-        setWidgetNotice('');
-      } catch {
-        setWidgetNotice('Failed to save widget preference.');
-      }
-    },
-    [token]
-  );
-
-  const hideWidget = useCallback(
-    async (widgetKey: string) => {
-      setHiddenWidgetKeys((prev) => (prev.includes(widgetKey) ? prev : [...prev, widgetKey]));
-      await saveWidgetPreference(widgetKey, false);
-    },
-    [saveWidgetPreference]
-  );
-
-  useEffect(() => {
-    if (!token) return;
-    void fetchWidgetPreferences(token);
-  }, [token, fetchWidgetPreferences]);
 
   const normalizedSearch = searchQuery.trim().toLowerCase();
 
@@ -283,25 +196,6 @@ export default function AccountingModulePage() {
     []
   );
 
-  const showHeroWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}hero`);
-  const showStatsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}stats`);
-  const showFinderWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}finder`);
-  const showModulesWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}modules`);
-  const showReportsWidget = !hiddenWidgetKeys.includes(`${widgetPrefix}reports_hub`);
-  const visibleStatCards = [
-    { key: 'workspace_modules', label: 'Workspace Modules', value: String(hubStats.modules), tone: 'text-violet-700', bg: 'from-violet-500/10 to-purple-500/5', icon: LayoutDashboard },
-    { key: 'setup_ops', label: 'Setup & Ops', value: String(hubStats.operations), tone: 'text-rose-700', bg: 'from-rose-500/10 to-red-500/5', icon: Calculator },
-    { key: 'financial_views', label: 'Financial Views', value: String(hubStats.financial), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-teal-500/5', icon: BookOpen },
-    { key: 'report_links', label: 'Report Links', value: String(hubStats.reports), tone: 'text-fuchsia-700', bg: 'from-fuchsia-500/10 to-pink-500/5', icon: FileText },
-  ].filter((item) => !hiddenWidgetKeys.includes(`${widgetPrefix}stat_${item.key}`));
-  const visibleGroupedModules = groupedModules
-    .map((group) => ({
-      ...group,
-      modules: group.modules.filter((module) => !hiddenWidgetKeys.includes(`${widgetPrefix}module_${module.key}`)),
-    }))
-    .filter((group) => group.modules.length > 0);
-  const showAnyWidget = showHeroWidget || showStatsWidget || showFinderWidget || showModulesWidget || showReportsWidget;
-
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-violet-50 via-purple-50 to-indigo-100 flex items-center justify-center">
@@ -326,30 +220,7 @@ export default function AccountingModulePage() {
       </div>
 
       <div className="relative z-10 mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-        {widgetNotice ? (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">
-            {widgetNotice}
-          </div>
-        ) : null}
-
-        {!showAnyWidget ? (
-          <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-5 text-sm font-semibold text-violet-900">
-            All widgets are currently hidden. Use `Restore Hidden Widgets` from the main dashboard to show them again.
-          </div>
-        ) : null}
-
-        {showHeroWidget ? (
         <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-[#2e1064] via-[#5b21b6] to-[#4338ca] text-white shadow-[0_30px_80px_-24px_rgba(91,33,182,0.75)]">
-          <WidgetCloseGate>
-            <button
-              type="button"
-              onClick={() => void hideWidget(`${widgetPrefix}hero`)}
-              className="absolute right-4 top-4 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-white/10 text-white hover:bg-white/20"
-              aria-label="Hide accounting hero widget"
-            >
-              ×
-            </button>
-          </WidgetCloseGate>
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(167,139,250,0.28),transparent_42%)]" />
           <div className="relative p-6 md:p-8">
             <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
@@ -418,72 +289,35 @@ export default function AccountingModulePage() {
             </div>
           </div>
         </section>
-        ) : null}
 
-        {showStatsWidget ? (
-          <section className="relative">
-            <WidgetCloseGate>
-              <button
-                type="button"
-                onClick={() => void hideWidget(`${widgetPrefix}stats`)}
-                className="absolute right-2 -top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
-                aria-label="Hide accounting stats widget"
+        <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          {[
+            { label: 'Workspace Modules', value: String(hubStats.modules), tone: 'text-violet-700', bg: 'from-violet-500/10 to-purple-500/5', icon: LayoutDashboard },
+            { label: 'Setup & Ops', value: String(hubStats.operations), tone: 'text-rose-700', bg: 'from-rose-500/10 to-red-500/5', icon: Calculator },
+            { label: 'Financial Views', value: String(hubStats.financial), tone: 'text-emerald-700', bg: 'from-emerald-500/10 to-teal-500/5', icon: BookOpen },
+            { label: 'Report Links', value: String(hubStats.reports), tone: 'text-fuchsia-700', bg: 'from-fuchsia-500/10 to-pink-500/5', icon: FileText },
+          ].map((item) => {
+            const Icon = item.icon;
+            return (
+              <div
+                key={item.label}
+                className={`overflow-hidden rounded-2xl border border-violet-100/80 bg-gradient-to-br ${item.bg} bg-white/85 p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5 chart-animate-panel`}
               >
-                ×
-              </button>
-            </WidgetCloseGate>
-            {visibleStatCards.length > 0 ? (
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                {visibleStatCards.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <div
-                      key={item.key}
-                      className={`relative overflow-hidden rounded-2xl border border-violet-100/80 bg-gradient-to-br ${item.bg} bg-white/85 p-4 shadow-sm backdrop-blur transition hover:-translate-y-0.5 chart-animate-panel`}
-                    >
-                      <WidgetCloseGate>
-                        <button
-                          type="button"
-                          onClick={() => void hideWidget(`${widgetPrefix}stat_${item.key}`)}
-                          className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
-                          aria-label={`Hide ${item.label} stat widget`}
-                        >
-                          ×
-                        </button>
-                      </WidgetCloseGate>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-black">{item.label}</p>
-                          <p className={`mt-2 text-2xl font-black ${item.tone}`}>{item.value}</p>
-                        </div>
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/90 shadow-sm chart-animate-icon">
-                          <Icon className="h-5 w-5 text-violet-700" />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-black">{item.label}</p>
+                    <p className={`mt-2 text-2xl font-black ${item.tone}`}>{item.value}</p>
+                  </div>
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/90 shadow-sm chart-animate-icon">
+                    <Icon className="h-5 w-5 text-violet-700" />
+                  </div>
+                </div>
               </div>
-            ) : (
-              <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-4 text-sm font-medium text-violet-900">
-                All accounting stat cards are hidden.
-              </div>
-            )}
-          </section>
-        ) : null}
+            );
+          })}
+        </section>
 
-        {showFinderWidget ? (
-        <section className="relative rounded-3xl border border-violet-100/80 bg-white/90 p-5 shadow-sm space-y-4 chart-animate-panel">
-          <WidgetCloseGate>
-            <button
-              type="button"
-              onClick={() => void hideWidget(`${widgetPrefix}finder`)}
-              className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
-              aria-label="Hide accounting finder widget"
-            >
-              ×
-            </button>
-          </WidgetCloseGate>
+        <section className="rounded-3xl border border-violet-100/80 bg-white/90 p-5 shadow-sm space-y-4 chart-animate-panel">
           <div className="flex items-center gap-2">
             <Search className="h-4 w-4 text-violet-700" />
             <h2 className="text-sm font-bold text-black">Find a Workspace</h2>
@@ -523,118 +357,69 @@ export default function AccountingModulePage() {
             })}
           </div>
         </section>
-        ) : null}
 
-        {showModulesWidget ? (
-          filteredModules.length === 0 ? (
-            <div className="rounded-3xl border border-amber-200 bg-amber-50 px-6 py-10 text-center">
-              <p className="text-sm font-semibold text-amber-900">No modules match your search</p>
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery('');
-                  setActiveCategory('all');
-                }}
-                className="mt-4 rounded-xl border border-amber-300 bg-white px-4 py-2 text-xs font-bold text-black hover:bg-amber-100"
-              >
-                Clear filters
-              </button>
-            </div>
-          ) : visibleGroupedModules.length === 0 ? (
-            <div className="rounded-3xl border border-violet-200 bg-violet-50 px-6 py-10 text-center">
-              <p className="text-sm font-semibold text-violet-900">All accounting modules are hidden.</p>
-            </div>
-          ) : (
-            <div className="relative space-y-8">
-              <WidgetCloseGate>
-                <button
-                  type="button"
-                  onClick={() => void hideWidget(`${widgetPrefix}modules`)}
-                  className="absolute right-0 -top-2 inline-flex h-8 w-8 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
-                  aria-label="Hide accounting modules widget"
-                >
-                  ×
-                </button>
-              </WidgetCloseGate>
-              {visibleGroupedModules.map((group) => (
-                <section key={group.key} className="space-y-4">
-                  <div>
-                    <h2 className="text-xl font-extrabold text-black">{categoryMeta[group.key].label}</h2>
-                    <p className="text-sm text-black/80 mt-1">{categoryMeta[group.key].hint}</p>
-                  </div>
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {group.modules.map((module) => {
-                      const Icon = module.icon;
-                      return (
-                        <button
-                          key={module.key}
-                          type="button"
-                          onClick={() => router.push(module.path)}
-                          className="group relative overflow-hidden rounded-[1.5rem] border border-violet-100/80 bg-white/85 text-left shadow-sm backdrop-blur transition duration-500 hover:-translate-y-1 hover:shadow-xl chart-animate-panel"
-                        >
-                          <WidgetCloseGate>
-                            <span
-                              role="button"
-                              tabIndex={0}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void hideWidget(`${widgetPrefix}module_${module.key}`);
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  void hideWidget(`${widgetPrefix}module_${module.key}`);
-                                }
-                              }}
-                              className="absolute right-3 top-3 z-20 inline-flex h-6 w-6 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
-                              aria-label={`Hide ${module.title} widget`}
-                            >
-                              ×
-                            </span>
-                          </WidgetCloseGate>
-                          <div className={`absolute inset-0 bg-gradient-to-br ${module.bg} opacity-0 transition-opacity duration-500 group-hover:opacity-100`} />
-                          <div className="relative p-5">
-                            <div className="mb-4 flex items-start justify-between gap-3">
-                              <div className={`flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br ${module.color} text-white shadow-lg transition duration-300 group-hover:scale-110 chart-animate-icon`}>
-                                <Icon className="h-6 w-6" />
-                              </div>
-                              <span className="rounded-full border border-violet-100 bg-violet-50 px-2.5 py-1 text-[10px] font-bold text-violet-800">
-                                {module.tag}
-                              </span>
-                            </div>
-                            <h3 className="text-base font-bold text-black">{module.title}</h3>
-                            <p className="mt-1.5 text-sm leading-relaxed text-black/80">{module.description}</p>
-                            <div className="mt-5 flex items-center justify-between">
-                              <span className="text-xs font-semibold text-violet-700">Open workspace</span>
-                              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-violet-50 text-violet-700 transition group-hover:bg-violet-600 group-hover:text-white">
-                                <ArrowRight className="h-4 w-4" />
-                              </span>
-                            </div>
-                            <div className={`absolute bottom-0 left-0 h-1 w-0 bg-gradient-to-r ${module.accent} transition-all duration-500 group-hover:w-full`} />
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))}
-            </div>
-          )
-        ) : null}
-
-        {showReportsWidget ? (
-        <section className="relative rounded-[1.5rem] border border-violet-100 bg-white/85 p-5 shadow-sm">
-          <WidgetCloseGate>
+        {filteredModules.length === 0 ? (
+          <div className="rounded-3xl border border-amber-200 bg-amber-50 px-6 py-10 text-center">
+            <p className="text-sm font-semibold text-amber-900">No modules match your search</p>
             <button
               type="button"
-              onClick={() => void hideWidget(`${widgetPrefix}reports_hub`)}
-              className="absolute right-4 top-4 inline-flex h-7 w-7 items-center justify-center rounded-full border border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
-              aria-label="Hide accounting reports hub widget"
+              onClick={() => {
+                setSearchQuery('');
+                setActiveCategory('all');
+              }}
+              className="mt-4 rounded-xl border border-amber-300 bg-white px-4 py-2 text-xs font-bold text-black hover:bg-amber-100"
             >
-              ×
+              Clear filters
             </button>
-          </WidgetCloseGate>
+          </div>
+        ) : (
+          <div className="space-y-8">
+            {groupedModules.map((group) => (
+              <section key={group.key} className="space-y-4">
+                <div>
+                  <h2 className="text-xl font-extrabold text-black">{categoryMeta[group.key].label}</h2>
+                  <p className="text-sm text-black/80 mt-1">{categoryMeta[group.key].hint}</p>
+                </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {group.modules.map((module) => {
+                    const Icon = module.icon;
+                    return (
+                      <button
+                        key={module.title}
+                        type="button"
+                        onClick={() => router.push(module.path)}
+                        className="group relative overflow-hidden rounded-[1.5rem] border border-violet-100/80 bg-white/85 text-left shadow-sm backdrop-blur transition duration-500 hover:-translate-y-1 hover:shadow-xl chart-animate-panel"
+                      >
+                        <div className={`absolute inset-0 bg-gradient-to-br ${module.bg} opacity-0 transition-opacity duration-500 group-hover:opacity-100`} />
+                        <div className="relative p-5">
+                          <div className="mb-4 flex items-start justify-between gap-3">
+                            <div className={`flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br ${module.color} text-white shadow-lg transition duration-300 group-hover:scale-110 chart-animate-icon`}>
+                              <Icon className="h-6 w-6" />
+                            </div>
+                            <span className="rounded-full border border-violet-100 bg-violet-50 px-2.5 py-1 text-[10px] font-bold text-violet-800">
+                              {module.tag}
+                            </span>
+                          </div>
+                          <h3 className="text-base font-bold text-black">{module.title}</h3>
+                          <p className="mt-1.5 text-sm leading-relaxed text-black/80">{module.description}</p>
+                          <div className="mt-5 flex items-center justify-between">
+                            <span className="text-xs font-semibold text-violet-700">Open workspace</span>
+                            <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-violet-50 text-violet-700 transition group-hover:bg-violet-600 group-hover:text-white">
+                              <ArrowRight className="h-4 w-4" />
+                            </span>
+                          </div>
+                          <div className={`absolute bottom-0 left-0 h-1 w-0 bg-gradient-to-r ${module.accent} transition-all duration-500 group-hover:w-full`} />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+
+        <section className="rounded-[1.5rem] border border-violet-100 bg-white/85 p-5 shadow-sm">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-violet-700">Need full reporting?</p>
@@ -653,7 +438,6 @@ export default function AccountingModulePage() {
             </button>
           </div>
         </section>
-        ) : null}
       </div>
     </div>
   );

@@ -1,0 +1,65 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/page.tsx
+@@
+-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mb-4">
+-              <div className="rounded-xl border border-cyan-100 bg-white p-3">
+-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Document Charges</p>
+-                <p className="text-base font-extrabold text-slate-900">
+-                  {statsLoading
+-                    ? '...'
+-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.document)}
+-                </p>
+-              </div>
+-              <div className="rounded-xl border border-cyan-100 bg-white p-3">
+-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stamp Charges</p>
+-                <p className="text-base font-extrabold text-slate-900">
+-                  {statsLoading
+-                    ? '...'
+-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.stamp)}
+-                </p>
+-              </div>
+-              <div className="rounded-xl border border-cyan-100 bg-white p-3">
+-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Insurance Charges</p>
+-                <p className="text-base font-extrabold text-slate-900">
+-                  {statsLoading
+-                    ? '...'
+-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.insurance)}
+-                </p>
+-              </div>
+-              <div className="rounded-xl border border-cyan-100 bg-white p-3">
+-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Charges</p>
+-                <p className="text-base font-extrabold text-cyan-700">
+-                  {statsLoading
+-                    ? '...'
+-                    : new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(chargeTotals.total)}
+-                </p>
+-              </div>
+-              <div className="rounded-xl border border-cyan-100 bg-white p-3">
+-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Loans Count</p>
+-                <p className="text-base font-extrabold text-slate-900">
+-                  {statsLoading ? '...' : chargeTotals.loans.toLocaleString()}
+-                </p>
+-              </div>
+-            </div>
++            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mb-4">
++              {visibleChargeSummaryCards.map((card) => (
++                <div key={card.key} className="relative rounded-xl border border-cyan-100 bg-white p-3">
++                  <button
++                    type="button"
++                    onClick={() => void hideWidget(card.key)}
++                    className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                    aria-label={`Hide ${card.label} charge card`}
++                  >
++                    ×
++                  </button>
++                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{card.label}</p>
++                  <p className={`text-base font-extrabold ${card.valueClass}`}>{card.value}</p>
++                </div>
++              ))}
++            </div>
++            {visibleChargeSummaryCards.length === 0 && (
++              <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
++                All charge summary cards are hidden. Restore them from the dashboard with admin approval.
++              </div>
++            )}
+*** End Patch

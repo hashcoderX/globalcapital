@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import axios from 'axios';
 import { getApiBaseUrl, getBackendOrigin } from '@/lib/api';
 import { useWidgetsFixed, WidgetCloseGate } from '@/lib/useWidgetsFixed';
@@ -213,10 +214,352 @@ export default function Dashboard() {
   const [notificationPreviewLoading, setNotificationPreviewLoading] = useState(false);
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
   const [notificationPreviewItems, setNotificationPreviewItems] = useState<NotificationPreviewItem[]>([]);
+  const [calculatorOpen, setCalculatorOpen] = useState(false);
+  const [calculatorInput, setCalculatorInput] = useState('');
+  const [calculatorResult, setCalculatorResult] = useState('0');
   const notificationPreviewRef = useRef<HTMLDivElement | null>(null);
   const router = useRouter();
   const apiBaseUrl = getApiBaseUrl();
   const companyLogoUrl = `${getBackendOrigin()}/media/company/logo`;
+
+  const formatCalculatorNumber = useCallback((value: number) => {
+    if (!Number.isFinite(value)) {
+      throw new Error('Invalid result');
+    }
+
+    if (Number.isInteger(value)) {
+      return String(value);
+    }
+
+    return String(parseFloat(value.toFixed(12)));
+  }, []);
+
+  const evaluateScientificExpression = useCallback((rawExpression: string): number => {
+    const expression = String(rawExpression || '')
+      .replace(/\s+/g, '')
+      .replace(/×/g, '*')
+      .replace(/÷/g, '/');
+
+    if (!expression) {
+      throw new Error('Expression is empty');
+    }
+
+    type Token =
+      | { type: 'number'; value: number }
+      | { type: 'operator'; value: '+' | '-' | '*' | '/' | '%' | '^' }
+      | { type: 'leftParen' }
+      | { type: 'rightParen' }
+      | { type: 'identifier'; value: string };
+
+    const tokens: Token[] = [];
+    const allowedFunctions = new Set(['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sqrt', 'log', 'ln', 'abs', 'exp']);
+
+    let index = 0;
+    while (index < expression.length) {
+      const char = expression[index];
+
+      if (/[0-9.]/.test(char)) {
+        let end = index + 1;
+        while (end < expression.length && /[0-9.]/.test(expression[end])) {
+          end += 1;
+        }
+
+        const numberValue = Number(expression.slice(index, end));
+        if (!Number.isFinite(numberValue)) {
+          throw new Error('Invalid number');
+        }
+
+        tokens.push({ type: 'number', value: numberValue });
+        index = end;
+        continue;
+      }
+
+      if (/[A-Za-zπ]/.test(char)) {
+        let end = index + 1;
+        while (end < expression.length && /[A-Za-z]/.test(expression[end])) {
+          end += 1;
+        }
+
+        const identifier = expression.slice(index, end) === 'π' ? 'pi' : expression.slice(index, end).toLowerCase();
+        if (identifier !== 'pi' && identifier !== 'e' && !allowedFunctions.has(identifier)) {
+          throw new Error('Unsupported function');
+        }
+
+        tokens.push({ type: 'identifier', value: identifier });
+        index = end;
+        continue;
+      }
+
+      if (char === '(') {
+        tokens.push({ type: 'leftParen' });
+        index += 1;
+        continue;
+      }
+
+      if (char === ')') {
+        tokens.push({ type: 'rightParen' });
+        index += 1;
+        continue;
+      }
+
+      if (['+', '-', '*', '/', '%', '^'].includes(char)) {
+        tokens.push({ type: 'operator', value: char as '+' | '-' | '*' | '/' | '%' | '^' });
+        index += 1;
+        continue;
+      }
+
+      throw new Error('Invalid character');
+    }
+
+    let cursor = 0;
+
+    const match = (type: Token['type']) => tokens[cursor]?.type === type;
+    const current = () => tokens[cursor];
+
+    const parsePrimary = (): number => {
+      const token = current();
+      if (!token) {
+        throw new Error('Unexpected end of expression');
+      }
+
+      if (token.type === 'number') {
+        cursor += 1;
+        return token.value;
+      }
+
+      if (token.type === 'identifier') {
+        cursor += 1;
+
+        if (token.value === 'pi') return Math.PI;
+        if (token.value === 'e') return Math.E;
+
+        if (!match('leftParen')) {
+          throw new Error('Function requires parentheses');
+        }
+
+        cursor += 1;
+        const innerValue = parseExpression();
+        if (!match('rightParen')) {
+          throw new Error('Missing closing parenthesis');
+        }
+        cursor += 1;
+
+        switch (token.value) {
+          case 'sin':
+            return Math.sin(innerValue);
+          case 'cos':
+            return Math.cos(innerValue);
+          case 'tan':
+            return Math.tan(innerValue);
+          case 'asin':
+            return Math.asin(innerValue);
+          case 'acos':
+            return Math.acos(innerValue);
+          case 'atan':
+            return Math.atan(innerValue);
+          case 'sqrt':
+            return Math.sqrt(innerValue);
+          case 'log':
+            return Math.log10(innerValue);
+          case 'ln':
+            return Math.log(innerValue);
+          case 'abs':
+            return Math.abs(innerValue);
+          case 'exp':
+            return Math.exp(innerValue);
+          default:
+            throw new Error('Unsupported function');
+        }
+      }
+
+      if (token.type === 'leftParen') {
+        cursor += 1;
+        const value = parseExpression();
+        if (!match('rightParen')) {
+          throw new Error('Missing closing parenthesis');
+        }
+        cursor += 1;
+        return value;
+      }
+
+      throw new Error('Invalid expression');
+    };
+
+    const parseUnary = (): number => {
+      const token = current();
+      if (token?.type === 'operator' && (token.value === '+' || token.value === '-')) {
+        cursor += 1;
+        const value = parseUnary();
+        return token.value === '-' ? -value : value;
+      }
+      return parsePrimary();
+    };
+
+    const parsePower = (): number => {
+      let value = parseUnary();
+      const token = current();
+      if (token?.type === 'operator' && token.value === '^') {
+        cursor += 1;
+        const exponent = parsePower();
+        value = Math.pow(value, exponent);
+      }
+      return value;
+    };
+
+    const parseTerm = (): number => {
+      let value = parsePower();
+      while (true) {
+        const token = current();
+        if (!token || token.type !== 'operator' || !['*', '/', '%'].includes(token.value)) {
+          break;
+        }
+
+        cursor += 1;
+        const right = parsePower();
+        if (token.value === '*') value *= right;
+        if (token.value === '/') value /= right;
+        if (token.value === '%') value %= right;
+      }
+      return value;
+    };
+
+    const parseExpression = (): number => {
+      let value = parseTerm();
+      while (true) {
+        const token = current();
+        if (!token || token.type !== 'operator' || !['+', '-'].includes(token.value)) {
+          break;
+        }
+
+        cursor += 1;
+        const right = parseTerm();
+        if (token.value === '+') value += right;
+        if (token.value === '-') value -= right;
+      }
+      return value;
+    };
+
+    const finalValue = parseExpression();
+    if (cursor < tokens.length) {
+      throw new Error('Unexpected token');
+    }
+
+    if (!Number.isFinite(finalValue)) {
+      throw new Error('Invalid calculation');
+    }
+
+    return finalValue;
+  }, []);
+
+  const appendCalculatorValue = useCallback((value: string) => {
+    const normalized =
+      value === '√(' ? 'sqrt(' :
+      value === 'π' ? 'pi' :
+      value;
+
+    setCalculatorInput((prev) => `${prev}${normalized}`);
+  }, []);
+
+  const clearCalculator = useCallback(() => {
+    setCalculatorInput('');
+    setCalculatorResult('0');
+  }, []);
+
+  const backspaceCalculator = useCallback(() => {
+    setCalculatorInput((prev) => prev.slice(0, -1));
+  }, []);
+
+  const calculateResult = useCallback(() => {
+    try {
+      const numericResult = evaluateScientificExpression(calculatorInput);
+      const normalized = formatCalculatorNumber(numericResult);
+      setCalculatorResult(normalized);
+      setCalculatorInput(normalized);
+    } catch {
+      setCalculatorResult('Error');
+    }
+  }, [calculatorInput, evaluateScientificExpression, formatCalculatorNumber]);
+
+  useEffect(() => {
+    if (!calculatorOpen) return;
+
+    const handleCalculatorKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      const isTypingField =
+        tagName === 'input' ||
+        tagName === 'textarea' ||
+        tagName === 'select' ||
+        Boolean(target?.isContentEditable);
+
+      if (isTypingField) {
+        return;
+      }
+
+      const key = event.key;
+
+      if (/^[0-9]$/.test(key)) {
+        event.preventDefault();
+        appendCalculatorValue(key);
+        return;
+      }
+
+      if (/^[a-zA-Z]$/.test(key)) {
+        event.preventDefault();
+        if (key === 'x' || key === 'X') {
+          appendCalculatorValue('*');
+          return;
+        }
+        appendCalculatorValue(key.toLowerCase());
+        return;
+      }
+
+      const keyMap: Record<string, string> = {
+        '.': '.',
+        ',': '.',
+        '+': '+',
+        '-': '-',
+        '*': '*',
+        '/': '/',
+        '%': '%',
+        '^': '^',
+        '(': '(',
+        ')': ')',
+      };
+
+      if (key in keyMap) {
+        event.preventDefault();
+        appendCalculatorValue(keyMap[key]);
+        return;
+      }
+
+      if (key === 'Backspace') {
+        event.preventDefault();
+        backspaceCalculator();
+        return;
+      }
+
+      if (key === 'Delete') {
+        event.preventDefault();
+        clearCalculator();
+        return;
+      }
+
+      if (key === 'Enter' || key === '=') {
+        event.preventDefault();
+        calculateResult();
+        return;
+      }
+
+      if (key === 'Escape') {
+        event.preventDefault();
+        setCalculatorOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleCalculatorKeyDown);
+    return () => window.removeEventListener('keydown', handleCalculatorKeyDown);
+  }, [calculatorOpen, appendCalculatorValue, backspaceCalculator, clearCalculator, calculateResult]);
 
   const normalizeText = (value: string) =>
     String(value || '')
@@ -872,6 +1215,14 @@ export default function Dashboard() {
       path: '/dashboard/notifications',
     },
     {
+      key: 'setting_ai_assistant',
+      icon: '🤖',
+      title: 'AI Assistant',
+      desc: 'Ask questions about live system information',
+      color: 'from-cyan-500 to-blue-500',
+      path: '/dashboard/assistant',
+    },
+    {
       key: 'setting_company_settings',
       icon: '🏢',
       title: 'Company Settings',
@@ -939,9 +1290,8 @@ export default function Dashboard() {
                 <button
                   type="button"
                   onClick={() => {
-                    const nextOpen = !notificationPreviewOpen;
-                    setNotificationPreviewOpen(nextOpen);
-                    if (nextOpen) void fetchNotificationPreview();
+                    setNotificationPreviewOpen(false);
+                    router.push('/dashboard/notifications');
                   }}
                   className="flex w-full items-center gap-2 rounded-full border border-amber-200 bg-amber-50/90 px-3 py-1.5 text-left transition hover:bg-amber-100 sm:w-auto"
                 >
@@ -984,16 +1334,13 @@ export default function Dashboard() {
                         ))
                       )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setNotificationPreviewOpen(false);
-                        router.push('/dashboard/notifications');
-                      }}
-                      className="mt-3 w-full rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700"
+                    <Link
+                      href="/dashboard/notifications"
+                      onClick={() => setNotificationPreviewOpen(false)}
+                      className="mt-3 block w-full rounded-lg bg-slate-900 px-3 py-2 text-center text-xs font-semibold text-white hover:bg-slate-700"
                     >
                       Open Notification Center
-                    </button>
+                    </Link>
                   </div>
                 )}
               </div>
@@ -1143,7 +1490,7 @@ export default function Dashboard() {
           <div className="mb-16 rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center">
             <h3 className="text-lg font-semibold text-amber-800">No Widgets Available</h3>
             <p className="text-amber-700 mt-2">
-              All feature widgets are currently hidden for this user. Use "Restore Hidden Widgets" to show them again.
+              All feature widgets are currently hidden for this user. Use &quot;Restore Hidden Widgets&quot; to show them again.
             </p>
           </div>
         )}
@@ -1691,6 +2038,128 @@ export default function Dashboard() {
               >
                 {handoverModal.saving ? 'Posting...' : 'Cash Handover'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setCalculatorOpen(true)}
+        className="fixed bottom-24 right-5 z-[97] inline-flex h-14 w-14 items-center justify-center rounded-full border border-cyan-200 bg-cyan-500 text-2xl text-white shadow-[0_16px_35px_-14px_rgba(6,182,212,0.9)] transition-transform duration-300 hover:scale-110 focus:outline-none focus:ring-4 focus:ring-cyan-200"
+        aria-label="Open scientific calculator"
+        title="Scientific Calculator"
+      >
+        🧮
+      </button>
+
+      {calculatorOpen && (
+        <div className="fixed inset-0 z-[98] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={() => setCalculatorOpen(false)} />
+          <div className="relative w-full max-w-sm rounded-2xl border border-cyan-100 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-cyan-100 px-4 py-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Scientific Calculator</h3>
+                <p className="text-xs text-slate-500">Use keyboard keys: 0-9, operators, Enter, Backspace, Esc.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCalculatorOpen(false)}
+                className="rounded-md px-2 py-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 p-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="min-h-[24px] break-all text-right font-mono text-sm text-slate-700">{calculatorInput || '0'}</p>
+                <p className="mt-1 break-all text-right font-mono text-xl font-bold text-slate-900">{calculatorResult}</p>
+              </div>
+
+              <div className="grid grid-cols-5 gap-2">
+                {['sin(', 'cos(', 'tan(', 'log(', 'ln('].map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => appendCalculatorValue(key)}
+                    className="rounded-lg border border-cyan-100 bg-cyan-50 px-2 py-2 text-xs font-semibold text-cyan-700 hover:bg-cyan-100"
+                  >
+                    {key}
+                  </button>
+                ))}
+                {['7', '8', '9', '÷', '^'].map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => appendCalculatorValue(key)}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    {key}
+                  </button>
+                ))}
+                {['4', '5', '6', '×', '%'].map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => appendCalculatorValue(key)}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    {key}
+                  </button>
+                ))}
+                {['1', '2', '3', '-', '√('].map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => appendCalculatorValue(key)}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    {key}
+                  </button>
+                ))}
+                {['0', '.', '(', ')', '+'].map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => appendCalculatorValue(key)}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    {key}
+                  </button>
+                ))}
+                {['π', 'e', 'abs(', 'exp('].map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => appendCalculatorValue(key)}
+                    className="rounded-lg border border-cyan-100 bg-cyan-50 px-2 py-2 text-xs font-semibold text-cyan-700 hover:bg-cyan-100"
+                  >
+                    {key}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={backspaceCalculator}
+                  className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100"
+                >
+                  ⌫
+                </button>
+                <button
+                  type="button"
+                  onClick={clearCalculator}
+                  className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                >
+                  C
+                </button>
+                <button
+                  type="button"
+                  onClick={calculateResult}
+                  className="col-span-3 rounded-lg bg-slate-900 px-2 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+                >
+                  =
+                </button>
+              </div>
             </div>
           </div>
         </div>

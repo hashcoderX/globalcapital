@@ -91,13 +91,18 @@ class CustomerController extends Controller
 
         if (!$customer) {
             return response()->json([
+                'found' => false,
+                'data' => null,
                 'message' => 'Customer not found for provided Customer No.',
-            ], 404);
+            ]);
         }
 
         $customer->repairCustomerCodeIfNeeded();
 
-        return response()->json($customer->fresh());
+        return response()->json([
+            'found' => true,
+            'data' => $customer->fresh(),
+        ]);
     }
 
     public function uploadPhotoByCode(Request $request, string $customerCode): JsonResponse

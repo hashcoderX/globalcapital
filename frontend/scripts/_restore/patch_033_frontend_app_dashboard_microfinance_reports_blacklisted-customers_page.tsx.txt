@@ -1,0 +1,53 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/reports/blacklisted-customers/page.tsx
+@@
+   const summary = useMemo(() => {
+@@
+   }, [filteredRows]);
++
++  const summaryCards = [
++    { key: 'mf_blacklisted_widget_summary_count', label: 'Blacklisted', value: String(summary.count), valueClass: 'text-slate-900' },
++    { key: 'mf_blacklisted_widget_summary_linked_loans', label: 'Linked Loans', value: String(summary.linkedLoans), valueClass: 'text-slate-900' },
++    {
++      key: 'mf_blacklisted_widget_summary_pending',
++      label: 'Pending',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending),
++      valueClass: 'text-rose-700',
++    },
++    {
++      key: 'mf_blacklisted_widget_summary_arrears',
++      label: 'Arrears',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.arrears),
++      valueClass: 'text-orange-700',
++    },
++    {
++      key: 'mf_blacklisted_widget_summary_high_medium',
++      label: 'High / Medium',
++      value: `${summary.high} / ${summary.medium}`,
++      valueClass: 'text-red-700',
++    },
++    { key: 'mf_blacklisted_widget_summary_low', label: 'Low', value: String(summary.low), valueClass: 'text-emerald-700' },
++  ];
++
++  const visibleSummaryCards = summaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
++  const showToolbar = !hiddenWidgetKeys.has('mf_blacklisted_widget_toolbar');
++  const tableColumns = [
++    { key: 'id', label: 'ID' },
++    { key: 'customerNo', label: 'Customer No' },
++    { key: 'customer', label: 'Customer' },
++    { key: 'nic', label: 'NIC' },
++    { key: 'contact', label: 'Contact' },
++    { key: 'fieldOfficer', label: 'Field Officer' },
++    { key: 'loans', label: 'Loans' },
++    { key: 'collected', label: 'Collected' },
++    { key: 'pending', label: 'Pending' },
++    { key: 'arrears', label: 'Arrears' },
++    { key: 'risk', label: 'Risk' },
++  ];
++  const visibleTableColumns = tableColumns.filter(
++    (column) => !hiddenWidgetKeys.has(`mf_blacklisted_widget_col_${column.key}`)
++  );
+@@
+-  if (!token || loading) {
++  if (!token || loading || loadingWidgets) {
+*** End Patch

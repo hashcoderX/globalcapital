@@ -1,0 +1,92 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/payments/page.tsx
+@@
+   const totals = useMemo(() => {
+@@
+   }, [filteredPayments]);
++
++  const paymentSummaryCards = [
++    {
++      key: 'mf_payments_widget_summary_count',
++      label: 'Payments',
++      value: String(totals.count),
++      wrapperClass: 'bg-white/10 border border-white/20 p-4 backdrop-blur',
++      valueClass: 'text-xl font-bold text-white mt-1',
++      labelClass: 'text-xs uppercase tracking-wide text-cyan-100',
++    },
++    {
++      key: 'mf_payments_widget_summary_total_collection',
++      label: 'Total Collection',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalAmount),
++      wrapperClass: 'bg-gradient-to-br from-white to-cyan-50 border border-cyan-100 shadow-[0_12px_28px_-20px_rgba(6,182,212,0.35)] p-4',
++      valueClass: 'text-lg md:text-xl font-bold text-slate-900 mt-1',
++      labelClass: 'text-xs uppercase tracking-wide text-slate-500',
++    },
++    {
++      key: 'mf_payments_widget_summary_total_capital',
++      label: 'Total Capital',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalCapital),
++      wrapperClass: 'bg-gradient-to-br from-white to-sky-50 border border-sky-100 shadow-[0_12px_28px_-20px_rgba(14,165,233,0.35)] p-4',
++      valueClass: 'text-lg md:text-xl font-bold text-slate-900 mt-1',
++      labelClass: 'text-xs uppercase tracking-wide text-slate-500',
++    },
++    {
++      key: 'mf_payments_widget_summary_total_interest',
++      label: 'Total Interest',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.totalInterest),
++      wrapperClass: 'bg-gradient-to-br from-white to-indigo-50 border border-indigo-100 shadow-[0_12px_28px_-20px_rgba(99,102,241,0.3)] p-4',
++      valueClass: 'text-lg md:text-xl font-bold text-slate-900 mt-1',
++      labelClass: 'text-xs uppercase tracking-wide text-slate-500',
++    },
++    {
++      key: 'mf_payments_widget_summary_today_collected',
++      label: 'Today Collected',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(totals.todayAmount),
++      wrapperClass: 'bg-gradient-to-br from-white to-emerald-50 border border-emerald-100 shadow-[0_12px_28px_-20px_rgba(16,185,129,0.4)] p-4',
++      valueClass: 'text-lg md:text-xl font-bold text-emerald-700 mt-1',
++      labelClass: 'text-xs uppercase tracking-wide text-slate-500',
++    },
++    {
++      key: 'mf_payments_widget_summary_cash_bank',
++      label: 'Cash / Bank',
++      value: `${totals.cashCount} / ${totals.bankCount}`,
++      wrapperClass: 'bg-gradient-to-br from-white to-amber-50 border border-amber-100 shadow-[0_12px_28px_-20px_rgba(245,158,11,0.35)] p-4',
++      valueClass: 'text-xl font-bold text-slate-900 mt-1',
++      labelClass: 'text-xs uppercase tracking-wide text-slate-500',
++    },
++  ];
++
++  const visiblePaymentSummaryCards = paymentSummaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
++
++  const loanHistoryCards = [
++    {
++      key: 'mf_payments_widget_history_count',
++      label: 'Payments',
++      value: String(selectedLoanHistoryStats.count),
++      valueClass: 'text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words',
++    },
++    {
++      key: 'mf_payments_widget_history_collected',
++      label: 'Collected',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.collected),
++      valueClass: 'text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-emerald-700 break-words [overflow-wrap:anywhere]',
++    },
++    {
++      key: 'mf_payments_widget_history_capital',
++      label: 'Capital',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.capital),
++      valueClass: 'text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words [overflow-wrap:anywhere]',
++    },
++    {
++      key: 'mf_payments_widget_history_interest',
++      label: 'Interest',
++      value: new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(selectedLoanHistoryStats.interest),
++      valueClass: 'text-base sm:text-lg lg:text-xl leading-tight font-extrabold text-slate-900 break-words [overflow-wrap:anywhere]',
++    },
++  ];
++
++  const visibleLoanHistoryCards = loanHistoryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
+@@
+-  if (!token || loading) {
++  if (!token || loading || loadingWidgets) {
+*** End Patch

@@ -1,0 +1,153 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/reports/collection/page.tsx
+@@
+           <div className="flex items-start justify-between gap-4 flex-wrap">
+             <div>
+@@
+             </div>
+-            <button
+-              onClick={handleBack}
+-              className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm w-full sm:w-auto"
+-            >
+-              Back
+-            </button>
++            {showHeaderBack && (
++              <div className="relative">
++                <button
++                  type="button"
++                  onClick={() => void hideWidget('mf_collection_widget_header_back')}
++                  className="absolute -top-2 -left-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                  aria-label="Hide back button"
++                >
++                  ×
++                </button>
++                <button
++                  onClick={handleBack}
++                  className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm w-full sm:w-auto"
++                >
++                  Back
++                </button>
++              </div>
++            )}
+           </div>
+@@
+           <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+-            <div className="relative overflow-hidden rounded-2xl border border-cyan-100 bg-gradient-to-br from-white via-cyan-50/60 to-sky-50/70 p-4 shadow-sm">
+-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-cyan-200/40 blur-xl"></div>
+-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-100 text-cyan-700 text-xs font-bold">TX</div>
+-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Transactions</p>
+-              <p className="text-lg sm:text-xl font-bold text-slate-900 mt-1">{summary.transactionCount}</p>
+-            </div>
+-            <div className="relative overflow-hidden rounded-2xl border border-emerald-100 bg-gradient-to-br from-white via-emerald-50/70 to-teal-50/70 p-4 shadow-sm">
+-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-emerald-200/40 blur-xl"></div>
+-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 text-xs font-bold">TC</div>
+-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Total Collected</p>
+-              <p className="text-sm sm:text-base font-bold text-emerald-700 mt-1 break-words [overflow-wrap:anywhere]">
+-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCollected)}
+-              </p>
+-            </div>
+-            <div className="relative overflow-hidden rounded-2xl border border-sky-100 bg-gradient-to-br from-white via-sky-50/70 to-cyan-50/70 p-4 shadow-sm">
+-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-sky-200/40 blur-xl"></div>
+-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-sky-100 text-sky-700 text-xs font-bold">CP</div>
+-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Capital</p>
+-              <p className="text-sm sm:text-base font-bold text-slate-900 mt-1 break-words [overflow-wrap:anywhere]">
+-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCapital)}
+-              </p>
+-            </div>
+-            <div className="relative overflow-hidden rounded-2xl border border-cyan-100 bg-gradient-to-br from-white via-cyan-50/70 to-blue-50/70 p-4 shadow-sm">
+-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-cyan-200/40 blur-xl"></div>
+-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-100 text-cyan-700 text-xs font-bold">IN</div>
+-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Interest</p>
+-              <p className="text-sm sm:text-base font-bold text-slate-900 mt-1 break-words [overflow-wrap:anywhere]">
+-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalInterest)}
+-              </p>
+-            </div>
+-            <div className="relative overflow-hidden rounded-2xl border border-rose-100 bg-gradient-to-br from-white via-rose-50/70 to-orange-50/70 p-4 shadow-sm sm:col-span-2">
+-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-rose-200/40 blur-xl"></div>
+-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-700 text-xs font-bold">PN</div>
+-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Penalty</p>
+-              <p className="text-sm sm:text-base font-bold text-rose-700 mt-1 break-words [overflow-wrap:anywhere]">
+-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalPenalty)}
+-              </p>
+-            </div>
+-            <div className="relative overflow-hidden rounded-2xl border border-teal-100 bg-gradient-to-br from-white via-teal-50/70 to-cyan-50/70 p-4 shadow-sm sm:col-span-2">
+-              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-teal-200/40 blur-xl"></div>
+-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-teal-100 text-teal-700 text-xs font-bold">TD</div>
+-              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Today / Officers</p>
+-              <p className="text-sm sm:text-base font-bold text-cyan-800 mt-1 break-words [overflow-wrap:anywhere]">
+-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.todayCollected)} / {summary.officerCount}
+-              </p>
+-            </div>
++            {visibleSummaryCards.map((card) => (
++              <div key={card.key} className="relative overflow-hidden rounded-2xl border border-cyan-100 bg-gradient-to-br from-white via-cyan-50/60 to-sky-50/70 p-4 shadow-sm">
++                <button
++                  type="button"
++                  onClick={() => void hideWidget(card.key)}
++                  className="absolute right-3 top-3 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                  aria-label={`Hide ${card.label} card`}
++                >
++                  ×
++                </button>
++                <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">{card.label}</p>
++                <p className={`text-sm sm:text-base font-bold mt-1 break-words [overflow-wrap:anywhere] ${card.style}`}>
++                  {card.value}
++                </p>
++              </div>
++            ))}
+           </div>
++          {visibleSummaryCards.length === 0 && (
++            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
++              All summary cards are hidden. Restore from dashboard with admin approval.
++            </div>
++          )}
+         </div>
+@@
+-            <div className="flex flex-col sm:flex-row sm:items-end gap-2 w-full lg:w-auto lg:flex-wrap">
++            {showToolbar && (
++              <div className="relative flex flex-col sm:flex-row sm:items-end gap-2 w-full lg:w-auto lg:flex-wrap">
++              <button
++                type="button"
++                onClick={() => void hideWidget('mf_collection_widget_toolbar')}
++                className="absolute -top-2 -left-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                aria-label="Hide toolbar"
++              >
++                ×
++              </button>
+               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full lg:w-auto">
+@@
+               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 w-full sm:w-auto">
+@@
+               </div>
+-            </div>
++              </div>
++            )}
+           </div>
++          {!showToolbar && (
++            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
++              Toolbar controls are hidden. Restore from dashboard with admin approval.
++            </div>
++          )}
+@@
+-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 lg:hidden">
++              {showMobileCards && (
++                <div className="relative mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 lg:hidden">
++                <button
++                  type="button"
++                  onClick={() => void hideWidget('mf_collection_widget_mobile_cards')}
++                  className="absolute -top-2 -left-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
++                  aria-label="Hide mobile cards"
++                >
++                  ×
++                </button>
+                 {filteredRows.map((row) => (
+@@
+                 ))}
+-              </div>
++                </div>
++              )}
++              {!showMobileCards && (
++                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 lg:hidden">
++                  Mobile cards are hidden. Restore from dashboard with admin approval.
++                </div>
++              )}
+*** End Patch

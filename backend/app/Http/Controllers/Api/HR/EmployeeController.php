@@ -10,6 +10,7 @@ use App\Models\EmployeeWallet;
 use App\Models\EmployeeWalletBankDeposit;
 use App\Models\EmployeeWalletCashHandover;
 use App\Models\User;
+use App\Models\UserDashboardWidget;
 use App\Http\Requests\StoreEmployeeRequest;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
@@ -78,6 +79,113 @@ class EmployeeController extends Controller
         }
 
         return $user->isSystemAdmin() || $user->hasPermission($permission);
+    }
+
+    private function findDesignationWidgetTemplateUser(int $designationId, ?int $excludeUserId = null): ?User
+    {
+        if ($designationId <= 0) {
+            return null;
+        }
+
+        $query = User::query()
+            ->where('designation_id', $designationId);
+
+        if ($excludeUserId !== null && $excludeUserId > 0) {
+            $query->where('id', '!=', $excludeUserId);
+        }
+
+        return $query
+            ->whereHas('dashboardWidgets', function ($builder) {
+                $builder->where('is_visible', false);
+            })
+            ->with(['employee:id,first_name,last_name,employee_code'])
+            ->withCount([
+                'dashboardWidgets as hidden_widgets_count' => function ($builder) {
+                    $builder->where('is_visible', false);
+                },
+            ])
+            ->orderByDesc('hidden_widgets_count')
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    private function copyHiddenWidgetsFromDesignationTemplate(User $targetUser, int $designationId): int
+    {
+        if ($designationId <= 0 || (int) ($targetUser->id ?? 0) <= 0) {
+            return 0;
+        }
+
+        $sourceUser = $this->findDesignationWidgetTemplateUser($designationId, (int) $targetUser->id);
+        if (!$sourceUser) {
+            return 0;
+        }
+
+        $hiddenWidgets = UserDashboardWidget::query()
+            ->where('user_id', (int) $sourceUser->id)
+            ->where('is_visible', false)
+            ->get(['widget_key', 'hidden_at']);
+
+        $copiedCount = 0;
+        foreach ($hiddenWidgets as $widget) {
+            $widgetKey = trim((string) ($widget->widget_key ?? ''));
+            if ($widgetKey === '') {
+                continue;
+            }
+
+            UserDashboardWidget::query()->updateOrCreate(
+                [
+                    'user_id' => (int) $targetUser->id,
+                    'widget_key' => $widgetKey,
+                ],
+                [
+                    'is_visible' => false,
+                    'hidden_at' => $widget->hidden_at ?? now(),
+                ]
+            );
+
+            $copiedCount++;
+        }
+
+        return $copiedCount;
+    }
+
+    public function designationWidgetTemplateSummary(Request $request): JsonResponse
+    {
+        if (!$this->canManageEmployees($request, 'create_employees')) {
+            return response()->json(['message' => 'You do not have permission to view designation widget templates.'], 403);
+        }
+
+        $validated = $request->validate([
+            'designation_id' => 'required|integer|exists:designations,id',
+        ]);
+
+        $designationId = (int) $validated['designation_id'];
+        $sourceUser = $this->findDesignationWidgetTemplateUser($designationId);
+
+        if (!$sourceUser) {
+            return response()->json([
+                'designation_id' => $designationId,
+                'has_template' => false,
+                'hidden_count' => 0,
+                'source_user_id' => null,
+                'source_employee_id' => null,
+                'source_employee_name' => null,
+                'source_employee_code' => null,
+            ]);
+        }
+
+        $employee = $sourceUser->employee;
+        $employeeName = trim((string) (($employee->first_name ?? '') . ' ' . ($employee->last_name ?? '')));
+
+        return response()->json([
+            'designation_id' => $designationId,
+            'has_template' => true,
+            'hidden_count' => (int) ($sourceUser->hidden_widgets_count ?? 0),
+            'source_user_id' => (int) $sourceUser->id,
+            'source_employee_id' => $employee ? (int) $employee->id : null,
+            'source_employee_name' => $employeeName !== '' ? $employeeName : null,
+            'source_employee_code' => $employee ? (string) ($employee->employee_code ?? '') : null,
+        ]);
     }
 
     /**
@@ -171,7 +279,7 @@ class EmployeeController extends Controller
             $employee = Employee::create($employeeData);
 
             // Create user account for the employee.
-            User::create([
+            $createdUser = User::create([
                 'name' => $validated['first_name'] . ' ' . $validated['last_name'],
                 'email' => $validated['email'],
                 'password' => Hash::make($validated['password']),
@@ -179,6 +287,8 @@ class EmployeeController extends Controller
                 'branch_id' => $validated['branch_id'],
                 'designation_id' => $validated['designation_id'],
             ]);
+
+            $this->copyHiddenWidgetsFromDesignationTemplate($createdUser, (int) ($validated['designation_id'] ?? 0));
 
             $shouldCreateWallet = (bool) ($validated['create_wallet'] ?? false);
             if ($shouldCreateWallet) {

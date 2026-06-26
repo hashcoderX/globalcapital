@@ -96,6 +96,11 @@ interface EmployeeWallet {
   status?: string;
 }
 
+interface HiddenWidgetEntry {
+  widget_key: string;
+  hidden_at?: string | null;
+}
+
 type EmployeeFull = Employee & {
   documents?: EmployeeDocument[];
   educations?: EmployeeEducation[];
@@ -112,6 +117,12 @@ interface Designation {
   id: number;
   name: string;
   source?: 'designation' | 'role';
+}
+
+interface DesignationWidgetTemplateSummary {
+  has_template: boolean;
+  hidden_count: number;
+  source_employee_name?: string | null;
 }
 
 interface RoleOption {
@@ -188,6 +199,7 @@ export default function Employees() {
   const [walletModalValue, setWalletModalValue] = useState('0');
   const [walletModalSaving, setWalletModalSaving] = useState(false);
   const [profileEmployee, setProfileEmployee] = useState<EmployeeFull | null>(null);
+  const [profileHiddenWidgets, setProfileHiddenWidgets] = useState<HiddenWidgetEntry[]>([]);
   const [profileLoading, setProfileLoading] = useState(false);
   const router = useRouter();
 
@@ -226,6 +238,8 @@ export default function Employees() {
   const [taxReliefEligible, setTaxReliefEligible] = useState<'yes' | 'no'>('no');
   const [departmentId, setDepartmentId] = useState('');
   const [designationId, setDesignationId] = useState('');
+  const [designationWidgetTemplate, setDesignationWidgetTemplate] = useState<DesignationWidgetTemplateSummary | null>(null);
+  const [designationTemplateLoading, setDesignationTemplateLoading] = useState(false);
   const [branchId, setBranchId] = useState('');
   const [reportingPerson, setReportingPerson] = useState('');
   const [status, setStatus] = useState<'active' | 'inactive'>('active');
@@ -402,6 +416,56 @@ export default function Employees() {
       document.removeEventListener('keydown', handleEsc);
     };
   }, [openMenuFor]);
+
+  useEffect(() => {
+    if (!showForm || editingEmployee || !token) {
+      setDesignationWidgetTemplate(null);
+      setDesignationTemplateLoading(false);
+      return;
+    }
+
+    const parsedDesignationId = Number(designationId);
+    if (!Number.isFinite(parsedDesignationId) || parsedDesignationId <= 0) {
+      setDesignationWidgetTemplate(null);
+      setDesignationTemplateLoading(false);
+      return;
+    }
+
+    let isCancelled = false;
+
+    const fetchDesignationWidgetTemplate = async () => {
+      setDesignationTemplateLoading(true);
+      try {
+        const response = await axios.get(`${apiBase}/hr/employees/designation-widget-template`, {
+          headers: { Authorization: `Bearer ${token}` },
+          params: { designation_id: parsedDesignationId },
+        });
+
+        if (isCancelled) return;
+
+        const payload = response?.data || {};
+        setDesignationWidgetTemplate({
+          has_template: Boolean(payload?.has_template),
+          hidden_count: Number(payload?.hidden_count || 0),
+          source_employee_name: payload?.source_employee_name || null,
+        });
+      } catch {
+        if (!isCancelled) {
+          setDesignationWidgetTemplate(null);
+        }
+      } finally {
+        if (!isCancelled) {
+          setDesignationTemplateLoading(false);
+        }
+      }
+    };
+
+    fetchDesignationWidgetTemplate();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [apiBase, designationId, editingEmployee, showForm, token]);
 
   // Confirm modal state
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -803,6 +867,8 @@ export default function Employees() {
     setTaxReliefEligible('no');
     setDepartmentId('');
     setDesignationId('');
+    setDesignationWidgetTemplate(null);
+    setDesignationTemplateLoading(false);
     setBranchId('');
     setReportingPerson('');
     setStatus('active');
@@ -993,14 +1059,35 @@ export default function Employees() {
     try {
       setProfileLoading(true);
       setShowProfileModal(true);
-      const response = await axios.get(`${apiBase}/hr/employees/${employee.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setProfileEmployee(response.data as EmployeeFull);
+      setProfileHiddenWidgets([]);
+
+      const [profileResponse, hiddenWidgetsResponse] = await Promise.all([
+        axios.get(`${apiBase}/hr/employees/${employee.id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        axios
+          .get(`${apiBase}/dashboard/widgets/employee-hidden`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+            },
+            params: {
+              employee_id: employee.id,
+            },
+          })
+          .catch(() => null),
+      ]);
+
+      setProfileEmployee(profileResponse.data as EmployeeFull);
+      const hiddenRows = Array.isArray(hiddenWidgetsResponse?.data?.hidden_widgets)
+        ? hiddenWidgetsResponse?.data?.hidden_widgets
+        : [];
+      setProfileHiddenWidgets(hiddenRows as HiddenWidgetEntry[]);
       setActiveEmployee(employee);
     } catch (error) {
       console.error('Error loading employee profile:', error);
       showNotice('Error', 'Failed to load employee profile', 'error');
+      setProfileHiddenWidgets([]);
       setShowProfileModal(false);
     } finally {
       setProfileLoading(false);
@@ -2414,6 +2501,15 @@ export default function Employees() {
                       </option>
                     ))}
                   </select>
+                  {!editingEmployee && designationId && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      {designationTemplateLoading
+                        ? 'Checking designation widget template...'
+                        : designationWidgetTemplate?.has_template
+                          ? `${designationWidgetTemplate.hidden_count} hidden widgets will be copied from ${designationWidgetTemplate.source_employee_name || 'an existing employee with this designation'}.`
+                          : 'No hidden widget template found for this designation yet.'}
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -2691,6 +2787,36 @@ export default function Employees() {
                     <div><strong>Wallet Status:</strong> {profileEmployee.wallet?.status || 'N/A'}</div>
                   </div>
                   {profileEmployee.address && <div className="mt-4"><strong>Address:</strong> {profileEmployee.address}</div>}
+                </div>
+
+                <div className="bg-amber-50 rounded-xl p-6 border border-amber-100">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-4">Hidden Widgets</h4>
+                  {profileHiddenWidgets.length === 0 ? (
+                    <p className="text-sm text-gray-600">No hidden widgets found for this employee.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {profileHiddenWidgets.map((widget, index) => (
+                        <div
+                          key={`${widget.widget_key}-${index}`}
+                          className="flex flex-col gap-1 rounded-lg border border-amber-200 bg-white p-3"
+                        >
+                          <p className="text-sm font-semibold text-gray-900">{widget.widget_key}</p>
+                          <p className="text-xs text-gray-500">
+                            Hidden at:{' '}
+                            {widget.hidden_at
+                              ? new Date(widget.hidden_at).toLocaleString('en-GB', {
+                                  day: '2-digit',
+                                  month: 'short',
+                                  year: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })
+                              : 'Unknown'}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Education */}

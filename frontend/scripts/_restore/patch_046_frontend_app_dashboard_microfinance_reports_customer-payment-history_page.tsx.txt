@@ -1,0 +1,45 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/reports/customer-payment-history/page.tsx
+@@
+   const timelinePoints = useMemo(() => {
+@@
+   }, [chartData]);
++
++  const showHeaderBack = !hiddenWidgetKeys.has('mf_customer_history_widget_header_back');
++  const showLoanSearch = !hiddenWidgetKeys.has('mf_customer_history_widget_loan_search');
++  const showLoanTable = !hiddenWidgetKeys.has('mf_customer_history_widget_loan_table');
++  const showHistoryFilters = !hiddenWidgetKeys.has('mf_customer_history_widget_history_filters');
++  const showGraphPreview = !hiddenWidgetKeys.has('mf_customer_history_widget_graph_preview');
++
++  const historySummaryCards = [
++    { key: 'mf_customer_history_widget_summary_transactions', label: 'Transactions', value: String(historySummary.transactions), className: 'text-fuchsia-700' },
++    { key: 'mf_customer_history_widget_summary_collected', label: 'Collected', value: formatMoney(historySummary.collected), className: 'text-cyan-700' },
++    { key: 'mf_customer_history_widget_summary_capital', label: 'Capital', value: formatMoney(historySummary.capital), className: 'text-emerald-700' },
++    { key: 'mf_customer_history_widget_summary_interest', label: 'Interest', value: formatMoney(historySummary.interest), className: 'text-indigo-700' },
++    { key: 'mf_customer_history_widget_summary_penalty', label: 'Penalty', value: formatMoney(historySummary.penalty), className: 'text-rose-700' },
++  ];
++  const visibleHistorySummaryCards = historySummaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
++
++  const loanTableColumns = [
++    { key: 'loanCode', label: 'Loan Code' },
++    { key: 'customerNo', label: 'Customer No' },
++    { key: 'customer', label: 'Customer' },
++    { key: 'fieldOfficer', label: 'Field Officer' },
++    { key: 'status', label: 'Status' },
++    { key: 'issueDate', label: 'Issue Date' },
++    { key: 'issueAmount', label: 'Issue Amount' },
++    { key: 'action', label: 'Action' },
++  ];
++  const visibleLoanTableColumns = loanTableColumns.filter((column) => !hiddenWidgetKeys.has(`mf_customer_history_widget_loan_col_${column.key}`));
++
++  const historyTableColumns = [
++    { key: 'date', label: 'Date & Time' },
++    { key: 'payType', label: 'Pay Type' },
++    { key: 'reference', label: 'Reference' },
++    { key: 'collected', label: 'Collected' },
++    { key: 'capital', label: 'Capital' },
++    { key: 'interest', label: 'Interest' },
++    { key: 'penalty', label: 'Penalty' },
++  ];
++  const visibleHistoryTableColumns = historyTableColumns.filter((column) => !hiddenWidgetKeys.has(`mf_customer_history_widget_history_col_${column.key}`));
+*** End Patch

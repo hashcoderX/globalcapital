@@ -1,0 +1,108 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/page.tsx
+@@
+   const microfinanceModules = [
+-    { name: 'Loan Management', icon: '💰', color: 'from-green-500 to-emerald-500', bgColor: 'from-green-50 to-emerald-50', description: 'Manage micro loans and applications' },
+-    { name: 'Collection Management', icon: '📊', color: 'from-blue-500 to-cyan-500', bgColor: 'from-blue-50 to-cyan-50', description: 'Handle loan collections and repayments' },
+-    { name: 'Payments', icon: '💳', color: 'from-purple-500 to-indigo-500', bgColor: 'from-purple-50 to-indigo-50', description: 'Process payments and transactions' },
+-    { name: 'Customers', icon: '👤', color: 'from-amber-500 to-orange-500', bgColor: 'from-amber-50 to-orange-50', description: 'View and manage microfinance customers' },
+-    { name: 'Settings', icon: '⚙️', color: 'from-gray-500 to-slate-500', bgColor: 'from-gray-50 to-slate-50', description: 'Configure microfinance settings' },
++    { key: 'mf_widget_module_loans', name: 'Loan Management', icon: '💰', color: 'from-green-500 to-emerald-500', bgColor: 'from-green-50 to-emerald-50', description: 'Manage micro loans and applications' },
++    { key: 'mf_widget_module_collections', name: 'Collection Management', icon: '📊', color: 'from-blue-500 to-cyan-500', bgColor: 'from-blue-50 to-cyan-50', description: 'Handle loan collections and repayments' },
++    { key: 'mf_widget_module_payments', name: 'Payments', icon: '💳', color: 'from-purple-500 to-indigo-500', bgColor: 'from-purple-50 to-indigo-50', description: 'Process payments and transactions' },
++    { key: 'mf_widget_module_customers', name: 'Customers', icon: '👤', color: 'from-amber-500 to-orange-500', bgColor: 'from-amber-50 to-orange-50', description: 'View and manage microfinance customers' },
++    { key: 'mf_widget_module_settings', name: 'Settings', icon: '⚙️', color: 'from-gray-500 to-slate-500', bgColor: 'from-gray-50 to-slate-50', description: 'Configure microfinance settings' },
+   ];
+ 
+   const visibleModules = microfinanceModules.filter((module) => {
++    if (hiddenWidgetKeys.has(module.key)) {
++      return false;
++    }
+     if (module.name === 'Settings') {
+       return hasMicrofinanceSettingsAccess;
+     }
+@@
+   const reportModules = [
+     {
++      key: 'mf_widget_report_collection',
+       name: 'Collection Report',
+@@
+     {
++      key: 'mf_widget_report_charges',
+       name: 'Charges Report',
+@@
+     {
++      key: 'mf_widget_report_field_officer_collection',
+       name: 'Field Officer Collection Report',
+@@
+     {
++      key: 'mf_widget_report_arrears',
+       name: 'Arrears Report',
+@@
+     {
++      key: 'mf_widget_report_active_members',
+       name: 'Active Member Report',
+@@
+     {
++      key: 'mf_widget_report_blacklisted_customers',
+       name: 'Blacklisted Customer Report',
+@@
+     {
++      key: 'mf_widget_report_repayment',
+       name: 'Re-Payment Report',
+@@
+     {
++      key: 'mf_widget_report_recovery',
+       name: 'Recovery Report',
+@@
+     {
++      key: 'mf_widget_report_not_paid_customers',
+       name: 'Not Paid Customer Report',
+@@
+     {
++      key: 'mf_widget_report_year_end_summary',
+       name: 'Year End Summary Report',
+@@
+     {
++      key: 'mf_widget_report_customer_payment_history',
+       name: 'Customer Payment History Report',
+@@
+   const visibleReportModules = reportModules.filter((report) =>
+-    isAdminUser || hasAnyPermissionToken(report.permissionTokens)
++    (isAdminUser || hasAnyPermissionToken(report.permissionTokens)) && !hiddenWidgetKeys.has(report.key)
+   );
+@@
+   const summaryReportCards = [
+     {
++      key: 'mf_widget_summary_total_outstanding',
+       label: 'Total Outstanding Amount',
+@@
+     {
++      key: 'mf_widget_summary_today_collection',
+       label: 'Today Collection',
+@@
+     {
++      key: 'mf_widget_summary_asset_value_total',
+       label: 'Asset Value Total',
+@@
+     {
++      key: 'mf_widget_summary_month_collection',
+       label: 'Month Collection',
+@@
+     {
++      key: 'mf_widget_summary_imagine_profit',
+       label: 'Imagine Profit',
+@@
+     {
++      key: 'mf_widget_summary_today_profit',
+       label: 'Today Profit',
+@@
+     {
++      key: 'mf_widget_summary_month_profit',
+       label: 'Month Profit',
+@@
+   const visibleSummaryReportCards = summaryReportCards.filter((item) =>
+-    isAdminUser || hasAnyPermissionName(item.permissionNames)
++    (isAdminUser || hasAnyPermissionName(item.permissionNames)) && !hiddenWidgetKeys.has(item.key)
+   );
+*** End Patch

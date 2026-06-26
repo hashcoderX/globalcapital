@@ -8,9 +8,148 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Carbon\Carbon;
 use App\Models\Employee;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 
 class AttendanceController extends Controller
 {
+    private function getFingerprintConfig(): array
+    {
+        if (!Schema::hasTable('system_settings')) {
+            return [];
+        }
+
+        $raw = DB::table('system_settings')->where('key', 'attendance_fingerprint_config')->value('value');
+        if (!is_string($raw) || trim($raw) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function saveFingerprintConfig(array $config): void
+    {
+        DB::table('system_settings')->updateOrInsert(
+            ['key' => 'attendance_fingerprint_config'],
+            [
+                'value' => json_encode($config, JSON_UNESCAPED_SLASHES),
+                'updated_at' => now(),
+                'created_at' => now(),
+            ]
+        );
+    }
+
+    private function normalizeTimeValue(?string $value): ?string
+    {
+        $raw = trim((string) $value);
+        if ($raw === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($raw)->format('H:i:s');
+        } catch (\Throwable) {
+            if (preg_match('/^\d{2}:\d{2}$/', $raw)) {
+                return $raw . ':00';
+            }
+            if (preg_match('/^\d{2}:\d{2}:\d{2}$/', $raw)) {
+                return $raw;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{date:string|null,in_time:string|null,out_time:string|null,status:string|null,employee_code:string|null,employee_id:int|null}
+     */
+    private function normalizeFingerprintRow(array $row): array
+    {
+        $dateCandidate = (string) ($row['date'] ?? $row['attendance_date'] ?? '');
+        $timestampCandidate = (string) ($row['timestamp'] ?? $row['check_time'] ?? '');
+
+        $date = null;
+        if (trim($dateCandidate) !== '') {
+            try {
+                $date = Carbon::parse($dateCandidate)->toDateString();
+            } catch (\Throwable) {
+                $date = null;
+            }
+        }
+        if (!$date && trim($timestampCandidate) !== '') {
+            try {
+                $date = Carbon::parse($timestampCandidate)->toDateString();
+            } catch (\Throwable) {
+                $date = null;
+            }
+        }
+
+        $inTime = $this->normalizeTimeValue((string) ($row['in_time'] ?? $row['check_in'] ?? ''));
+        $outTime = $this->normalizeTimeValue((string) ($row['out_time'] ?? $row['check_out'] ?? ''));
+
+        if (!$inTime && trim($timestampCandidate) !== '') {
+            $inTime = $this->normalizeTimeValue($timestampCandidate);
+        }
+
+        $statusRaw = strtolower(trim((string) ($row['status'] ?? '')));
+        $status = in_array($statusRaw, ['present', 'absent', 'late', 'half_day'], true)
+            ? $statusRaw
+            : ($inTime || $outTime ? 'present' : null);
+
+        $employeeCode = trim((string) ($row['employee_code'] ?? $row['employee_id'] ?? $row['emp_code'] ?? ''));
+        $employeeId = isset($row['employee_db_id']) ? (int) $row['employee_db_id'] : null;
+
+        return [
+            'date' => $date,
+            'in_time' => $inTime,
+            'out_time' => $outTime,
+            'status' => $status,
+            'employee_code' => $employeeCode !== '' ? $employeeCode : null,
+            'employee_id' => $employeeId && $employeeId > 0 ? $employeeId : null,
+        ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function parseFingerprintPayload(string $body): array
+    {
+        $trimmed = trim($body);
+        if ($trimmed === '') {
+            return [];
+        }
+
+        $decoded = json_decode($trimmed, true);
+        if (is_array($decoded)) {
+            $rows = $decoded['data'] ?? $decoded['logs'] ?? $decoded;
+            if (is_array($rows)) {
+                return array_values(array_filter($rows, fn ($row) => is_array($row)));
+            }
+        }
+
+        $lines = preg_split('/\r\n|\r|\n/', $trimmed) ?: [];
+        if (count($lines) < 2) {
+            return [];
+        }
+
+        $header = array_map(
+            fn ($col) => strtolower(trim((string) $col)),
+            str_getcsv((string) array_shift($lines))
+        );
+
+        $rows = [];
+        foreach ($lines as $line) {
+            if (trim($line) === '') continue;
+            $values = str_getcsv($line);
+            if (count($values) !== count($header)) continue;
+            $rows[] = array_combine($header, $values);
+        }
+
+        return array_values(array_filter($rows, fn ($row) => is_array($row)));
+    }
+
     /**
      * Display a listing of the resource.
      */
@@ -482,5 +621,224 @@ class AttendanceController extends Controller
                 'file' => $e->getFile()
             ], 500);
         }
+    }
+
+    public function fingerprintConfig(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (!$user || !$user->isSystemAdmin()) {
+            return response()->json(['message' => 'Only admins can view fingerprint configuration.'], 403);
+        }
+
+        $config = $this->getFingerprintConfig();
+        return response()->json([
+            'config' => [
+                'enabled' => (bool) ($config['enabled'] ?? false),
+                'base_url' => (string) ($config['base_url'] ?? ''),
+                'logs_endpoint' => (string) ($config['logs_endpoint'] ?? '/logs'),
+                'api_key' => (string) ($config['api_key'] ?? ''),
+                'device_id' => (string) ($config['device_id'] ?? ''),
+                'request_timeout' => (int) ($config['request_timeout'] ?? 10),
+            ],
+        ]);
+    }
+
+    public function updateFingerprintConfig(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (!$user || !$user->isSystemAdmin()) {
+            return response()->json(['message' => 'Only admins can update fingerprint configuration.'], 403);
+        }
+
+        $validated = $request->validate([
+            'enabled' => 'required|boolean',
+            'base_url' => 'nullable|string|max:255',
+            'logs_endpoint' => 'nullable|string|max:255',
+            'api_key' => 'nullable|string|max:255',
+            'device_id' => 'nullable|string|max:100',
+            'request_timeout' => 'nullable|integer|min:3|max:60',
+        ]);
+
+        $config = [
+            'enabled' => (bool) $validated['enabled'],
+            'base_url' => trim((string) ($validated['base_url'] ?? '')),
+            'logs_endpoint' => trim((string) ($validated['logs_endpoint'] ?? '/logs')),
+            'api_key' => trim((string) ($validated['api_key'] ?? '')),
+            'device_id' => trim((string) ($validated['device_id'] ?? '')),
+            'request_timeout' => (int) ($validated['request_timeout'] ?? 10),
+        ];
+
+        $this->saveFingerprintConfig($config);
+
+        return response()->json([
+            'message' => 'Fingerprint machine configuration saved.',
+            'config' => $config,
+        ]);
+    }
+
+    public function syncFingerprintLogs(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (!$user || !$user->isSystemAdmin()) {
+            return response()->json(['message' => 'Only admins can run fingerprint sync.'], 403);
+        }
+
+        $validated = $request->validate([
+            'date' => 'nullable|date',
+        ]);
+
+        $config = $this->getFingerprintConfig();
+        if (!($config['enabled'] ?? false)) {
+            return response()->json(['message' => 'Fingerprint sync is disabled. Enable it in configuration first.'], 422);
+        }
+
+        $baseUrl = trim((string) ($config['base_url'] ?? ''));
+        if ($baseUrl === '') {
+            return response()->json(['message' => 'Fingerprint machine base URL is required.'], 422);
+        }
+
+        $endpoint = trim((string) ($config['logs_endpoint'] ?? '/logs'));
+        if ($endpoint === '') {
+            $endpoint = '/logs';
+        }
+        if (!str_starts_with($endpoint, '/')) {
+            $endpoint = '/' . $endpoint;
+        }
+        $timeout = max(3, (int) ($config['request_timeout'] ?? 10));
+        $targetDate = $validated['date'] ?? Carbon::today()->toDateString();
+
+        $headers = ['Accept' => 'application/json,text/plain,*/*'];
+        $apiKey = trim((string) ($config['api_key'] ?? ''));
+        if ($apiKey !== '') {
+            $headers['X-API-Key'] = $apiKey;
+        }
+
+        try {
+            $response = Http::timeout($timeout)
+                ->withHeaders($headers)
+                ->get(rtrim($baseUrl, '/') . $endpoint, [
+                    'date' => $targetDate,
+                    'device_id' => (string) ($config['device_id'] ?? ''),
+                ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'message' => 'Could not connect to fingerprint machine on local network.',
+                'error' => $e->getMessage(),
+            ], 422);
+        }
+
+        if (!$response->successful()) {
+            return response()->json([
+                'message' => 'Fingerprint machine responded with an error.',
+                'status_code' => $response->status(),
+                'body' => $response->body(),
+            ], 422);
+        }
+
+        $rows = $this->parseFingerprintPayload((string) $response->body());
+        if (empty($rows)) {
+            return response()->json([
+                'message' => 'No logs returned by fingerprint machine.',
+                'created_records' => 0,
+                'updated_records' => 0,
+                'skipped_records' => 0,
+                'errors' => [],
+            ]);
+        }
+
+        $created = 0;
+        $updated = 0;
+        $skipped = 0;
+        $errors = [];
+
+        foreach ($rows as $idx => $rawRow) {
+            $normalized = $this->normalizeFingerprintRow($rawRow);
+            $rowDate = $normalized['date'] ?? $targetDate;
+            if (!$rowDate) {
+                $skipped++;
+                $errors[] = 'Row ' . ($idx + 1) . ': Missing date.';
+                continue;
+            }
+
+            $employee = null;
+            if (!empty($normalized['employee_id'])) {
+                $employee = Employee::find((int) $normalized['employee_id']);
+            }
+            if (!$employee && !empty($normalized['employee_code'])) {
+                $employee = Employee::where('employee_code', $normalized['employee_code'])->first();
+            }
+
+            if (!$employee) {
+                $skipped++;
+                $errors[] = 'Row ' . ($idx + 1) . ': Employee not found for code/id.';
+                continue;
+            }
+
+            $attendance = Attendance::where('employee_id', $employee->id)
+                ->where('date', $rowDate)
+                ->first();
+
+            $inTime = $normalized['in_time'];
+            $outTime = $normalized['out_time'];
+            $status = $normalized['status'] ?? 'present';
+
+            if ($attendance) {
+                if ($inTime && (!$attendance->in_time || $inTime < $attendance->in_time)) {
+                    $attendance->in_time = $inTime;
+                }
+                if ($outTime && (!$attendance->out_time || $outTime > $attendance->out_time)) {
+                    $attendance->out_time = $outTime;
+                }
+                if (!$attendance->status || $attendance->status === 'absent') {
+                    $attendance->status = $status;
+                }
+
+                if ($attendance->in_time && $attendance->out_time) {
+                    try {
+                        $in = Carbon::createFromFormat('H:i:s', $attendance->in_time);
+                        $out = Carbon::createFromFormat('H:i:s', $attendance->out_time);
+                        $attendance->work_hours = round($out->diffInMinutes($in, true) / 60, 2);
+                    } catch (\Throwable) {
+                        // Keep existing work hours if parsing fails
+                    }
+                }
+
+                $attendance->save();
+                $updated++;
+                continue;
+            }
+
+            $newRecord = Attendance::create([
+                'tenant_id' => (int) ($employee->tenant_id ?? $employee->branch_id ?? 1),
+                'branch_id' => (int) ($employee->branch_id ?? 1),
+                'employee_id' => (int) $employee->id,
+                'date' => $rowDate,
+                'in_time' => $inTime,
+                'out_time' => $outTime,
+                'status' => $status,
+                'notes' => 'Imported from fingerprint machine',
+            ]);
+
+            if ($newRecord->in_time && $newRecord->out_time) {
+                try {
+                    $in = Carbon::createFromFormat('H:i:s', $newRecord->in_time);
+                    $out = Carbon::createFromFormat('H:i:s', $newRecord->out_time);
+                    $newRecord->work_hours = round($out->diffInMinutes($in, true) / 60, 2);
+                    $newRecord->save();
+                } catch (\Throwable) {
+                    // Ignore time calculation issues
+                }
+            }
+
+            $created++;
+        }
+
+        return response()->json([
+            'message' => 'Fingerprint sync completed.',
+            'created_records' => $created,
+            'updated_records' => $updated,
+            'skipped_records' => $skipped,
+            'errors' => $errors,
+        ]);
     }
 }

@@ -11,6 +11,8 @@ use App\Models\LoanRequestCollection;
 use App\Models\MicrofinanceLoanCollection;
 use App\Models\MicrofinanceLoanRequest;
 use App\Models\Mortgage;
+use App\Services\SmsGatewayService;
+use App\Services\WhatsappGatewayService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -58,6 +60,31 @@ class OfficeCollectionController extends Controller
         return $branchId > 0 ? $branchId : null;
     }
 
+    private function isManagerUser(?object $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        $designationName = strtolower(trim((string) optional($user->designation)->name));
+        if ($designationName !== '' && str_contains($designationName, 'manager')) {
+            return true;
+        }
+
+        if (!method_exists($user, 'roles')) {
+            return false;
+        }
+
+        foreach ($user->roles()->pluck('name') as $roleName) {
+            $normalized = strtolower(trim((string) $roleName));
+            if ($normalized !== '' && str_contains($normalized, 'manager')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function applySearchFilter($query, string $q, array $columns): void
     {
         if ($q === '') {
@@ -91,11 +118,15 @@ class OfficeCollectionController extends Controller
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function searchLoanAccounts(string $q, ?int $branchId): array
+    private function searchLoanAccounts(string $q, ?int $branchId, bool $includeCompletedPreview): array
     {
-        $loanQuery = LoanRequest::query()
-            ->where('status', 'approved')
-            ->orderByDesc('id');
+        $loanQuery = LoanRequest::query()->orderByDesc('id');
+
+        if ($includeCompletedPreview) {
+            $loanQuery->whereIn('status', ['approved', 'closed']);
+        } else {
+            $loanQuery->where('status', 'approved');
+        }
 
         if ($branchId !== null) {
             $loanQuery->where('branch_id', $branchId);
@@ -116,6 +147,7 @@ class OfficeCollectionController extends Controller
             $balance = max($totalPayable - $collected, 0);
             $dueDate = $loan->due_date ? Carbon::parse((string) $loan->due_date)->toDateString() : null;
             $nextPaymentDate = $loan->next_due_date ? Carbon::parse((string) $loan->next_due_date)->toDateString() : $dueDate;
+            $canCollect = strtolower((string) $loan->status) === 'approved' && $balance > 0;
 
             return [
                 'type' => 'loan',
@@ -131,6 +163,7 @@ class OfficeCollectionController extends Controller
                 'next_payment_date' => $nextPaymentDate,
                 'balance' => $balance,
                 'status' => $loan->status,
+                'can_collect' => $canCollect,
                 'label' => 'Instant Loan',
                 'sort_id' => $loan->id,
             ];
@@ -195,12 +228,17 @@ class OfficeCollectionController extends Controller
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function searchMicrofinanceAccounts(string $q, ?int $branchId): array
+    private function searchMicrofinanceAccounts(string $q, ?int $branchId, bool $includeCompletedPreview): array
     {
         $mfQuery = MicrofinanceLoanRequest::query()
             ->withSum('collections as total_collected_sum', 'collected_amount')
-            ->whereIn('status', ['approved', 'released'])
             ->orderByDesc('id');
+
+        if ($includeCompletedPreview) {
+            $mfQuery->whereIn('status', ['approved', 'released']);
+        } else {
+            $mfQuery->where('status', 'approved');
+        }
 
         if ($branchId !== null) {
             $mfQuery->where('branch_id', $branchId);
@@ -217,6 +255,9 @@ class OfficeCollectionController extends Controller
             $refundable = (float) ($loan->refundable_amount ?? 0);
             $collected = (float) ($loan->total_collected_sum ?? 0);
             $balance = max($refundable - $collected, 0);
+            $arrearsOutstanding = max((float) ($loan->arrears_balance ?? 0), 0);
+            $dueAmount = round($arrearsOutstanding, 2);
+            $canCollect = strtolower((string) $loan->status) === 'approved' && $dueAmount > 0;
 
             return [
                 'type' => 'microfinance',
@@ -226,12 +267,13 @@ class OfficeCollectionController extends Controller
                 'customer_no' => $loan->customer_no,
                 'product' => (string) ($loan->loan_product ?: 'Micro Loan'),
                 'installment_amount' => (float) ($loan->installment_amount ?? 0),
-                'due_amount' => (float) ($loan->installment_amount ?? 0),
+                'due_amount' => $dueAmount,
                 'paid_amount' => $collected,
                 'due_date' => $loan->due_date ? Carbon::parse((string) $loan->due_date)->toDateString() : null,
                 'next_payment_date' => $loan->next_payment_date ? Carbon::parse((string) $loan->next_payment_date)->toDateString() : null,
                 'balance' => $balance,
                 'status' => $loan->status,
+                'can_collect' => $canCollect,
                 'label' => 'Micro Credit',
                 'sort_id' => $loan->id,
             ];
@@ -241,13 +283,18 @@ class OfficeCollectionController extends Controller
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function searchMortgageAccounts(string $q, ?int $branchId): array
+    private function searchMortgageAccounts(string $q, ?int $branchId, bool $includeCompletedPreview): array
     {
         $mortgageQuery = Mortgage::query()
             ->with('customer:id,customer_code,first_name,last_name,phone,nic_passport')
             ->withSum('payments as total_paid_amount', 'amount')
-            ->whereIn('status', ['approved', 'active', 'arrears', 'released'])
             ->orderByDesc('id');
+
+        if ($includeCompletedPreview) {
+            $mortgageQuery->whereIn('status', ['approved', 'active', 'arrears', 'released']);
+        } else {
+            $mortgageQuery->whereIn('status', ['approved', 'active', 'arrears']);
+        }
 
         if ($branchId !== null) {
             $mortgageQuery->where('branch_id', $branchId);
@@ -274,6 +321,8 @@ class OfficeCollectionController extends Controller
             $duePrincipal = (float) ($mortgage->due_amount ?? 0);
             $dueInterest = (float) ($mortgage->due_interest_amount ?? 0);
             $dueTotal = round($duePrincipal + $dueInterest, 2);
+            $canCollect = in_array(strtolower((string) $mortgage->status), ['approved', 'active', 'arrears'], true)
+                && $dueTotal > 0;
 
             return [
                 'type' => 'mortgage',
@@ -289,6 +338,7 @@ class OfficeCollectionController extends Controller
                 'next_payment_date' => $mortgage->due_date ? Carbon::parse((string) $mortgage->due_date)->toDateString() : null,
                 'balance' => $dueTotal,
                 'status' => $mortgage->status,
+                'can_collect' => $canCollect,
                 'label' => 'Mortgage',
                 'sort_id' => $mortgage->id,
             ];
@@ -309,20 +359,21 @@ class OfficeCollectionController extends Controller
         $page = max(1, (int) ($validated['page'] ?? 1));
         $perPage = max(5, min(100, (int) ($validated['per_page'] ?? 15)));
         $branchId = $this->scopedBranchId($request);
+        $includeCompletedLoanPreview = $this->isAdminUser($request->user()) || $this->isManagerUser($request->user());
 
         $accounts = [];
 
         if ($type === 'all' || $type === 'loan') {
-            $accounts = array_merge($accounts, $this->searchLoanAccounts($q, $branchId));
+            $accounts = array_merge($accounts, $this->searchLoanAccounts($q, $branchId, $includeCompletedLoanPreview));
         }
         if ($type === 'all' || $type === 'finance') {
             $accounts = array_merge($accounts, $this->searchFinanceAccounts($q, $branchId));
         }
         if ($type === 'all' || $type === 'microfinance') {
-            $accounts = array_merge($accounts, $this->searchMicrofinanceAccounts($q, $branchId));
+            $accounts = array_merge($accounts, $this->searchMicrofinanceAccounts($q, $branchId, $includeCompletedLoanPreview));
         }
         if ($type === 'all' || $type === 'mortgage') {
-            $accounts = array_merge($accounts, $this->searchMortgageAccounts($q, $branchId));
+            $accounts = array_merge($accounts, $this->searchMortgageAccounts($q, $branchId, $includeCompletedLoanPreview));
         }
 
         usort($accounts, static function (array $a, array $b) {
@@ -429,6 +480,29 @@ class OfficeCollectionController extends Controller
             $note,
             $payload
         );
+
+        if ($type === 'loan') {
+            $loan = data_get($payload, 'loan');
+            $phone = trim((string) (data_get($loan, 'customer_mobile') ?? ''));
+            if ($phone !== '') {
+                /** @var SmsGatewayService $smsService */
+                $smsService = app(SmsGatewayService::class);
+                $messageContext = [
+                    'customer_name' => (string) (data_get($loan, 'customer_full_name') ?? 'Customer'),
+                    'amount' => number_format($amount, 2, '.', ''),
+                    'date' => $paymentDate,
+                    'reference' => (string) (data_get($loan, 'request_no') ?? ('LOAN-' . $sourceId)),
+                    'module' => 'Loan',
+                ];
+                $smsMessage = $smsService->buildCollectionMessage($messageContext);
+                $smsService->send($phone, $smsMessage);
+
+                /** @var WhatsappGatewayService $whatsappService */
+                $whatsappService = app(WhatsappGatewayService::class);
+                $whatsappMessage = $whatsappService->buildCollectionMessage($messageContext);
+                $whatsappService->send($phone, $whatsappMessage);
+            }
+        }
 
         return response()->json($payload, $response->getStatusCode());
     }

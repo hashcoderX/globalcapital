@@ -2,7 +2,6 @@
 
 import axios from 'axios';
 import { getApiBaseUrl } from '@/lib/api';
-import { WidgetCloseGate } from '@/lib/useWidgetsFixed';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -102,13 +101,6 @@ const mapCollectionToHistory = (collection: CollectionRow, loan: IssuedLoanRow):
 export default function CustomerPaymentHistoryReportPage() {
   const router = useRouter();
   const [token, setToken] = useState('');
-  const [loadingWidgets, setLoadingWidgets] = useState(true);
-  const [hiddenWidgetKeys, setHiddenWidgetKeys] = useState<Set<string>>(new Set());
-  const [widgetNotice, setWidgetNotice] = useState<{ open: boolean; title: string; message: string }>({
-    open: false,
-    title: '',
-    message: '',
-  });
   const [loansLoading, setLoansLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [issuedLoans, setIssuedLoans] = useState<IssuedLoanRow[]>([]);
@@ -127,61 +119,6 @@ export default function CustomerPaymentHistoryReportPage() {
     [token]
   );
 
-  const fetchWidgetPreferences = async (authToken: string) => {
-    setLoadingWidgets(true);
-    try {
-      const response = await axios.get(`${API_BASE}/dashboard/widgets`, {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          Accept: 'application/json',
-        },
-      });
-      const list = Array.isArray(response.data?.widgets) ? response.data.widgets : [];
-      const nextHidden = new Set<string>();
-      for (const row of list) {
-        const key = String(row?.widget_key || '').trim();
-        if (!key.startsWith('mf_customer_history_widget_')) continue;
-        if (row?.is_visible === false) nextHidden.add(key);
-      }
-      setHiddenWidgetKeys(nextHidden);
-    } catch {
-      setHiddenWidgetKeys(new Set());
-    } finally {
-      setLoadingWidgets(false);
-    }
-  };
-
-  const saveWidgetPreference = async (widgetKey: string, isVisible: boolean) => {
-    if (!token) return false;
-    try {
-      await axios.patch(
-        `${API_BASE}/dashboard/widgets`,
-        { widget_key: widgetKey, is_visible: isVisible },
-        { headers }
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  const hideWidget = async (widgetKey: string) => {
-    const previous = new Set(hiddenWidgetKeys);
-    const next = new Set(hiddenWidgetKeys);
-    next.add(widgetKey);
-    setHiddenWidgetKeys(next);
-
-    const ok = await saveWidgetPreference(widgetKey, false);
-    if (!ok) {
-      setHiddenWidgetKeys(previous);
-      setWidgetNotice({
-        open: true,
-        title: 'Widget Update Failed',
-        message: 'Failed to hide this item. Please try again.',
-      });
-    }
-  };
-
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     if (!storedToken) {
@@ -190,7 +127,6 @@ export default function CustomerPaymentHistoryReportPage() {
     }
 
     setToken(storedToken);
-    void fetchWidgetPreferences(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -384,44 +320,6 @@ export default function CustomerPaymentHistoryReportPage() {
       .join(' ');
   }, [chartData]);
 
-  const showHeaderBack = !hiddenWidgetKeys.has('mf_customer_history_widget_header_back');
-  const showLoanSearch = !hiddenWidgetKeys.has('mf_customer_history_widget_loan_search');
-  const showLoanTable = !hiddenWidgetKeys.has('mf_customer_history_widget_loan_table');
-  const showHistoryFilters = !hiddenWidgetKeys.has('mf_customer_history_widget_history_filters');
-  const showGraphPreview = !hiddenWidgetKeys.has('mf_customer_history_widget_graph_preview');
-
-  const historySummaryCards = [
-    { key: 'mf_customer_history_widget_summary_transactions', label: 'Transactions', value: String(historySummary.transactions), className: 'text-fuchsia-700' },
-    { key: 'mf_customer_history_widget_summary_collected', label: 'Collected', value: formatMoney(historySummary.collected), className: 'text-cyan-700' },
-    { key: 'mf_customer_history_widget_summary_capital', label: 'Capital', value: formatMoney(historySummary.capital), className: 'text-emerald-700' },
-    { key: 'mf_customer_history_widget_summary_interest', label: 'Interest', value: formatMoney(historySummary.interest), className: 'text-indigo-700' },
-    { key: 'mf_customer_history_widget_summary_penalty', label: 'Penalty', value: formatMoney(historySummary.penalty), className: 'text-rose-700' },
-  ];
-  const visibleHistorySummaryCards = historySummaryCards.filter((card) => !hiddenWidgetKeys.has(card.key));
-
-  const loanTableColumns = [
-    { key: 'loanCode', label: 'Loan Code' },
-    { key: 'customerNo', label: 'Customer No' },
-    { key: 'customer', label: 'Customer' },
-    { key: 'fieldOfficer', label: 'Field Officer' },
-    { key: 'status', label: 'Status' },
-    { key: 'issueDate', label: 'Issue Date' },
-    { key: 'issueAmount', label: 'Issue Amount' },
-    { key: 'action', label: 'Action' },
-  ];
-  const visibleLoanTableColumns = loanTableColumns.filter((column) => !hiddenWidgetKeys.has(`mf_customer_history_widget_loan_col_${column.key}`));
-
-  const historyTableColumns = [
-    { key: 'date', label: 'Date & Time' },
-    { key: 'payType', label: 'Pay Type' },
-    { key: 'reference', label: 'Reference' },
-    { key: 'collected', label: 'Collected' },
-    { key: 'capital', label: 'Capital' },
-    { key: 'interest', label: 'Interest' },
-    { key: 'penalty', label: 'Penalty' },
-  ];
-  const visibleHistoryTableColumns = historyTableColumns.filter((column) => !hiddenWidgetKeys.has(`mf_customer_history_widget_history_col_${column.key}`));
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-fuchsia-50 via-pink-50 to-rose-100 p-5 md:p-7">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -436,27 +334,13 @@ export default function CustomerPaymentHistoryReportPage() {
                 Select an issued loan to load its full payment history.
               </p>
             </div>
-            {showHeaderBack && (
-              <div className="relative">
-                <WidgetCloseGate>
-<button
-                  type="button"
-                  onClick={() => void hideWidget('mf_customer_history_widget_header_back')}
-                  className="absolute -top-2 -left-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-700"
-                  aria-label="Hide back button"
-                >
-                  ×
-                </button>
-</WidgetCloseGate>
-                <button
-                  type="button"
-                  onClick={() => router.back()}
-                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
-                >
-                  Back
-                </button>
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={() => router.back()}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+            >
+              Back
+            </button>
           </div>
         </div>
 

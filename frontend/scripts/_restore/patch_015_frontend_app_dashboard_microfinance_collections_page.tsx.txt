@@ -1,0 +1,27 @@
+*** Begin Patch
+*** Update File: c:/xampp/htdocs/globalcapital/frontend/app/dashboard/microfinance/collections/page.tsx
+@@
+   const saveWidgetPreference = useCallback(
+     async (widgetKey: string, isVisible: boolean) => {
+       if (!token) return false;
+       try {
+         await axios.patch(
+           `${API_BASE}/dashboard/widgets`,
+           { widget_key: widgetKey, is_visible: isVisible },
+-          { headers }
++          {
++            headers: {
++              Authorization: `Bearer ${token}`,
++              Accept: 'application/json',
++            },
++          }
+         );
+         return true;
+       } catch {
+         return false;
+       }
+     },
+-    [headers, token]
++    [token]
+   );
+*** End Patch

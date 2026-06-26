@@ -5,15 +5,124 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Company;
 use App\Models\CompanyDocumentTemplate;
+use App\Models\Customer;
 use App\Models\LoanRequest;
 use App\Models\LoanRequestDocument;
+use App\Models\Role;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use ZipArchive;
 
 class LoanRequestController extends Controller
 {
+    private function buildCustomerPortalEmail(string $customerCode, int $customerId): string
+    {
+        $base = strtolower(trim($customerCode));
+        $base = preg_replace('/[^a-z0-9]+/', '.', $base ?? '') ?? '';
+        $base = trim($base, '.');
+        if ($base === '') {
+            $base = 'customer.' . $customerId;
+        }
+
+        $domain = 'customers.globalcapital.local';
+        $email = $base . '@' . $domain;
+        $suffix = 1;
+
+        while (User::query()->whereRaw('LOWER(email) = ?', [strtolower($email)])->exists()) {
+            $email = $base . '.' . $suffix . '@' . $domain;
+            $suffix++;
+        }
+
+        return $email;
+    }
+
+    /**
+     * @return array{is_new_account:bool,email:string,password:?string,linked_user_id:int}|null
+     */
+    private function ensureCustomerPortalAccess(Customer $customer, int $assignedByUserId): ?array
+    {
+        $hasCustomerUserColumn = Schema::hasColumn('customers', 'user_id');
+        if ($hasCustomerUserColumn && (int) ($customer->user_id ?? 0) > 0) {
+            $existingLinkedUser = User::query()->find((int) $customer->user_id);
+            if ($existingLinkedUser) {
+                return null;
+            }
+        }
+
+        $existingByEmail = null;
+        if (!empty($customer->email)) {
+            $existingByEmail = User::query()
+                ->whereRaw('LOWER(email) = ?', [strtolower((string) $customer->email)])
+                ->first();
+        }
+
+        if ($existingByEmail) {
+            if ($hasCustomerUserColumn) {
+                $customer->user_id = (int) $existingByEmail->id;
+            }
+            $customer->save();
+
+            return [
+                'is_new_account' => false,
+                'email' => (string) $existingByEmail->email,
+                'password' => null,
+                'linked_user_id' => (int) $existingByEmail->id,
+            ];
+        }
+
+        $email = $this->buildCustomerPortalEmail((string) ($customer->customer_code ?? ''), (int) $customer->id);
+        $phoneDigits = preg_replace('/\D+/', '', (string) ($customer->phone ?? '')) ?? '';
+        $passwordPlain = 'Cus@' . ($phoneDigits !== '' ? substr($phoneDigits, -6) : Str::upper(Str::random(6)));
+
+        $userName = trim(((string) $customer->first_name) . ' ' . ((string) $customer->last_name));
+        if ($userName === '') {
+            $userName = 'Customer ' . (string) ($customer->customer_code ?: $customer->id);
+        }
+
+        $portalUser = User::query()->create([
+            'name' => $userName,
+            'email' => $email,
+            'password' => Hash::make($passwordPlain),
+            'branch_id' => (int) ($customer->branch_id ?? 0) ?: null,
+        ]);
+
+        if (Schema::hasTable('roles') && Schema::hasTable('user_roles')) {
+            $customerRole = Role::query()->firstOrCreate(
+                ['name' => 'Customer Portal'],
+                ['description' => 'Customer login access for loan and savings visibility']
+            );
+            if ($assignedByUserId > 0) {
+                $portalUser->roles()->syncWithoutDetaching([
+                    $customerRole->id => [
+                        'assigned_at' => now(),
+                        'assigned_by' => $assignedByUserId,
+                    ],
+                ]);
+            }
+        }
+
+        if (empty($customer->email)) {
+            $customer->email = $email;
+        }
+        if ($hasCustomerUserColumn) {
+            $customer->user_id = (int) $portalUser->id;
+        }
+        $customer->save();
+
+        return [
+            'is_new_account' => true,
+            'email' => $email,
+            'password' => $passwordPlain,
+            'linked_user_id' => (int) $portalUser->id,
+        ];
+    }
+
     private function isAdminUser(?object $user): bool
     {
         if (!$user) {
@@ -139,6 +248,9 @@ class LoanRequestController extends Controller
             'customer_details.monthlyIncome' => ['required', 'numeric', 'min:0.01'],
             'customer_details.incomeSource' => ['required', 'string', 'max:120'],
             'customer_details.businessName' => ['nullable', 'string', 'max:190'],
+            'customer_details.bankName' => ['required', 'string', 'max:190'],
+            'customer_details.bankBranch' => ['required', 'string', 'max:190'],
+            'customer_details.bankAccountNo' => ['required', 'string', 'max:80'],
             'customer_details.additionalIncome' => ['nullable', 'numeric', 'min:0'],
 
             'guarantor_details' => ['nullable', 'array'],
@@ -160,32 +272,86 @@ class LoanRequestController extends Controller
         $requiredApprovalLevel = (int) ($validated['required_approval_level'] ?? 2);
         $resolvedBranchId = (int) ($user?->branch_id ?? $validated['branch_id'] ?? 1);
 
-        $loanRequest = LoanRequest::create([
-            'tenant_id' => 1,
-            'branch_id' => $resolvedBranchId,
-            'loan_product' => (string) $validated['loan_product'],
-            'customer_no' => (string) $customer['customerNo'],
-            'customer_full_name' => (string) $customer['fullName'],
-            'customer_nic' => (string) $customer['nic'],
-            'customer_mobile' => (string) $customer['mobile'],
-            'customer_address' => (string) $customer['address'],
-            'principal' => (float) $validated['principal'],
-            'annual_rate' => (float) $validated['annual_rate'],
-            'tenure_months' => (int) $validated['tenure_months'],
-            'installment_frequency' => (string) $validated['installment_frequency'],
-            'installments' => (int) $validated['installments'],
-            'installment_amount' => (float) $validated['installment_amount'],
-            'total_payable' => (float) $validated['total_payable'],
-            'customer_details' => $customer,
-            'guarantor_details' => $validated['guarantor_details'] ?? null,
-            'status' => 'pending_approval',
-            'approval_level' => 1,
-            'required_approval_level' => $requiredApprovalLevel,
-            'created_by' => $user?->id,
-        ]);
+        $customerPortalCredentials = null;
+        $loanRequest = DB::transaction(function () use ($validated, $resolvedBranchId, $customer, $requiredApprovalLevel, $user, &$customerPortalCredentials) {
+            $loanRequest = LoanRequest::create([
+                'tenant_id' => 1,
+                'branch_id' => $resolvedBranchId,
+                'loan_product' => (string) $validated['loan_product'],
+                'customer_no' => (string) $customer['customerNo'],
+                'customer_full_name' => (string) $customer['fullName'],
+                'customer_nic' => (string) $customer['nic'],
+                'customer_mobile' => (string) $customer['mobile'],
+                'customer_address' => (string) $customer['address'],
+                'principal' => (float) $validated['principal'],
+                'annual_rate' => (float) $validated['annual_rate'],
+                'tenure_months' => (int) $validated['tenure_months'],
+                'installment_frequency' => (string) $validated['installment_frequency'],
+                'installments' => (int) $validated['installments'],
+                'installment_amount' => (float) $validated['installment_amount'],
+                'total_payable' => (float) $validated['total_payable'],
+                'customer_details' => $customer,
+                'guarantor_details' => $validated['guarantor_details'] ?? null,
+                'status' => 'pending_approval',
+                'approval_level' => 1,
+                'required_approval_level' => $requiredApprovalLevel,
+                'created_by' => $user?->id,
+            ]);
 
-        $loanRequest->request_no = 'LREQ-' . str_pad((string) $loanRequest->id, 6, '0', STR_PAD_LEFT);
-        $loanRequest->save();
+            $loanRequest->request_no = 'LREQ-' . str_pad((string) $loanRequest->id, 6, '0', STR_PAD_LEFT);
+            $loanRequest->save();
+
+            $fullName = trim((string) ($customer['fullName'] ?? ''));
+            $nameParts = preg_split('/\s+/', $fullName, 2);
+            $firstName = trim((string) ($nameParts[0] ?? 'Customer'));
+            $lastName = trim((string) ($nameParts[1] ?? 'Customer'));
+            if ($lastName === '') {
+                $lastName = 'Customer';
+            }
+
+            $existingCustomer = Customer::query()
+                ->where('nic_passport', (string) ($customer['nic'] ?? ''))
+                ->first();
+
+            $customerRecord = null;
+            if ($existingCustomer) {
+                $existingCustomer->update([
+                    'customer_code' => (string) ($customer['customerNo'] ?? $existingCustomer->customer_code),
+                    'first_name' => $firstName,
+                    'last_name' => $lastName,
+                    'phone' => (string) ($customer['mobile'] ?? ''),
+                    'permanent_address' => (string) ($customer['address'] ?? ''),
+                    'current_address' => (string) ($customer['address'] ?? ''),
+                    'status' => 'active',
+                ]);
+                $customerRecord = $existingCustomer->fresh();
+            } else {
+                $customerCode = (string) ($customer['customerNo'] ?? '');
+                $emailBase = preg_replace('/[^a-z0-9]+/i', '', strtolower((string) ($customer['nic'] ?? ''))) ?: 'customer' . $loanRequest->id;
+                $customerRecord = Customer::create([
+                    'tenant_id' => 1,
+                    'branch_id' => $resolvedBranchId,
+                    'customer_code' => $customerCode,
+                    'first_name' => $firstName,
+                    'last_name' => $lastName,
+                    'email' => sprintf('%s-%d@deskoffinance.local', $emailBase, (int) $loanRequest->id),
+                    'phone' => (string) ($customer['mobile'] ?? ''),
+                    'nic_passport' => (string) ($customer['nic'] ?? ''),
+                    'date_of_birth' => '1990-01-01',
+                    'gender' => 'other',
+                    'permanent_address' => (string) ($customer['address'] ?? ''),
+                    'current_address' => (string) ($customer['address'] ?? ''),
+                    'created_by' => (int) ($user?->id ?? 1),
+                    'status' => 'active',
+                ]);
+            }
+
+            if ($customerRecord) {
+                $customerPortalCredentials = $this->ensureCustomerPortalAccess($customerRecord, (int) ($user?->id ?? 0));
+            }
+
+            return $loanRequest;
+        });
 
         if ($request->hasFile('documents')) {
             $uploadedDocuments = $request->file('documents', []);
@@ -218,6 +384,7 @@ class LoanRequestController extends Controller
         return response()->json([
             'message' => 'Loan request submitted successfully.',
             'data' => $loanRequest,
+            'customer_portal_credentials' => $customerPortalCredentials,
         ], 201);
     }
 
